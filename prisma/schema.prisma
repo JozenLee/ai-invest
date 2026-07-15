@@ -1,0 +1,285 @@
+// AI投资分析系统 - Prisma Schema
+// 基于 PRD v1.1 MVP
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ==================== 用户系统 ====================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  avatar    String?
+  password  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  portfolios Portfolio[]
+  watchlists Watchlist[]
+  analyses   Analysis[]
+  settings   UserSetting?
+}
+
+model UserSetting {
+  id            String @id @default(cuid())
+  userId        String @unique
+  riskProfile   String @default("moderate")    // conservative/moderate/aggressive
+  investHorizon String @default("medium")      // short/medium/long
+  totalAssets   Float  @default(0)
+  cashRatio     Float  @default(0.2)
+  user          User   @relation(fields: [userId], references: [id])
+}
+
+// ==================== 投资组合 ====================
+
+model Portfolio {
+  id        String    @id @default(cuid())
+  userId    String
+  name      String
+  isDefault Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  holdings Holding[]
+}
+
+model Holding {
+  id           String   @id @default(cuid())
+  portfolioId  String
+  ticker       String   // ETF代码
+  market       String   // A（MVP仅支持A股ETF）
+  name         String   // ETF名称
+  quantity     Int      // 持有份额
+  avgCost      Float    // 平均成本
+  currentPrice Float?   // 当前价格(缓存)
+  updatedAt    DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id])
+}
+
+// ==================== 市场数据缓存 ====================
+
+model StockDaily {
+  id     String   @id @default(cuid())
+  ticker String
+  market String
+  date   DateTime
+  open   Float
+  high   Float
+  low    Float
+  close  Float
+  volume BigInt
+  amount Float?   // 成交额
+
+  @@unique([ticker, date])
+  @@index([ticker, date])
+}
+
+model IndexDaily {
+  id       String   @id @default(cuid())
+  code     String   // 指数代码
+  name     String
+  date     DateTime
+  open     Float
+  high     Float
+  low      Float
+  close    Float
+  volume   BigInt
+  changePct Float?  // 涨跌幅
+
+  @@unique([code, date])
+}
+
+// ==================== ETF 数据 ====================
+
+model ETFDaily {
+  id      String   @id @default(cuid())
+  ticker  String   // ETF代码
+  name    String
+  date    DateTime
+  open    Float
+  high    Float
+  low     Float
+  close   Float
+  volume  BigInt
+  amount  Float?   // 成交额
+  nav     Float?   // 净值
+  shares  BigInt?  // 份额（万份）
+  premium Float?   // 溢折价率（%）
+
+  @@unique([ticker, date])
+  @@index([ticker, date])
+}
+
+// ==================== 板块资金流向 ====================
+
+model SectorCapitalFlow {
+  id              String   @id @default(cuid())
+  date            DateTime
+  sector          String   // 板块名称
+  sectorLevel     String   // L1/L2/sub
+  mainForceNet    Float    // 主力净流入（万元）
+  retailNet       Float    // 散户净流入（万元）
+  totalVolume     Float    // 总成交额
+  changePct       Float?   // 涨跌幅
+  consecutiveDays Int?     // 连续流入/流出天数
+
+  @@unique([date, sector])
+  @@index([date])
+}
+
+// ==================== 大盘宏观资金流向 ====================
+
+model MarketCapitalFlow {
+  id              String   @id @default(cuid())
+  date            DateTime @unique
+  totalMainNet    Float    // 沪深两市主力净流入（亿元）
+  retailNet       Float    // 散户净流入（亿元）
+  sentiment       Float    // 资金情绪指数 -100~+100
+  turnoverRate    Float?   // 全市场换手率
+  northboundNet   Float    // 北向净买入（亿元）
+  marginBalance   Float    // 融资余额（亿元）
+  marginChange    Float    // 融资余额变化（亿元）
+  blockTradeCount Int      // 大宗交易笔数
+}
+
+// ==================== 事件与资讯 ====================
+
+model NewsArticle {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  summary     String?  // AI生成摘要
+  source      String
+  url         String?  @unique
+  publishTime DateTime
+  category    String   // policy/earnings/product/...
+  sentiment   Float?   // -1 ~ +1
+  impact      Int?     // 1~5
+  entities    String?  // JSON: 关联实体
+  sectors     String?  // JSON: 关联板块
+  createdAt   DateTime @default(now())
+
+  @@index([publishTime])
+  @@index([category])
+}
+
+// ==================== 知识图谱 ====================
+
+model GraphNode {
+  id          String   @id @default(cuid())
+  type        String   // index/industry_l1/industry_l2/sub_sector/stock/chip_design/...
+  name        String
+  description String?
+  parentId    String?  // 父节点ID（层级树形关系）
+  level       Int      @default(0)  // 层级深度: 0=指数, 1=L1, 2=L2, 3=细分, 4=个股
+  cyclePos    String?  // upturn/peak/downturn/trough
+  momentum    Float?   // -100 ~ +100
+  metadata    String?  // JSON: 扩展数据（含trackingETFs、迭代元数据）
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  parent      GraphNode?  @relation("TreeNode", fields: [parentId], references: [id])
+  children    GraphNode[] @relation("TreeNode")
+  sourceEdges GraphEdge[] @relation("SourceNode")
+  targetEdges GraphEdge[] @relation("TargetNode")
+  stocks      GraphStock[]
+  changeLogs  GraphChangeLog[]
+
+  @@index([type])
+  @@index([parentId])
+  @@index([level])
+}
+
+model GraphEdge {
+  id          String   @id @default(cuid())
+  sourceId    String
+  targetId    String
+  relation    String   // supply_chain/demand_driver/...
+  weight      Float    // 0~1
+  direction   String   // positive/negative
+  lag         String?  // 传导滞后
+  confidence  Float    // 0~1
+  evidence    String?  // JSON: 支撑证据
+  description String?
+
+  source      GraphNode @relation("SourceNode", fields: [sourceId], references: [id])
+  target      GraphNode @relation("TargetNode", fields: [targetId], references: [id])
+
+  @@index([sourceId])
+  @@index([targetId])
+}
+
+model GraphStock {
+  id        String   @id @default(cuid())
+  nodeId    String
+  ticker    String
+  market    String
+  name      String
+  relevance Float    // 0~1
+  role      String   // direct/indirect/beneficiary/victim
+
+  node GraphNode @relation(fields: [nodeId], references: [id])
+
+  @@index([ticker])
+}
+
+model GraphChangeLog {
+  id         String   @id @default(cuid())
+  nodeId     String?
+  edgeId     String?
+  action     String   // add_node/update_node/delete_node/add_edge/update_edge/delete_edge
+  before     String?  // JSON: 变更前数据快照
+  after      String?  // JSON: 变更后数据
+  reason     String?  // 变更原因
+  source     String   // manual/ai_suggested/data_driven
+  approved   Boolean  @default(true)  // 手动编辑默认已审核
+  approvedBy String?
+  createdAt  DateTime @default(now())
+
+  node GraphNode? @relation(fields: [nodeId], references: [id])
+
+  @@index([nodeId])
+  @@index([createdAt])
+}
+
+// ==================== AI分析记录 ====================
+
+model Analysis {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // stock/sector/portfolio
+  target    String   // 分析目标(ticker/sector名)
+  input     String?  // JSON: 输入参数
+  result    String   // JSON: 分析结果
+  score     Float?   // 综合评分
+  rating    String?  // 评级
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, type])
+}
+
+// ==================== 关注列表 ====================
+
+model Watchlist {
+  id      String   @id @default(cuid())
+  userId  String
+  ticker  String
+  market  String
+  name    String
+  addedAt DateTime @default(now())
+  notes   String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, ticker])
+}

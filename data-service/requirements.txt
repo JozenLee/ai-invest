@@ -1,0 +1,10 @@
+# Python数据服务依赖（兼容 Python 3.9+）
+fastapi>=0.100.0
+uvicorn>=0.20.0
+akshare>=1.10.0
+pandas>=1.5.0
+numpy>=1.21.0,<2.0.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+httpx>=0.24.0
+apscheduler>=3.10.0

@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# database
+*.db
+
+# python data service
+data-service/.next/
+data-service/.cache/
+data-service/__pycache__/
+
+/src/generated/prisma
