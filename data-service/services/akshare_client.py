@@ -103,6 +103,9 @@ class AKShareClient:
         # 检查内存缓存
         cached = self._get_memory_cache(cache_key)
         if cached is not None:
+            # 内存缓存可能是list-of-dicts（序列化后的格式），统一转为DataFrame
+            if isinstance(cached, list):
+                return pd.DataFrame(cached)
             return cached
 
         try:
@@ -499,23 +502,8 @@ class AKShareClient:
             # 查找净流入列名
             net_col_names = ['当日成交净买额', '当日净买入', '净流入', '成交净买额']
 
-            def find_latest_valid(df, col_names, label):
-                """从DataFrame中查找最近的有效数据"""
-                if df.empty:
-                    return 0.0, None
-                for col in col_names:
-                    if col in df.columns:
-                        # 搜索最近60行（约2个月交易日）
-                        for idx in range(len(df) - 1, max(len(df) - 60, -1), -1):
-                            val = df.iloc[idx][col]
-                            if pd.notna(val) and float(val) != 0:
-                                date_val = str(df.iloc[idx].get('日期', ''))
-                                print(f"{label}历史数据: {col}={float(val)} (日期: {date_val}, 行{idx})")
-                                return float(val), date_val
-                return 0.0, None
-
-            sh_net, sh_date = find_latest_valid(sh_df, net_col_names, "沪股通")
-            sz_net, sz_date = find_latest_valid(sz_df, net_col_names, "深股通")
+            sh_net, sh_date = self._find_latest_valid_in_hist(sh_df, net_col_names)
+            sz_net, sz_date = self._find_latest_valid_in_hist(sz_df, net_col_names)
 
             # 使用最新的有效日期
             if sh_date or sz_date:

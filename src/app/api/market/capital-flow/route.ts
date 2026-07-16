@@ -15,7 +15,7 @@ export async function GET() {
   try {
     const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/macro`, {
       next: { revalidate: 30 },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(20000),
     })
 
     if (response.ok) {
@@ -57,6 +57,14 @@ export async function GET() {
           retailNet: 0,
           retailPct: 0,
           totalNet: 0,
+          sentiment: 50,
+        },
+        northbound: {
+          net: 0,
+          shConnect: 0,
+          szConnect: 0,
+          stale: true,
+          dataDate: '',
         },
         topInflowSectors: [],
         topOutflowSectors: [],
