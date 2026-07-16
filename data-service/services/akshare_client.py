@@ -98,6 +98,7 @@ class AKShareClient:
         Returns:
             标准化后的数据列表，包含 '名称'、'今日涨跌幅'、'今日主力净流入-净额' 等统一字段
         """
+        data = [dict(item) for item in data]
         for item in data:
             item['名称'] = item.get(name_field, '')
             try:

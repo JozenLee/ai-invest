@@ -155,7 +155,7 @@ async def get_northbound_flow():
             }
 
         # value 已经是亿元单位（在 akshare_client 中处理好了）
-        # `date` 是数据的逻辑日期（交易日），`dataDate` 是数据生成/获取的时间戳
+        # `date` 和 `dataDate` 都是数据的逻辑日期（交易日），`fetchedAt` 是获取时间戳
         return {
             "success": True,
             "data": {
@@ -164,8 +164,9 @@ async def get_northbound_flow():
                 "shConnect": round(float(data.get("shConnect", 0)), 2),
                 "szConnect": round(float(data.get("szConnect", 0)), 2),
                 "stale": data.get("stale", False),
-                "dataDate": datetime.now().isoformat(),
+                "dataDate": str(data.get("date", datetime.now().strftime("%Y-%m-%d"))),
                 "source": data.get("source", "unknown"),
+                "fetchedAt": datetime.now().isoformat(),
                 "timestamp": datetime.now().isoformat()
             }
         }
