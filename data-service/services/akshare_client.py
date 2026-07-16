@@ -86,6 +86,39 @@ class AKShareClient:
                 else:
                     raise e
 
+    @staticmethod
+    def _standardize_sector_flow(data: List[Dict], name_field: str = "行业", change_field: str = "行业-涨跌幅") -> List[Dict]:
+        """统一板块资金流向字段名，并将净额单位从亿元转换为元。
+
+        Args:
+            data: 原始板块数据列表（from AKShare DataFrame.to_dict('records')）
+            name_field: 名称字段的原始键名（行业资金流向用 '行业'，概念资金流向用 '行业'）
+            change_field: 涨跌幅字段的原始键名
+
+        Returns:
+            标准化后的数据列表，包含 '名称'、'今日涨跌幅'、'今日主力净流入-净额' 等统一字段
+        """
+        for item in data:
+            item['名称'] = item.get(name_field, '')
+            try:
+                item['今日涨跌幅'] = float(item.get(change_field, 0))
+            except (ValueError, TypeError):
+                item['今日涨跌幅'] = 0.0
+            # AKShare 直接返回的净额单位是亿元，转换为元存储
+            try:
+                net_val = float(item.get('净额', 0)) * 1e8
+            except (ValueError, TypeError):
+                net_val = 0.0
+            item['今日主力净流入-净额'] = net_val
+            # 保留原始多日字段（如果AKShare返回了的话）
+            for key in list(item.keys()):
+                if '主力净流入' in key and key != '今日主力净流入-净额':
+                    try:
+                        item[key] = float(item[key]) * 1e8
+                    except (ValueError, TypeError):
+                        del item[key]
+        return data
+
     # ==================== 实时行情 ====================
 
     def get_index_spot(self) -> pd.DataFrame:
@@ -343,20 +376,7 @@ class AKShareClient:
                 # 打印列名以便调试
                 if data:
                     print(f"板块资金流向列名: {list(data[0].keys())}")
-                # 统一字段名，保留原始多日数据
-                for item in data:
-                    item['名称'] = item.get('行业', '')
-                    item['今日涨跌幅'] = float(item.get('行业-涨跌幅', 0))
-                    # AKShare 直接返回的净额单位是亿元，转换为元存储
-                    net_val = float(item.get('净额', 0)) * 1e8
-                    item['今日主力净流入-净额'] = net_val
-                    # 保留原始多日字段（如果AKShare返回了的话）
-                    for key in list(item.keys()):
-                        if '主力净流入' in key and key != '今日主力净流入-净额':
-                            try:
-                                item[key] = float(item[key]) * 1e8
-                            except (ValueError, TypeError):
-                                pass
+                data = self._standardize_sector_flow(data)
                 self._set(cache_key, data, memory_ttl=600)
                 return data
         except Exception as e:
@@ -367,17 +387,7 @@ class AKShareClient:
             df = self._retry_call(ak.stock_fund_flow_concept)
             if not df.empty:
                 data = df.head(50).to_dict('records')
-                for item in data:
-                    item['名称'] = item.get('行业', '')
-                    item['今日涨跌幅'] = float(item.get('行业-涨跌幅', 0))
-                    net_val = float(item.get('净额', 0)) * 1e8
-                    item['今日主力净流入-净额'] = net_val
-                    for key in list(item.keys()):
-                        if '主力净流入' in key and key != '今日主力净流入-净额':
-                            try:
-                                item[key] = float(item[key]) * 1e8
-                            except (ValueError, TypeError):
-                                pass
+                data = self._standardize_sector_flow(data)
                 self._set(cache_key, data, memory_ttl=600)
                 return data
         except Exception as e:

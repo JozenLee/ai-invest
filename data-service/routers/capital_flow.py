@@ -15,6 +15,14 @@ router = APIRouter()
 def _calculate_sentiment(main_net: float, retail_net: float, northbound_net: float) -> int:
     """计算市场情绪指数 (0-100)
 
+    Args:
+        main_net: 主力净流入（亿元，正数为流入）
+        retail_net: 散户净流入（亿元，正数为流入）
+        northbound_net: 北向资金净流入（亿元，正数为流入）
+
+    Returns:
+        情绪指数，0-100，50为中性
+
     基于三个维度综合评分：
     1. 主力资金流向 (权重40%): 主力净流入为正 → 偏多
     2. 北向资金流向 (权重35%): 北向净流入为正 → 偏多
@@ -29,20 +37,18 @@ def _calculate_sentiment(main_net: float, retail_net: float, northbound_net: flo
     """
     score = 50.0
 
-    # 1. 主力资金流向评分 (±20分)
+    # 1. 主力资金流向评分 (±20分) — 所有参数均为亿元
     if main_net != 0:
-        # 以亿元为单位，10亿以上为强信号
-        main_yi = main_net / 1e8
-        if abs(main_yi) >= 10:
-            score += 20 if main_yi > 0 else -20
-        elif abs(main_yi) >= 2:
-            score += 10 if main_yi > 0 else -10
+        # 10亿以上为强信号
+        if abs(main_net) >= 10:
+            score += 20 if main_net > 0 else -20
+        elif abs(main_net) >= 2:
+            score += 10 if main_net > 0 else -10
         else:
-            score += 5 if main_yi > 0 else -5
+            score += 5 if main_net > 0 else -5
 
-    # 2. 北向资金流向评分 (±17.5分)
+    # 2. 北向资金流向评分 (±17.5分) — northbound_net 为亿元
     if northbound_net != 0:
-        # 北向资金以亿元为单位
         if abs(northbound_net) >= 50:
             score += 17.5 if northbound_net > 0 else -17.5
         elif abs(northbound_net) >= 10:
@@ -79,8 +85,8 @@ async def get_market_capital_flow():
         small_net = float(data.get("小单净流入-净额", 0))
         retail_net = mid_net + small_net
 
-        # 计算市场情绪
-        sentiment = _calculate_sentiment(main_net, retail_net, 0)
+        # 计算市场情绪（所有参数单位为亿元）
+        sentiment = _calculate_sentiment(main_net / 1e8, retail_net / 1e8, 0)
 
         return {
             "success": True,
@@ -149,6 +155,7 @@ async def get_northbound_flow():
             }
 
         # value 已经是亿元单位（在 akshare_client 中处理好了）
+        # `date` 是数据的逻辑日期（交易日），`dataDate` 是数据生成/获取的时间戳
         return {
             "success": True,
             "data": {
@@ -157,7 +164,7 @@ async def get_northbound_flow():
                 "shConnect": round(float(data.get("shConnect", 0)), 2),
                 "szConnect": round(float(data.get("szConnect", 0)), 2),
                 "stale": data.get("stale", False),
-                "dataDate": str(data.get("date", "")),
+                "dataDate": datetime.now().isoformat(),
                 "source": data.get("source", "unknown"),
                 "timestamp": datetime.now().isoformat()
             }
@@ -259,8 +266,8 @@ async def get_macro_capital_flow():
         northbound_stale = northbound_data.get("stale", False) if has_northbound else False
         northbound_date = str(northbound_data.get("date", "")) if has_northbound else ""
 
-        # 市场情绪计算（基于主力资金流向和北向资金）
-        sentiment = _calculate_sentiment(main_net, retail_net, northbound_net)
+        # 市场情绪计算（基于主力资金流向和北向资金，所有参数单位为亿元）
+        sentiment = _calculate_sentiment(main_net / 1e8, retail_net / 1e8, northbound_net)
 
         today = datetime.now().strftime("%Y-%m-%d")
         is_cached = data_date != today
