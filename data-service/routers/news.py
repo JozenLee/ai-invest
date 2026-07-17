@@ -2,6 +2,7 @@
 # 提供财经新闻、行业资讯等接口
 
 import asyncio
+import re
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -11,6 +12,57 @@ import akshare as ak
 import pandas as pd
 
 router = APIRouter()
+
+def parse_relative_time(time_str: str) -> datetime:
+    """解析相对时间字符串为datetime对象
+
+    支持格式：
+    - 标准日期: "2024-07-15 10:30:00", "2024-07-15"
+    - 相对时间: "31天前", "2小时前", "5分钟前", "刚刚"
+    """
+    if not time_str or time_str == 'None':
+        return datetime.now()
+
+    # 尝试解析标准日期格式
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d", "%Y/%m/%d %H:%M:%S"]:
+        try:
+            return datetime.strptime(str(time_str).strip(), fmt)
+        except ValueError:
+            continue
+
+    # 解析相对时间
+    time_str = str(time_str).strip()
+    now = datetime.now()
+
+    # 匹配 "X天前"
+    match = re.search(r'(\d+)\s*天前', time_str)
+    if match:
+        return now - timedelta(days=int(match.group(1)))
+
+    # 匹配 "X小时前"
+    match = re.search(r'(\d+)\s*小时前', time_str)
+    if match:
+        return now - timedelta(hours=int(match.group(1)))
+
+    # 匹配 "X分钟前"
+    match = re.search(r'(\d+)\s*分钟前', time_str)
+    if match:
+        return now - timedelta(minutes=int(match.group(1)))
+
+    # 匹配 "X秒前"
+    match = re.search(r'(\d+)\s*秒前', time_str)
+    if match:
+        return now - timedelta(seconds=int(match.group(1)))
+
+    # 匹配 "昨天 HH:MM"
+    match = re.search(r'昨天\s*(\d{1,2}):(\d{2})', time_str)
+    if match:
+        yesterday = now - timedelta(days=1)
+        return yesterday.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0)
+
+    # 无法解析，返回当前时间
+    print(f"无法解析时间字符串: {time_str}")
+    return now
 
 class NewsArticle(BaseModel):
     id: str
@@ -49,13 +101,22 @@ async def get_news_feed(
         try:
             df = await asyncio.to_thread(ak.stock_news_em, "财联社")
             if not df.empty:
-                # 按发布时间倒序排列
+                # 先解析时间，再按时间倒序排列
                 if "发布时间" in df.columns:
-                    df = df.sort_values(by="发布时间", ascending=False)
+                    df["_parsed_time"] = df["发布时间"].apply(parse_relative_time)
+                    df = df.sort_values(by="_parsed_time", ascending=False)
 
                 for _, row in df.iterrows():
                     title = str(row.get("新闻标题", ""))
                     is_ai_related = any(kw in title for kw in AI_HARDWARE_KEYWORDS)
+
+                    # 使用解析后的时间，确保格式统一
+                    raw_time = str(row.get("发布时间", ""))
+                    parsed_time = row.get("_parsed_time")
+                    if parsed_time and isinstance(parsed_time, datetime):
+                        publish_time = parsed_time.isoformat()
+                    else:
+                        publish_time = parse_relative_time(raw_time).isoformat()
 
                     news_list.append({
                         "id": f"cls_{len(news_list)}",
@@ -64,7 +125,7 @@ async def get_news_feed(
                         "summary": title[:100] + "..." if len(title) > 100 else title,
                         "source": "财联社",
                         "url": str(row.get("新闻链接", "")),
-                        "publishTime": str(row.get("发布时间", datetime.now().isoformat())),
+                        "publishTime": publish_time,
                         "category": categorize_news(title),
                         "sentiment": None,
                         "impact": None,
@@ -105,9 +166,22 @@ async def get_ai_hardware_news(limit: int = Query(default=20, ge=1, le=50)):
         try:
             df = await asyncio.to_thread(ak.stock_news_em, "财联社")
             if not df.empty:
+                # 先解析时间，再按时间倒序排列
+                if "发布时间" in df.columns:
+                    df["_parsed_time"] = df["发布时间"].apply(parse_relative_time)
+                    df = df.sort_values(by="_parsed_time", ascending=False)
+
                 for _, row in df.iterrows():
                     title = str(row.get("新闻标题", ""))
                     if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
+                        # 使用解析后的时间
+                        raw_time = str(row.get("发布时间", ""))
+                        parsed_time = row.get("_parsed_time")
+                        if parsed_time and isinstance(parsed_time, datetime):
+                            publish_time = parsed_time.isoformat()
+                        else:
+                            publish_time = parse_relative_time(raw_time).isoformat()
+
                         news_list.append({
                             "id": f"ai_{len(news_list)}",
                             "title": title,
@@ -115,7 +189,7 @@ async def get_ai_hardware_news(limit: int = Query(default=20, ge=1, le=50)):
                             "summary": title[:100] + "..." if len(title) > 100 else title,
                             "source": "财联社",
                             "url": str(row.get("新闻链接", "")),
-                            "publishTime": str(row.get("发布时间", datetime.now().isoformat())),
+                            "publishTime": publish_time,
                             "category": categorize_news(title),
                             "sectors": extract_sectors(title),
                         })
@@ -155,15 +229,28 @@ async def get_sector_trends(
         try:
             df = await asyncio.to_thread(ak.stock_news_em, "财联社")
             if not df.empty:
+                # 先解析时间，再按时间倒序排列
+                if "发布时间" in df.columns:
+                    df["_parsed_time"] = df["发布时间"].apply(parse_relative_time)
+                    df = df.sort_values(by="_parsed_time", ascending=False)
+
                 for _, row in df.iterrows():
                     title = str(row.get("新闻标题", ""))
                     if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
+                        # 使用解析后的时间
+                        raw_time = str(row.get("发布时间", ""))
+                        parsed_time = row.get("_parsed_time")
+                        if parsed_time and isinstance(parsed_time, datetime):
+                            publish_time = parsed_time.isoformat()
+                        else:
+                            publish_time = parse_relative_time(raw_time).isoformat()
+
                         news_list.append({
                             "id": f"trend_{len(news_list)}",
                             "title": title,
                             "content": str(row.get("新闻内容", "")),
                             "source": "财联社",
-                            "publishTime": str(row.get("发布时间", datetime.now().isoformat())),
+                            "publishTime": publish_time,
                             "category": categorize_news(title),
                             "sectors": extract_sectors(title),
                             "sentiment": None,

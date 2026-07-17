@@ -16,6 +16,14 @@ interface SectorFlow {
   changePct: number    // 涨跌幅
 }
 
+interface NorthboundData {
+  net: number          // 北向资金净流入（亿）
+  shConnect: number    // 沪股通净流入（亿）
+  szConnect: number    // 深股通净流入（亿）
+  stale?: boolean      // 是否为历史数据（非交易时段）
+  dataDate?: string    // 数据日期
+}
+
 interface CapitalFlowData {
   market: {
     institutionalNet: number   // 机构/主力净流入（亿）
@@ -23,7 +31,9 @@ interface CapitalFlowData {
     retailNet: number          // 散户净流入（亿）
     retailPct: number          // 散户占比
     totalNet: number           // 大盘总净流入（亿）
+    sentiment: number          // 市场情绪 (0-100)
   }
+  northbound: NorthboundData   // 北向资金
   topInflowSectors: SectorFlow[]   // Top10资金流入板块
   topOutflowSectors: SectorFlow[]  // Top10资金流出板块
 }

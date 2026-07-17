@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { fetchIndicesFromYahoo } from '@/lib/data-clients/yahoo'
 import { apiCache } from '@/lib/cache'
+import { getCachedMarketOverview, setCachedMarketOverview } from '@/lib/market-cache'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 const CACHE_KEY = 'market_overview'
@@ -20,7 +21,7 @@ export async function GET() {
     // 优先：Python 数据服务（多源聚合）
     const response = await fetch(`${DATA_SERVICE_URL}/api/market/overview`, {
       next: { revalidate: 30 },
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(20000),
     })
 
     if (response.ok) {
@@ -31,6 +32,8 @@ export async function GET() {
           source: data.data?.source || 'akshare'
         }
         apiCache.set(CACHE_KEY, result, CACHE_TTL)
+        // 持久化到文件缓存
+        setCachedMarketOverview(result)
         return NextResponse.json(result)
       }
     }
@@ -59,10 +62,26 @@ export async function GET() {
         source: 'yahoo',
       }
       apiCache.set(CACHE_KEY, result, CACHE_TTL)
+      setCachedMarketOverview(result)
       return NextResponse.json(result)
     }
   } catch (error) {
     console.warn('Yahoo Finance 降级也失败:', error)
+  }
+
+  // 降级：本地文件缓存（跨进程重启的持久数据）
+  try {
+    const cachedOverview = getCachedMarketOverview()
+    if (cachedOverview) {
+      console.warn('所有实时数据源不可用，使用本地缓存数据')
+      apiCache.set(CACHE_KEY, cachedOverview, CACHE_TTL)
+      return NextResponse.json({
+        ...cachedOverview,
+        source: `${cachedOverview.source || 'cached'}-stale`,
+      })
+    }
+  } catch (error) {
+    console.warn('本地缓存读取失败:', error)
   }
 
   // 所有数据源不可用
