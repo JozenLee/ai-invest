@@ -16,13 +16,13 @@ function ensureCompleteIndices(result: any): any {
 
   const existing = new Map(result.data.indices.map((idx: any) => [idx.code, idx]))
   const filled: any[] = []
+  const stale = getCachedMarketOverview()
 
   for (const code of INDEX_CODES) {
     if (existing.has(code)) {
       filled.push(existing.get(code))
     } else {
       // 尝试从文件缓存补全
-      const stale = getCachedMarketOverview()
       const cachedIdx = stale?.data?.indices?.find((i: any) => i.code === code)
       if (cachedIdx) {
         filled.push({ ...cachedIdx, source: `${cachedIdx.source}-cached` })

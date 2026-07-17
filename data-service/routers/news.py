@@ -2,6 +2,7 @@
 # 提供财经新闻、行业资讯等接口
 
 import asyncio
+import logging
 import re
 from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
@@ -10,6 +11,8 @@ from pydantic import BaseModel
 
 import akshare as ak
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -60,8 +63,8 @@ def parse_relative_time(time_str: str) -> datetime:
         yesterday = now - timedelta(days=1)
         return yesterday.replace(hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0)
 
-    # 无法解析，返回当前时间
-    print(f"无法解析时间字符串: {time_str}")
+    # 无法解析，返回当前时间并记录警告
+    logger.warning("无法解析时间字符串, 回退到当前时间: %s", time_str)
     return now
 
 class NewsArticle(BaseModel):
@@ -114,7 +117,7 @@ async def get_news_feed(
                         "summary": title[:100] + "..." if len(title) > 100 else title,
                         "source": "财联社",
                         "url": str(row.get("新闻链接", "")),
-                        "publishTime": row.get("_publish_time_iso", ""),
+                        "publishTime": row.get("_publish_time_iso", "") or datetime.now().isoformat(),
                         "category": categorize_news(title),
                         "sentiment": None,
                         "impact": None,
@@ -167,7 +170,7 @@ async def get_ai_hardware_news(limit: int = Query(default=20, ge=1, le=50)):
                             "summary": title[:100] + "..." if len(title) > 100 else title,
                             "source": "财联社",
                             "url": str(row.get("新闻链接", "")),
-                            "publishTime": row.get("_publish_time_iso", ""),
+                            "publishTime": row.get("_publish_time_iso", "") or datetime.now().isoformat(),
                             "category": categorize_news(title),
                             "sectors": extract_sectors(title),
                         })
@@ -217,7 +220,7 @@ async def get_sector_trends(
                             "title": title,
                             "content": str(row.get("新闻内容", "")),
                             "source": "财联社",
-                            "publishTime": row.get("_publish_time_iso", ""),
+                            "publishTime": row.get("_publish_time_iso", "") or datetime.now().isoformat(),
                             "category": categorize_news(title),
                             "sectors": extract_sectors(title),
                             "sentiment": None,
