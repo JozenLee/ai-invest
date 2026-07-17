@@ -44,11 +44,14 @@
 │              │   (registry.py)       │                  │
 │              └───────────┬───────────┘                  │
 │                          │                              │
-│    ┌─────────────┬───────┴───────┬─────────────┐       │
-│    ▼             ▼               ▼             ▼       │
-│ ┌──────┐   ┌──────┐       ┌──────┐      ┌──────┐     │
-│ │AKShare│   │Tushare│      │Xueqiu│      │ Yahoo │     │
-│ └──────┘   └──────┘       └──────┘      └──────┘     │
+│    ┌─────────────┬───────┴───────┐                     │
+│    ▼             ▼               ▼                     │
+│ ┌──────┐   ┌──────┐       ┌──────┐                    │
+│ │AKShare│   │Tushare│      │Xueqiu│                    │
+│ └──────┘   └──────┘       └──────┘                    │
+│                                                        │
+│  Note: Yahoo Finance 仅作为前端降级方案，不纳入Python   │
+│  数据服务的Provider体系                                 │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -74,6 +77,10 @@ providers/
 - `services/akshare_client.py`
 - `services/multi_source_client.py`
 - `services/xueqiu_client.py`
+
+**关于 Yahoo Finance：**
+- Yahoo Finance 仅作为前端降级方案（当 Python 数据服务不可用时）
+- 不纳入 Python Provider 体系，保留在 `src/lib/data-clients/yahoo.ts`
 
 ### 1.2 Configurable Priority
 
