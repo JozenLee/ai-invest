@@ -10,6 +10,34 @@ const CACHE_TTL = 30 // 秒
 // 主要指数配置（Yahoo Finance 格式）
 const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
 
+// 确保结果包含所有 INDEX_CODES 中的指数，缺失的从上一次缓存中补全
+function ensureCompleteIndices(result: any): any {
+  if (!result?.data?.indices) return result
+
+  const existing = new Map(result.data.indices.map((idx: any) => [idx.code, idx]))
+  const filled: any[] = []
+
+  for (const code of INDEX_CODES) {
+    if (existing.has(code)) {
+      filled.push(existing.get(code))
+    } else {
+      // 尝试从文件缓存补全
+      const stale = getCachedMarketOverview()
+      const cachedIdx = stale?.data?.indices?.find((i: any) => i.code === code)
+      if (cachedIdx) {
+        filled.push({ ...cachedIdx, source: `${cachedIdx.source}-cached` })
+      } else {
+        filled.push({ code, name: code, price: 0, change: 0, changePct: 0, source: 'unavailable' })
+      }
+    }
+  }
+
+  return {
+    ...result,
+    data: { ...result.data, indices: filled },
+  }
+}
+
 export async function GET() {
   // 检查缓存
   const cached = apiCache.get<any>(CACHE_KEY)
@@ -27,10 +55,10 @@ export async function GET() {
     if (response.ok) {
       const data = await response.json()
       if (data.success && data.data?.indices?.length > 0) {
-        const result = {
+        const result = ensureCompleteIndices({
           ...data,
           source: data.data?.source || 'akshare'
-        }
+        })
         apiCache.set(CACHE_KEY, result, CACHE_TTL)
         // 持久化到文件缓存
         setCachedMarketOverview(result)
@@ -45,7 +73,7 @@ export async function GET() {
   try {
     const yahooData = await fetchIndicesFromYahoo(INDEX_CODES)
     if (yahooData.length > 0) {
-      const result = {
+      const result = ensureCompleteIndices({
         success: true,
         data: {
           indices: yahooData.map(q => ({
@@ -60,7 +88,7 @@ export async function GET() {
           timestamp: new Date().toISOString(),
         },
         source: 'yahoo',
-      }
+      })
       apiCache.set(CACHE_KEY, result, CACHE_TTL)
       setCachedMarketOverview(result)
       return NextResponse.json(result)

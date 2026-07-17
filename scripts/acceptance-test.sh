@@ -84,6 +84,39 @@ echo -e "${YELLOW}五、决策层验收${NC}"
 
 test_api "ETF分析API" POST "/api/analysis/etf" '{"ticker":"512480"}' "200"
 
+# 六、新增功能验收（Tasks 1-3）
+echo ""
+echo -e "${YELLOW}六、新增功能验收${NC}"
+
+# 数据源页面API
+test_api "数据源列表API" GET "/api/datasources" "" "200"
+
+# 市场概览指数数量断言
+echo -n "市场概览指数数量 >= 3: "
+overview_response=$(curl -s "$BASE_URL/api/market/overview" 2>/dev/null || echo '{}')
+index_count=$(echo "$overview_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('data',{}).get('indices',[])))" 2>/dev/null || echo "0")
+if [ "$index_count" -ge 3 ]; then
+    echo -e "${GREEN}✓${NC} 返回 $index_count 个指数 (>= 3)"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}✗${NC} 仅返回 $index_count 个指数 (期望 >= 3)"
+    FAIL=$((FAIL + 1))
+fi
+TOTAL=$((TOTAL + 1))
+
+# 数据源列表断言
+echo -n "数据源列表包含活跃数据源: "
+sources_response=$(curl -s "$BASE_URL/api/datasources" 2>/dev/null || echo '{}')
+active_count=$(echo "$sources_response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('activeCount',0))" 2>/dev/null || echo "0")
+if [ "$active_count" -gt 0 ]; then
+    echo -e "${GREEN}✓${NC} 包含 $active_count 个活跃数据源"
+    PASS=$((PASS + 1))
+else
+    echo -e "${RED}✗${NC} 未找到活跃数据源"
+    FAIL=$((FAIL + 1))
+fi
+TOTAL=$((TOTAL + 1))
+
 # 结果统计
 echo ""
 echo "=========================================="
