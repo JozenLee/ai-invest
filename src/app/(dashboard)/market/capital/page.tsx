@@ -25,36 +25,9 @@ import {
   Layers,
   BarChart3,
   Crown,
+  Clock,
 } from 'lucide-react'
-
-interface MarketFlow {
-  institutionalNet: number
-  institutionalPct: number
-  retailNet: number
-  retailPct: number
-  totalNet: number
-}
-
-interface SectorFlowItem {
-  sector: string
-  netFlow: number
-  changePct: number
-}
-
-interface CapitalFlowData {
-  date?: string
-  market: MarketFlow
-  topInflowSectors: SectorFlowItem[]
-  topOutflowSectors: SectorFlowItem[]
-  source?: string
-  dataDate?: string
-}
-
-interface MacroData {
-  date: string
-  market: { totalMainNet: number; retailNet: number }
-  institutional: { northboundNet: number }
-}
+import { useMarketContext } from '@/contexts/MarketContext'
 
 interface ETFItem {
   ticker?: string
@@ -82,45 +55,30 @@ interface SectorFlow {
 }
 
 export default function CapitalFlowPage() {
-  const [capitalFlow, setCapitalFlow] = useState<CapitalFlowData | null>(null)
-  const [macroData, setMacroData] = useState<MacroData | null>(null)
+  const {
+    capitalFlow,
+    northbound,
+    marketMeta,
+    isLoading,
+    error,
+    lastUpdate,
+    refetch,
+    format,
+  } = useMarketContext()
+
   const [etfList, setEtfList] = useState<ETFItem[]>([])
   const [sectors, setSectors] = useState<SectorBasic[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [source, setSource] = useState<string>('loading')
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [extraLoading, setExtraLoading] = useState(true)
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-
+  // Fetch page-specific extra data (ETF list and sectors)
+  const fetchExtraData = useCallback(async () => {
+    setExtraLoading(true)
     try {
-      const [capitalRes, macroRes, etfRes, sectorsRes] = await Promise.allSettled([
-        fetch('/api/market/capital-flow'),
-        fetch('/api/macro/capital-flow'),
+      const [etfRes, sectorsRes] = await Promise.allSettled([
         fetch('/api/etf/list'),
         fetch('/api/market/sectors'),
       ])
 
-      // Main capital flow
-      if (capitalRes.status === 'fulfilled' && capitalRes.value.ok) {
-        const data = await capitalRes.value.json()
-        if (data.success && data.data) {
-          setCapitalFlow(data.data)
-          setSource(data.data?.source || data.source || 'unknown')
-        }
-      }
-
-      // Macro data (northbound, etc.)
-      if (macroRes.status === 'fulfilled' && macroRes.value.ok) {
-        const data = await macroRes.value.json()
-        if (data.success && data.data) {
-          setMacroData(data.data)
-        }
-      }
-
-      // ETF list
       if (etfRes.status === 'fulfilled' && etfRes.value.ok) {
         const data = await etfRes.value.json()
         if (data.success && data.data) {
@@ -128,37 +86,32 @@ export default function CapitalFlowPage() {
         }
       }
 
-      // Sector basic data
       if (sectorsRes.status === 'fulfilled' && sectorsRes.value.ok) {
         const data = await sectorsRes.value.json()
         if (data.success && data.data?.sectors) {
           setSectors(data.data.sectors)
         }
       }
-
-      setLastUpdate(new Date())
     } catch (err) {
-      console.error('Fetch capital flow failed:', err)
-      setError('Failed to load capital flow data')
+      console.error('Fetch extra data failed:', err)
     } finally {
-      setIsLoading(false)
+      setExtraLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 60 * 1000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+    fetchExtraData()
+  }, [fetchExtraData])
 
   const fmt = (n: number, d = 2) => n.toFixed(d)
   const color = (v: number) => (v >= 0 ? 'text-red-500' : 'text-green-500')
   const sign = (v: number) => (v >= 0 ? '+' : '')
   const trendBg = (v: number) => v >= 0 ? 'bg-red-500/10' : 'bg-green-500/10'
 
-  // Northbound net from macro data
-  const northboundNet = macroData?.institutional?.northboundNet ?? 0
-  const northboundDate = macroData?.date ?? ''
+  // Northbound data from context
+  const northboundNet = northbound?.net ?? 0
+  const northboundDate = northbound?.dataDate ?? ''
+  const northboundStale = northbound?.stale ?? true
 
   // All sectors combined (inflow + outflow)
   const allSectors = [
@@ -196,9 +149,11 @@ export default function CapitalFlowPage() {
     (a, b) => Math.abs(b.mainForceNet) - Math.abs(a.mainForceNet)
   )
 
+  const isDataLoading = isLoading || extraLoading
+
   return (
     <div className="space-y-6">
-      {/* 页面标题 */}
+      {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">资金流向</h1>
@@ -207,22 +162,23 @@ export default function CapitalFlowPage() {
           </p>
           <div className="flex items-center gap-2 mt-1">
             <Badge variant="outline" className="text-xs">
-              {source === 'loading' ? '加载中...' : source}
+              {format.sourceDisplay.icon} {format.sourceDisplay.text}
             </Badge>
             {capitalFlow?.dataDate && (
               <span className="text-xs text-muted-foreground">
                 数据日期: {capitalFlow.dataDate}
               </span>
             )}
-            {lastUpdate && (
-              <span className="text-xs text-muted-foreground">
-                {lastUpdate.toLocaleTimeString('zh-CN')} 更新
+            {format.timeDisplay && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {format.timeDisplay} 更新
               </span>
             )}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData} disabled={isLoading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+        <Button variant="outline" size="sm" onClick={refetch} disabled={isDataLoading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${isDataLoading ? 'animate-spin' : ''}`} />
           刷新
         </Button>
       </div>
@@ -237,7 +193,29 @@ export default function CapitalFlowPage() {
         </div>
       )}
 
-      {/* 概览卡片 */}
+      {/* Data quality notice */}
+      {capitalFlow?.dataQuality === 'estimated' && (
+        <div className="rounded-lg bg-blue-50 p-3 text-blue-800 dark:bg-blue-900/20 dark:text-blue-200">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <p className="text-sm">
+              大盘资金流向为行业汇总估算值（主接口不可用），仅供参考
+            </p>
+          </div>
+        </div>
+      )}
+      {northboundStale && (
+        <div className="rounded-lg bg-orange-50 p-3 text-orange-800 dark:bg-orange-900/20 dark:text-orange-200">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4" />
+            <p className="text-sm">
+              北向资金数据暂不可用（交易所未披露实时数据），显示为历史缓存
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Overview cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -304,17 +282,17 @@ export default function CapitalFlowPage() {
             <ArrowLeftRight className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className={`text-2xl font-bold ${color(northboundNet)}`}>
-              {sign(northboundNet)}{fmt(Math.abs(northboundNet))}亿
+            <div className={`text-2xl font-bold ${northboundStale ? 'text-muted-foreground' : color(northboundNet)}`}>
+              {northboundStale ? '暂无' : `${sign(northboundNet)}${fmt(Math.abs(northboundNet))}亿`}
             </div>
             <p className="text-xs text-muted-foreground">
-              {northboundDate || '暂无日期'}
+              {northboundStale ? '数据暂不可用' : northboundDate || '暂无日期'}
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {/* 详细分区 */}
+      {/* Detailed tabs */}
       <Tabs defaultValue="sectors">
         <TabsList>
           <TabsTrigger value="sectors">板块排名</TabsTrigger>
@@ -324,7 +302,7 @@ export default function CapitalFlowPage() {
           <TabsTrigger value="etf">ETF资金</TabsTrigger>
         </TabsList>
 
-        {/* 板块排名 */}
+        {/* Sector ranking */}
         <TabsContent value="sectors">
           <Card>
             <CardHeader>
@@ -369,7 +347,7 @@ export default function CapitalFlowPage() {
                     ))}
                   </TableBody>
                 </Table>
-              ) : !isLoading ? (
+              ) : !isDataLoading ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <p>暂无板块资金流向数据</p>
                 </div>
@@ -384,7 +362,7 @@ export default function CapitalFlowPage() {
           </Card>
         </TabsContent>
 
-        {/* 资金流入 */}
+        {/* Capital inflow */}
         <TabsContent value="inflow">
           <Card>
             <CardHeader>
@@ -399,7 +377,7 @@ export default function CapitalFlowPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">排名</TableHead>
-                      <TableHead>板块</TableHead>
+                      <TableHead className="min-w-[120px]">板块</TableHead>
                       <TableHead className="text-right">净流入(亿)</TableHead>
                       <TableHead className="text-right">涨跌幅</TableHead>
                     </TableRow>
@@ -410,9 +388,9 @@ export default function CapitalFlowPage() {
                         <TableCell className={`font-medium ${i < 3 ? 'text-red-500 font-bold' : 'text-muted-foreground'}`}>
                           {i + 1}
                         </TableCell>
-                        <TableCell className="font-medium">{s.sector}</TableCell>
-                        <TableCell className="text-right font-medium text-red-500">
-                          +{fmt(Math.abs(s.netFlow))}
+                        <TableCell className="font-medium whitespace-nowrap">{s.sector}</TableCell>
+                        <TableCell className={`text-right font-medium ${color(s.netFlow)}`}>
+                          {s.netFlow >= 0 ? '+' : ''}{fmt(s.netFlow)}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={color(s.changePct)}>
@@ -432,7 +410,7 @@ export default function CapitalFlowPage() {
           </Card>
         </TabsContent>
 
-        {/* 资金流出 */}
+        {/* Capital outflow */}
         <TabsContent value="outflow">
           <Card>
             <CardHeader>
@@ -447,7 +425,7 @@ export default function CapitalFlowPage() {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-12">排名</TableHead>
-                      <TableHead>板块</TableHead>
+                      <TableHead className="min-w-[120px]">板块</TableHead>
                       <TableHead className="text-right">净流出(亿)</TableHead>
                       <TableHead className="text-right">涨跌幅</TableHead>
                     </TableRow>
@@ -458,9 +436,9 @@ export default function CapitalFlowPage() {
                         <TableCell className={`font-medium ${i < 3 ? 'text-green-500 font-bold' : 'text-muted-foreground'}`}>
                           {i + 1}
                         </TableCell>
-                        <TableCell className="font-medium">{s.sector}</TableCell>
-                        <TableCell className="text-right font-medium text-green-500">
-                          {fmt(s.netFlow)}
+                        <TableCell className="font-medium whitespace-nowrap">{s.sector}</TableCell>
+                        <TableCell className={`text-right font-medium ${color(s.netFlow)}`}>
+                          {s.netFlow >= 0 ? '+' : ''}{fmt(s.netFlow)}
                         </TableCell>
                         <TableCell className="text-right">
                           <span className={color(s.changePct)}>
@@ -480,7 +458,7 @@ export default function CapitalFlowPage() {
           </Card>
         </TabsContent>
 
-        {/* 板块轮动（原sectors页面内容） */}
+        {/* Sector rotation */}
         <TabsContent value="rotation">
           <Card>
             <CardHeader>
@@ -652,7 +630,7 @@ export default function CapitalFlowPage() {
                     </Table>
                   </TabsContent>
                 </Tabs>
-              ) : !isLoading ? (
+              ) : !isDataLoading ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <AlertCircle className="h-8 w-8 mx-auto mb-2" />
                   <p>暂无板块数据</p>
@@ -668,7 +646,7 @@ export default function CapitalFlowPage() {
           </Card>
         </TabsContent>
 
-        {/* ETF资金 */}
+        {/* ETF capital */}
         <TabsContent value="etf">
           <Card>
             <CardHeader>
@@ -723,7 +701,7 @@ export default function CapitalFlowPage() {
                     ))}
                   </TableBody>
                 </Table>
-              ) : !isLoading ? (
+              ) : !isDataLoading ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <p>暂无ETF数据</p>
                 </div>
