@@ -278,18 +278,28 @@ export default function DashboardPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${getChangeColor(capitalFlow.northbound?.net || 0)}`}>
-                    {(capitalFlow.northbound?.net || 0) >= 0 ? '+' : ''}{formatNumber(capitalFlow.northbound?.net || 0)}亿
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    沪股通 {formatNumber(capitalFlow.northbound?.shConnect || 0)}亿 · 深股通 {formatNumber(capitalFlow.northbound?.szConnect || 0)}亿
-                  </p>
-                  {capitalFlow.northbound?.stale && (
-                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {capitalFlow.northbound.dataDate || '上一交易日'}收盘数据
-                    </p>
-                  )}
+                  {(() => {
+                    const nb = capitalFlow.northbound
+                    const hasNorthboundData = nb && nb.net !== 0
+                    return hasNorthboundData ? (
+                      <>
+                        <div className={`text-2xl font-bold ${getChangeColor(nb.net)}`}>
+                          {nb.net >= 0 ? '+' : ''}{formatNumber(nb.net)}亿
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          沪股通 {formatNumber(nb.shConnect)}亿 · 深股通 {formatNumber(nb.szConnect)}亿
+                        </p>
+                        {nb.stale && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {nb.dataDate || '上一交易日'}收盘数据
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <div className="text-2xl font-bold text-muted-foreground">暂无</div>
+                    )
+                  })()}
                 </CardContent>
               </Card>
 

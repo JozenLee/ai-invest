@@ -179,25 +179,28 @@ export default function MarketOverviewPage() {
             <ArrowLeftRight className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            {northbound ? (
-              <>
-                <div className={`text-3xl font-bold ${color(northbound.net)}`}>
-                  {sign(northbound.net)}{fmt(Math.abs(northbound.net))}亿
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">净流入（人民币）</p>
-                {northbound.dataDate && (
-                  <p className="text-xs text-muted-foreground mt-2">日期: {northbound.dataDate}</p>
-                )}
-                {northbound.stale && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    历史数据
-                  </p>
-                )}
-              </>
-            ) : (
-              <div className="text-muted-foreground text-sm py-2">暂无北向资金数据</div>
-            )}
+            {(() => {
+              const hasNorthboundData = northbound && northbound.net !== 0
+              return hasNorthboundData ? (
+                <>
+                  <div className={`text-3xl font-bold ${color(northbound.net)}`}>
+                    {sign(northbound.net)}{fmt(Math.abs(northbound.net))}亿
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">净流入（人民币）</p>
+                  {northbound.dataDate && (
+                    <p className="text-xs text-muted-foreground mt-2">日期: {northbound.dataDate}</p>
+                  )}
+                  {northbound.stale && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      历史数据
+                    </p>
+                  )}
+                </>
+              ) : (
+                <div className="text-muted-foreground text-sm py-2">暂无</div>
+              )
+            })()}
           </CardContent>
         </Card>
 
