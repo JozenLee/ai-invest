@@ -37,16 +37,12 @@ export async function GET() {
   } catch (error) {
     console.error('宏观资金流向代理请求失败:', error)
 
-    // 降级：返回模拟数据
+    // 降级：返回明确的错误状态（不返回假数据）
     return NextResponse.json({
-      success: true,
-      data: {
-        northbound: { net: 0, change: 0 },
-        margin: { balance: 0, change: 0 },
-        etf: { netPurchase: 0, change: 0 },
-        sectors: [],
-      },
-      source: 'fallback',
+      success: false,
+      error: '宏观资金流向数据服务不可用',
+      data: null,
+      source: 'unavailable',
     })
   }
 }

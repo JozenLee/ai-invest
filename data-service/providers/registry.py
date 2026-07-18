@@ -71,11 +71,11 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["akshare", "sina", "tushare"],
         cache_ttl=600,
     ),
     "sector_capital_flow": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["akshare", "sina", "tushare"],
         cache_ttl=600,
     ),
     "northbound_flow": CategoryConfig(
@@ -288,11 +288,21 @@ class ProviderRegistry:
 
     @staticmethod
     def _is_valid_result(result: Any) -> bool:
-        """判断结果是否有效（非空）"""
+        """判断结果是否有效（非空 + 数据合理性验证）"""
         if result is None:
             return False
         if isinstance(result, pd.DataFrame):
-            return not result.empty
+            if result.empty:
+                return False
+            # 验证指数数据：检测假数据（价格均为整百）
+            if "最新价" in result.columns:
+                prices = result["最新价"].dropna()
+                if not prices.empty:
+                    all_round_hundred = all(float(p) % 100 == 0 for p in prices if float(p) > 0)
+                    if all_round_hundred:
+                        print("[Registry] 检测到疑似假数据（价格均为整百），视为无效")
+                        return False
+            return True
         if isinstance(result, dict):
             return len(result) > 0
         if isinstance(result, list):

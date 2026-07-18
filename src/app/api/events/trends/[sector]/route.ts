@@ -14,7 +14,7 @@ export async function GET(
 
     const response = await fetch(
       `${DATA_SERVICE_URL}/api/news/trends/${sector}?days=${days}`,
-      { next: { revalidate: 600 }, signal: AbortSignal.timeout(30000) }
+      { signal: AbortSignal.timeout(30000) }
     )
 
     if (response.ok) {

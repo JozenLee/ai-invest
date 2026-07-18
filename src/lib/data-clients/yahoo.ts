@@ -33,7 +33,7 @@ export async function fetchIndexFromYahoo(code: string): Promise<IndexQuote | nu
       headers: {
         'User-Agent': 'Mozilla/5.0',
       },
-      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(10000),
     })
 
     if (!response.ok) {

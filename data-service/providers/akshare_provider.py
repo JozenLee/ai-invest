@@ -77,9 +77,86 @@ class AKShareProvider(DataProvider):
 
     # ==================== 指数数据 ====================
 
+    @staticmethod
+    def _validate_index_data(df: pd.DataFrame) -> bool:
+        """验证指数数据是否为真实数据（排除测试假数据）"""
+        if df.empty:
+            return False
+        if "最新价" not in df.columns:
+            return False
+        prices = df["最新价"].dropna()
+        if prices.empty:
+            return False
+        # 检测假数据：所有价格都是整百（3000, 10000, 2000, 1000, 4000）
+        all_round_hundred = all(float(p) % 100 == 0 for p in prices if float(p) > 0)
+        if all_round_hundred:
+            print("[AKShare] 检测到疑似假数据（价格均为整百），拒绝使用")
+            return False
+        return True
+
     async def get_index_spot(self) -> pd.DataFrame:
-        """获取指数实时行情快照"""
-        return await self._call(ak.stock_zh_index_spot_em)
+        """获取指数实时行情快照（含备用接口降级）"""
+        # 主接口：东方财富EM版
+        try:
+            df = await self._call(ak.stock_zh_index_spot_em)
+            if self._validate_index_data(df):
+                return df
+            print("[AKShare] stock_zh_index_spot_em 返回数据未通过验证，尝试备用接口")
+        except Exception as e:
+            print(f"[AKShare] stock_zh_index_spot_em 失败: {e}")
+
+        # 备用接口：新浪版
+        try:
+            df = await self._call(ak.stock_zh_index_spot_sina)
+            if not df.empty:
+                # 统一列名到EM格式
+                rename_map = {}
+                for col in df.columns:
+                    if "代码" in col or "symbol" in col.lower():
+                        rename_map[col] = "代码"
+                    elif "名称" in col or "name" in col.lower():
+                        rename_map[col] = "名称"
+                    elif "最新价" in col or "current" in col.lower() or "trade" in col.lower():
+                        rename_map[col] = "最新价"
+                    elif "涨跌额" in col or "change" == col.lower():
+                        rename_map[col] = "涨跌额"
+                    elif "涨跌幅" in col or "pct" in col.lower():
+                        rename_map[col] = "涨跌幅"
+                if rename_map:
+                    df = df.rename(columns=rename_map)
+                if self._validate_index_data(df):
+                    return df
+        except Exception as e:
+            print(f"[AKShare] stock_zh_index_spot_sina 备用接口也失败: {e}")
+
+        # 最后降级：通过日K数据获取最新收盘价
+        try:
+            target_codes = ["sh000001", "sz399001", "sz399006", "sh000688", "sh000300"]
+            records = []
+            for code in target_codes:
+                try:
+                    df = await self._call(ak.stock_zh_index_daily, symbol=code)
+                    if not df.empty:
+                        latest = df.iloc[-1]
+                        records.append({
+                            "代码": code,
+                            "名称": code,  # 会被上层覆盖
+                            "最新价": float(latest.get("close", 0)),
+                            "涨跌额": float(latest.get("close", 0)) - float(latest.get("open", 0)),
+                            "涨跌幅": 0,  # 需要昨收计算
+                            "成交量": float(latest.get("volume", 0)),
+                            "成交额": 0,
+                        })
+                except Exception:
+                    continue
+            if records:
+                df = pd.DataFrame(records)
+                if self._validate_index_data(df):
+                    return df
+        except Exception as e:
+            print(f"[AKShare] 日K降级也失败: {e}")
+
+        return pd.DataFrame()
 
     async def get_index_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """获取指数日K数据"""
@@ -91,7 +168,7 @@ class AKShareProvider(DataProvider):
 
     async def get_index_realtime(self, symbols: List[str]) -> pd.DataFrame:
         """获取指定指数实时行情"""
-        df = await self._call(ak.stock_zh_index_spot_em)
+        df = await self.get_index_spot()
         if not df.empty:
             df = df[df["代码"].isin(symbols)]
         return df
@@ -154,6 +231,7 @@ class AKShareProvider(DataProvider):
                     "小单净流入-净额": float(latest.get("小单净流入-净额", 0)),
                     "日期": str(latest.get("日期", datetime.now().strftime("%Y-%m-%d"))),
                     "source": "market_fund_flow",
+                    "dataQuality": "realtime",
                 }
         except Exception as e:
             print(f"[AKShare] 大盘资金流向接口失败，尝试降级: {e}")
@@ -180,25 +258,35 @@ class AKShareProvider(DataProvider):
                 "小单净流入-净额": retail_net * 0.4,
                 "日期": datetime.now().strftime("%Y-%m-%d"),
                 "source": "fund_flow_industry",
+                "dataQuality": "estimated",
             }
 
         raise Exception("所有大盘资金流向接口都失败")
 
     async def get_sector_capital_flow(self, indicator: str = "今日") -> List[Dict]:
-        """获取板块资金流向（含内部降级：行业 → 概念）"""
+        """获取板块资金流向（含内部降级：行业 → 概念）
+
+        返回所有行业板块数据，按净额降序排序，确保top10流入/流出数据完整
+        """
         try:
             df = await self._call(ak.stock_fund_flow_industry)
             if not df.empty:
-                data = df.head(50).to_dict("records")
-                return self._standardize_sector_flow(data)
+                # 不限制行数，获取所有行业板块
+                data = df.to_dict("records")
+                result = self._standardize_sector_flow(data)
+                # 按净额降序排序，确保top10选择正确
+                result.sort(key=lambda x: x.get("今日主力净流入-净额", 0), reverse=True)
+                return result
         except Exception as e:
             print(f"[AKShare] 行业资金流向失败: {e}")
 
         # 降级：概念资金流向
         df = await self._call(ak.stock_fund_flow_concept)
         if not df.empty:
-            data = df.head(50).to_dict("records")
-            return self._standardize_sector_flow(data)
+            data = df.to_dict("records")
+            result = self._standardize_sector_flow(data)
+            result.sort(key=lambda x: x.get("今日主力净流入-净额", 0), reverse=True)
+            return result
 
         raise Exception("所有板块资金流向接口都失败")
 
@@ -230,6 +318,7 @@ class AKShareProvider(DataProvider):
                         total_net = northbound[net_col].sum()
                         value_yi = float(total_net) if pd.notna(total_net) else 0
 
+                        # 检查数据是否有效（非零且非NaN）
                         if value_yi != 0:
                             sh_net, sz_net = 0.0, 0.0
                             for _, row in northbound.iterrows():
@@ -247,7 +336,10 @@ class AKShareProvider(DataProvider):
                                 "szConnect": sz_net,
                                 "source": "hsgt_summary",
                                 "unit": "亿元",
+                                "stale": False,
                             }
+                        else:
+                            print("[AKShare] 北向资金汇总接口返回净买额为0或null，数据不可用")
         except Exception as e:
             print(f"[AKShare] 北向资金汇总接口失败: {e}")
 
@@ -269,12 +361,12 @@ class AKShareProvider(DataProvider):
                     "szConnect": sz_net,
                     "source": "hsgt_hist",
                     "unit": "亿元",
-                    "stale": True,
+                    "stale": True,  # 历史数据标记为过期
                 }
         except Exception as e:
             print(f"[AKShare] 北向资金历史接口也失败: {e}")
 
-        raise Exception("所有北向资金接口都失败")
+        raise Exception("所有北向资金接口都失败（北向数据可能未披露）")
 
     async def get_northbound_flow_history(self, days: int = 30) -> List[Dict]:
         """获取北向资金历史数据"""

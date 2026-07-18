@@ -10,6 +10,20 @@ const CACHE_TTL = 30 // 秒
 // 主要指数配置（Yahoo Finance 格式）
 const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
 
+// 验证指数数据是否为真实数据（排除测试假数据）
+function isValidIndexData(indices: any[]): boolean {
+  if (!indices || indices.length === 0) return false
+  const prices = indices.map(i => i.price).filter(p => p > 0)
+  if (prices.length === 0) return false
+  // 检测假数据：所有价格都是整百（3000, 10000, 2000, 1000, 4000）
+  const allRoundHundred = prices.every(p => p % 100 === 0)
+  if (allRoundHundred) {
+    console.warn('检测到疑似假数据（价格均为整百），跳过此数据源')
+    return false
+  }
+  return true
+}
+
 // 确保结果包含所有 INDEX_CODES 中的指数，缺失的从上一次缓存中补全
 function ensureCompleteIndices(result: any): any {
   if (!result?.data?.indices) return result
@@ -48,13 +62,12 @@ export async function GET() {
   try {
     // 优先：Python 数据服务（多源聚合）
     const response = await fetch(`${DATA_SERVICE_URL}/api/market/overview`, {
-      next: { revalidate: 30 },
       signal: AbortSignal.timeout(20000),
     })
 
     if (response.ok) {
       const data = await response.json()
-      if (data.success && data.data?.indices?.length > 0) {
+      if (data.success && data.data?.indices?.length > 0 && isValidIndexData(data.data.indices)) {
         const result = ensureCompleteIndices({
           ...data,
           source: data.data?.source || 'akshare'
@@ -69,10 +82,15 @@ export async function GET() {
     console.warn('Python数据服务不可用，尝试Yahoo Finance降级:', error)
   }
 
-  // 降级：Yahoo Finance
+  // 降级：Yahoo Finance（整体15秒超时保护）
   try {
-    const yahooData = await fetchIndicesFromYahoo(INDEX_CODES)
-    if (yahooData.length > 0) {
+    const yahooData = await Promise.race([
+      fetchIndicesFromYahoo(INDEX_CODES),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Yahoo Finance timeout')), 15000)
+      ),
+    ])
+    if (yahooData.length > 0 && isValidIndexData(yahooData)) {
       const result = ensureCompleteIndices({
         success: true,
         data: {
@@ -100,7 +118,7 @@ export async function GET() {
   // 降级：本地文件缓存（跨进程重启的持久数据）
   try {
     const cachedOverview = getCachedMarketOverview()
-    if (cachedOverview) {
+    if (cachedOverview && isValidIndexData(cachedOverview?.data?.indices)) {
       console.warn('所有实时数据源不可用，使用本地缓存数据')
       apiCache.set(CACHE_KEY, cachedOverview, CACHE_TTL)
       return NextResponse.json({

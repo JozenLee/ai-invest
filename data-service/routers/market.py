@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
 
 from services.data_service import data_service
+from utils.trading_hours import get_market_status
 
 router = APIRouter()
 
@@ -19,12 +20,14 @@ async def get_market_overview():
     """
     try:
         df = await data_service.get_index_spot()
+        market_status = get_market_status()
 
         if df.empty:
             return {
                 "success": False,
                 "error": "无法获取指数数据，所有数据源均不可用",
                 "data": None,
+                "meta": market_status,
             }
 
         index_map = {
@@ -58,7 +61,12 @@ async def get_market_overview():
                 "success": False,
                 "error": "无法解析指数数据",
                 "data": None,
+                "meta": market_status,
             }
+
+        # 判断数据新鲜度
+        data_date = market_status["lastTradingDate"]
+        is_stale = not market_status["isRealtime"]
 
         return {
             "success": True,
@@ -66,6 +74,11 @@ async def get_market_overview():
                 "indices": indices,
                 "source": "unified",
                 "timestamp": datetime.now().isoformat(),
+                "meta": {
+                    **market_status,
+                    "dataDate": data_date,
+                    "staleReason": "market_closed" if is_stale else None,
+                },
             },
         }
     except Exception as e:

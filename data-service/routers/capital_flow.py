@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import List
 
 from services.data_service import data_service
+from utils.trading_hours import get_market_status
 
 router = APIRouter()
 
@@ -83,6 +84,8 @@ async def get_market_capital_flow():
                     "sentiment": sentiment,
                     "turnoverRate": 0,
                 },
+                "dataQuality": data.get("dataQuality", "unknown"),
+                "source": data.get("source", "unknown"),
                 "timestamp": datetime.now().isoformat(),
             },
         }
@@ -107,7 +110,7 @@ async def get_sector_capital_flow(indicator: str = Query(default="今日", patte
         pct_key = f"{indicator}涨跌幅"
 
         sectors = []
-        for item in data[:20]:
+        for item in data:
             net = float(item.get(net_key, item.get("今日主力净流入-净额", 0)))
             change_pct = float(item.get(pct_key, item.get("今日涨跌幅", 0)))
             sectors.append({
@@ -118,7 +121,10 @@ async def get_sector_capital_flow(indicator: str = Query(default="今日", patte
                 "indicator": indicator,
             })
 
-        return {"success": True, "data": sectors}
+        # 按净流入排序，正序（最大流入在前）
+        sectors.sort(key=lambda x: x["mainForceNet"], reverse=True)
+
+        return {"success": True, "data": sectors[:20]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -190,6 +196,9 @@ async def get_macro_capital_flow():
             return_exceptions=True,
         )
 
+        # 获取市场状态
+        market_status = get_market_status()
+
         # 处理异常结果
         if isinstance(market_data, Exception):
             market_data = {}
@@ -206,6 +215,7 @@ async def get_macro_capital_flow():
                 "success": False,
                 "error": "无法获取资金流向数据，所有数据源不可用",
                 "data": None,
+                "meta": market_status,
             }
 
         if has_market:
@@ -228,38 +238,42 @@ async def get_macro_capital_flow():
         outflow_sectors = []
 
         if has_sectors:
+            all_sectors = []
             for item in sector_data:
                 net = float(item.get("今日主力净流入-净额", 0))
                 sector_name = item.get("名称", "")
                 change_pct = float(item.get("今日涨跌幅", 0))
 
-                entry = {
+                all_sectors.append({
                     "sector": sector_name,
                     "netFlow": round(net / 1e8, 2),
                     "changePct": round(change_pct, 2),
-                }
+                })
 
-                if net > 0:
-                    inflow_sectors.append(entry)
-                else:
-                    outflow_sectors.append(entry)
+            # 按净流入降序排序，取前10作为流入榜（即使有负值）
+            all_sectors.sort(key=lambda x: x["netFlow"], reverse=True)
+            inflow_sectors = all_sectors[:10]
 
-            inflow_sectors.sort(key=lambda x: x["netFlow"], reverse=True)
-            outflow_sectors.sort(key=lambda x: x["netFlow"])
-            inflow_sectors = inflow_sectors[:10]
-            outflow_sectors = outflow_sectors[:10]
+            # 按净流入升序排序，取前10作为流出榜（即使有正值）
+            all_sectors.sort(key=lambda x: x["netFlow"])
+            outflow_sectors = all_sectors[:10]
 
         has_northbound = bool(northbound_data and "value" in northbound_data)
         northbound_net = round(float(northbound_data.get("value", 0)), 2) if has_northbound else 0
         sh_connect = round(float(northbound_data.get("shConnect", 0)), 2) if has_northbound else 0
         sz_connect = round(float(northbound_data.get("szConnect", 0)), 2) if has_northbound else 0
-        northbound_stale = northbound_data.get("stale", False) if has_northbound else False
+        northbound_stale = northbound_data.get("stale", False) if has_northbound else True
         northbound_date = str(northbound_data.get("date", "")) if has_northbound else ""
+        northbound_source = northbound_data.get("source", "unavailable") if has_northbound else "unavailable"
 
         sentiment = _calculate_sentiment(main_net / 1e8, retail_net / 1e8, northbound_net)
 
         today = datetime.now().strftime("%Y-%m-%d")
         is_cached = data_date != today
+
+        # 数据质量：区分实时数据和降级估算
+        data_quality = market_data.get("dataQuality", "unknown") if has_market else "unavailable"
+        market_source = market_data.get("source", "unknown") if has_market else "unavailable"
 
         return {
             "success": True,
@@ -279,12 +293,19 @@ async def get_macro_capital_flow():
                     "szConnect": sz_connect,
                     "stale": northbound_stale,
                     "dataDate": northbound_date,
+                    "source": northbound_source,
                 },
                 "topInflowSectors": inflow_sectors,
                 "topOutflowSectors": outflow_sectors,
                 "source": "cached" if is_cached else "realtime",
+                "dataQuality": data_quality,
+                "marketSource": market_source,
                 "dataDate": data_date,
                 "timestamp": datetime.now().isoformat(),
+                "meta": {
+                    **market_status,
+                    "staleReason": "market_closed" if not market_status["isRealtime"] else None,
+                },
             },
         }
     except Exception as e:

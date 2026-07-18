@@ -14,7 +14,6 @@ export async function GET() {
 
   try {
     const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/macro`, {
-      next: { revalidate: 30 },
       signal: AbortSignal.timeout(20000),
     })
 
@@ -25,6 +24,8 @@ export async function GET() {
           success: true,
           data: result.data,
           source: result.data?.source || 'akshare',
+          dataQuality: result.data?.dataQuality || 'unknown',
+          meta: result.data?.meta || null,
         }
         apiCache.set(CACHE_KEY, data, CACHE_TTL)
         return NextResponse.json(data)
@@ -34,6 +35,7 @@ export async function GET() {
         error: result.error || '无法获取资金流向数据',
         data: null,
         source: 'unavailable',
+        meta: result.meta || null,
       })
     }
 
@@ -46,32 +48,11 @@ export async function GET() {
   } catch (error) {
     console.error('Python数据服务不可用:', error)
 
-    // 降级：返回符合前端期望结构的模拟数据
+    // 降级：返回明确的错误状态（不返回假数据）
     return NextResponse.json({
-      success: true,
-      data: {
-        date: new Date().toISOString().split('T')[0],
-        market: {
-          institutionalNet: 0,
-          institutionalPct: 0,
-          retailNet: 0,
-          retailPct: 0,
-          totalNet: 0,
-          sentiment: 50,
-        },
-        northbound: {
-          net: 0,
-          shConnect: 0,
-          szConnect: 0,
-          stale: true,
-          dataDate: '',
-        },
-        topInflowSectors: [],
-        topOutflowSectors: [],
-        source: 'unavailable',
-        dataDate: new Date().toISOString().split('T')[0],
-        timestamp: new Date().toISOString(),
-      },
+      success: false,
+      error: '数据服务不可用，请确认 data-service 已启动',
+      data: null,
       source: 'unavailable',
     })
   }

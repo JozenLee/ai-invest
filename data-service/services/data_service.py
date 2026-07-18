@@ -48,6 +48,10 @@ class DataService:
         from providers.xueqiu_provider import XueqiuProvider
         self.registry.register(XueqiuProvider())
 
+        # 注册新浪财经（备用数据源）
+        from providers.sina_provider import SinaProvider
+        self.registry.register(SinaProvider())
+
         self._initialized = True
         print(f"[DataService] 初始化完成，可用数据源: {self.registry.list_providers()}")
 
