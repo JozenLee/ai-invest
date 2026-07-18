@@ -33,10 +33,6 @@ export default function MarketOverviewPage() {
   const color = (v: number) => (v >= 0 ? 'text-red-500' : 'text-green-500')
   const sign = (v: number) => (v >= 0 ? '+' : '')
 
-  // 从 indices 计算涨跌统计（用于辅助指标）
-  const upCount = indices.filter((i) => i.changePct > 0).length
-  const total = indices.length
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -155,7 +151,7 @@ export default function MarketOverviewPage() {
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              {upCount}/{total} 个指数上涨
+              基于资金流向综合计算
             </p>
             <div className="mt-3 h-2 w-full rounded-full bg-muted overflow-hidden">
               <div
