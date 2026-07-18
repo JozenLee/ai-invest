@@ -1,6 +1,5 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -12,119 +11,31 @@ import {
   ArrowLeftRight,
   AlertCircle,
   Gauge,
+  Clock,
 } from 'lucide-react'
-
-interface IndexData {
-  code: string
-  name: string
-  price: number
-  change: number
-  changePct: number
-  volume?: number
-  amount?: number
-}
-
-interface CapitalFlowData {
-  market: {
-    institutionalNet: number
-    institutionalPct: number
-    retailNet: number
-    retailPct: number
-    totalNet: number
-  }
-  topInflowSectors: { sector: string; netFlow: number; changePct: number }[]
-  topOutflowSectors: { sector: string; netFlow: number; changePct: number }[]
-  source?: string
-  dataDate?: string
-}
-
-interface NorthboundData {
-  date: string
-  northboundNet: number
-  shConnect: number
-  szConnect: number
-}
+import { useMarketContext } from '@/contexts/MarketContext'
 
 export default function MarketOverviewPage() {
-  const [indices, setIndices] = useState<IndexData[]>([])
-  const [capitalFlow, setCapitalFlow] = useState<CapitalFlowData | null>(null)
-  const [northbound, setNorthbound] = useState<NorthboundData | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [source, setSource] = useState<string>('loading')
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
-
-  const fetchData = useCallback(async () => {
-    setIsLoading(true)
-    setError(null)
-
-    try {
-      const [overviewRes, capitalRes, nbRes] = await Promise.allSettled([
-        fetch('/api/market/overview'),
-        fetch('/api/market/capital-flow'),
-        fetch('/api/macro/capital-flow'),
-      ])
-
-      // Index data
-      if (overviewRes.status === 'fulfilled' && overviewRes.value.ok) {
-        const data = await overviewRes.value.json()
-        if (data.success && data.data?.indices) {
-          setIndices(data.data.indices)
-          setSource(data.source || data.data?.source || 'unknown')
-        }
-      }
-
-      // Capital flow
-      if (capitalRes.status === 'fulfilled' && capitalRes.value.ok) {
-        const data = await capitalRes.value.json()
-        if (data.success && data.data) {
-          setCapitalFlow(data.data)
-          if (data.data.source) setSource(data.data.source)
-        }
-      }
-
-      // Northbound
-      if (nbRes.status === 'fulfilled' && nbRes.value.ok) {
-        const data = await nbRes.value.json()
-        if (data.success && data.data) {
-          const nbNet = data.data.institutional?.northboundNet ?? data.data.northbound?.net ?? 0
-          setNorthbound({
-            date: data.data.date || new Date().toISOString().split('T')[0],
-            northboundNet: typeof nbNet === 'number' && Math.abs(nbNet) > 1e6 ? nbNet / 1e8 : nbNet,
-            shConnect: 0,
-            szConnect: 0,
-          })
-        }
-      }
-
-      setLastUpdate(new Date())
-    } catch (err) {
-      console.error('Fetch market overview failed:', err)
-      setError('Failed to load market data')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchData()
-    // 每1分钟刷新一次
-    const interval = setInterval(fetchData, 60 * 1000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  const {
+    indices,
+    capitalFlow,
+    northbound,
+    sentiment,
+    marketMeta,
+    isLoading,
+    error,
+    lastUpdate,
+    refetch,
+    format,
+  } = useMarketContext()
 
   const fmt = (n: number, d = 2) => n.toFixed(d)
   const color = (v: number) => (v >= 0 ? 'text-red-500' : 'text-green-500')
   const sign = (v: number) => (v >= 0 ? '+' : '')
 
-  // Market sentiment from index breadth
+  // 从 indices 计算涨跌统计（用于辅助指标）
   const upCount = indices.filter((i) => i.changePct > 0).length
   const total = indices.length
-  const score = total > 0 ? Math.round((upCount / total) * 100) : 50
-  const label =
-    score >= 70 ? 'Bullish' : score >= 40 ? 'Neutral' : 'Bearish'
-  const badgeVariant =
-    score >= 70 ? 'default' : score >= 40 ? 'secondary' : 'destructive'
 
   return (
     <div className="space-y-6">
@@ -137,24 +48,17 @@ export default function MarketOverviewPage() {
           </p>
           <div className="flex items-center gap-2 mt-1">
             <Badge variant="outline" className="text-xs">
-              {source === 'loading'
-                ? '加载中...'
-                : source === 'akshare_realtime'
-                  ? '📊 AKShare实时数据'
-                  : source === 'akshare_cached'
-                    ? '📋 AKShare缓存数据'
-                    : source === 'unavailable'
-                      ? '⚠️ 数据暂不可用'
-                      : source}
+              {format.sourceDisplay.icon} {format.sourceDisplay.text}
             </Badge>
-            {lastUpdate && (
-              <span className="text-xs text-muted-foreground">
-                {lastUpdate.toLocaleTimeString('zh-CN')} 更新
+            {format.timeDisplay && (
+              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                {format.timeDisplay} 更新
               </span>
             )}
           </div>
         </div>
-        <Button variant="outline" size="sm" onClick={fetchData} disabled={isLoading}>
+        <Button variant="outline" size="sm" onClick={refetch} disabled={isLoading}>
           <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
           刷新数据
         </Button>
@@ -243,9 +147,11 @@ export default function MarketOverviewPage() {
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-3">
-              <div className="text-3xl font-bold">{score}%</div>
-              <Badge variant={badgeVariant as 'default' | 'secondary' | 'destructive'}>
-                {score >= 70 ? '偏多' : score >= 40 ? '中性' : '偏空'}
+              <div className={`text-3xl font-bold ${format.sentimentDisplay.color}`}>
+                {format.sentimentDisplay.score}%
+              </div>
+              <Badge variant={format.sentimentDisplay.label === '偏多' ? 'default' : format.sentimentDisplay.label === '偏空' ? 'destructive' : 'secondary'}>
+                {format.sentimentDisplay.label}
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
@@ -254,13 +160,13 @@ export default function MarketOverviewPage() {
             <div className="mt-3 h-2 w-full rounded-full bg-muted overflow-hidden">
               <div
                 className={`h-full rounded-full transition-all ${
-                  score >= 70
+                  sentiment >= 70
                     ? 'bg-red-500'
-                    : score >= 40
+                    : sentiment >= 40
                       ? 'bg-yellow-500'
                       : 'bg-green-500'
                 }`}
-                style={{ width: `${score}%` }}
+                style={{ width: `${sentiment}%` }}
               />
             </div>
           </CardContent>
@@ -275,12 +181,18 @@ export default function MarketOverviewPage() {
           <CardContent>
             {northbound ? (
               <>
-                <div className={`text-3xl font-bold ${color(northbound.northboundNet)}`}>
-                  {sign(northbound.northboundNet)}{fmt(Math.abs(northbound.northboundNet))}亿
+                <div className={`text-3xl font-bold ${color(northbound.net)}`}>
+                  {sign(northbound.net)}{fmt(Math.abs(northbound.net))}亿
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">净流入（人民币）</p>
-                {northbound.date && (
-                  <p className="text-xs text-muted-foreground mt-2">日期: {northbound.date}</p>
+                {northbound.dataDate && (
+                  <p className="text-xs text-muted-foreground mt-2">日期: {northbound.dataDate}</p>
+                )}
+                {northbound.stale && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                    <Clock className="h-3 w-3" />
+                    历史数据
+                  </p>
                 )}
               </>
             ) : (
