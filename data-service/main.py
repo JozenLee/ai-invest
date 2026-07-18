@@ -10,20 +10,21 @@ from routers import market, capital_flow, etf, macro_flow, news
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时预热常用数据缓存
-    print("数据服务启动中，预热缓存...")
+    # 启动时初始化统一数据服务并预热缓存
+    print("数据服务启动中...")
     import asyncio
-    from services.akshare_client import client as ak_client
+    from services.data_service import data_service
+
+    # 初始化数据源注册
+    data_service.initialize()
 
     async def warmup():
         """后台预热：提前加载常用数据到内存缓存"""
         try:
-            # 并行预热指数行情和资金流向
-            loop = asyncio.get_event_loop()
             await asyncio.gather(
-                loop.run_in_executor(None, ak_client.get_index_spot),
-                loop.run_in_executor(None, ak_client.get_market_capital_flow),
-                loop.run_in_executor(None, ak_client.get_sector_capital_flow, "今日"),
+                data_service.get_index_spot(),
+                data_service.get_market_capital_flow(),
+                data_service.get_sector_capital_flow("今日"),
                 return_exceptions=True,
             )
             print("缓存预热完成")
