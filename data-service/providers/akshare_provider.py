@@ -24,8 +24,8 @@ class AKShareProvider(DataProvider):
     # ==================== 工具方法 ====================
 
     @staticmethod
-    async def _call(func, *args, retries: int = 2, delay: float = 2.0, **kwargs) -> Any:
-        """在线程池中调用同步的 AKShare 函数，带重试"""
+    async def _call(func, *args, retries: int = 2, delay: float = 2.0, timeout: float = 30.0, **kwargs) -> Any:
+        """在线程池中调用同步的 AKShare 函数，带重试和超时"""
         def _sync_call():
             for attempt in range(retries):
                 try:
@@ -35,7 +35,10 @@ class AKShareProvider(DataProvider):
                         time.sleep(delay * (attempt + 1))
                     else:
                         raise e
-        return await asyncio.to_thread(_sync_call)
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_sync_call), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise Exception(f"AKShare API 调用超时 ({timeout}秒)")
 
     @staticmethod
     def _standardize_sector_flow(data: List[Dict], name_field: str = "行业",

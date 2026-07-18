@@ -242,11 +242,19 @@ class ProviderRegistry:
         sources = config.sources
         ttl = cache_ttl or config.cache_ttl
 
-        # 先检查缓存
+        # 先检查内存缓存
         if cache_key:
             cached = self.cache.get_memory(cache_key)
             if cached is not None:
                 return cached
+
+            # 检查文件缓存（在尝试网络请求之前）
+            if config.fallback_to_file:
+                cached = self.cache.get_file(cache_key)
+                if cached is not None:
+                    print(f"[Registry] 使用文件缓存: {cache_key}")
+                    self.cache.set_memory(cache_key, cached, ttl_seconds=ttl)
+                    return cached
 
         last_error = None
 

@@ -187,10 +187,10 @@ async def get_northbound_history(days: int = Query(default=30, ge=1, le=90)):
 async def get_macro_capital_flow():
     """获取宏观资金流向概览（含北向资金和市场情绪）"""
     try:
-        # 并行获取数据
+        # 并行获取数据（北向资金单独设置超时）
         marketDataTask = data_service.get_market_capital_flow()
         sectorDataTask = data_service.get_sector_capital_flow("今日")
-        northboundTask = data_service.get_northbound_flow()
+        northboundTask = asyncio.wait_for(data_service.get_northbound_flow(), timeout=25)
         market_data, sector_data, northbound_data = await asyncio.gather(
             marketDataTask, sectorDataTask, northboundTask,
             return_exceptions=True,
