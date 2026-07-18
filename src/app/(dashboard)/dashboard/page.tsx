@@ -20,7 +20,7 @@ import {
   Info,
   Clock,
 } from 'lucide-react'
-import { useMarketData } from '@/hooks/useMarketData'
+import { useMarketContext } from '@/contexts/MarketContext'
 
 // 数据说明配置
 const dataTooltips = {
@@ -88,7 +88,7 @@ function InfoButton({ tooltip }: { tooltip: keyof typeof dataTooltips }) {
 }
 
 export default function DashboardPage() {
-  const { indices, capitalFlow, isLoading, error, source, lastUpdate, refetch } = useMarketData()
+  const { indices, capitalFlow, isLoading, error, source, lastUpdate, marketMeta, refetch, format } = useMarketContext()
 
   const formatNumber = (num: number, decimals = 2) => {
     return num.toFixed(decimals)
@@ -113,18 +113,28 @@ export default function DashboardPage() {
               市场概览与资金流向分析
             </p>
             <div className="flex items-center gap-2 mt-2">
+              {/* 市场状态 */}
+              {format.statusBadge.label && (
+                <Badge variant={format.statusBadge.variant} className="text-xs">
+                  {format.statusBadge.icon} {format.statusBadge.label}
+                  {!marketMeta?.isRealtime && ' · 收盘数据'}
+                </Badge>
+              )}
+              {/* 数据来源 */}
               <Badge variant="outline" className="text-xs">
-                {source === 'loading' ? '加载中...' :
-                 source === 'akshare_realtime' ? '📊 AKShare实时数据' :
-                 source === 'akshare_cached' ? '📋 AKShare缓存数据(上一交易日)' :
-                 source === 'akshare' ? '📊 AKShare数据' :
-                 source === 'unavailable' ? '⚠️ 数据暂不可用' :
-                 source === 'yahoo' ? '🌐 Yahoo Finance' : '⏳ 等待数据'}
+                {format.sourceDisplay.icon} {format.sourceDisplay.text}
               </Badge>
-              {lastUpdate && (
+              {/* 最近交易日 */}
+              {marketMeta?.lastTradingDate && (
+                <span className="text-xs text-muted-foreground">
+                  数据日期: {marketMeta.lastTradingDate}
+                </span>
+              )}
+              {/* 更新时间 */}
+              {format.timeDisplay && (
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
                   <Clock className="h-3 w-3" />
-                  {lastUpdate.toLocaleString('zh-CN')} 更新
+                  {format.timeDisplay} 更新
                 </span>
               )}
             </div>
@@ -159,6 +169,12 @@ export default function DashboardPage() {
           <div className="flex items-center gap-2 mb-4">
             <h2 className="text-lg font-semibold">📊 市场指数</h2>
             <InfoButton tooltip="indexPrice" />
+            {marketMeta && !marketMeta.isRealtime && (
+              <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                <Clock className="h-3 w-3" />
+                非交易时间，显示{marketMeta.lastTradingDate}收盘数据
+              </span>
+            )}
           </div>
           {indices.length > 0 ? (
             <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
@@ -178,6 +194,12 @@ export default function DashboardPage() {
                       {getChangeSymbol(index.changePct)} {formatNumber(Math.abs(index.changePct))}%
                       ({formatNumber(Math.abs(index.change))})
                     </p>
+                    {/* 收盘数据标注 */}
+                    {marketMeta && !marketMeta.isRealtime && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                        收盘价
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
               ))}
@@ -198,7 +220,15 @@ export default function DashboardPage() {
         {/* 第二区域：资金流向 */}
         {capitalFlow && (
           <section>
-            <h2 className="text-lg font-semibold mb-4">💰 资金流向</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold">💰 资金流向</h2>
+              {marketMeta && !marketMeta.isRealtime && (
+                <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  非交易时间，数据可能为上一交易日
+                </span>
+              )}
+            </div>
             <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
               {/* 机构资金 */}
               <Card className="hover:shadow-md transition-shadow">
@@ -292,17 +322,11 @@ export default function DashboardPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className={`text-2xl font-bold ${
-                    (capitalFlow.market.sentiment || 50) >= 60 ? 'text-red-500' :
-                    (capitalFlow.market.sentiment || 50) <= 40 ? 'text-green-500' : 'text-gray-500'
-                  }`}>
-                    {capitalFlow.market.sentiment || 50}
+                  <div className={`text-2xl font-bold ${format.sentimentDisplay.color}`}>
+                    {format.sentimentDisplay.score}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {(capitalFlow.market.sentiment || 50) >= 75 ? '🟢 高度乐观' :
-                     (capitalFlow.market.sentiment || 50) >= 60 ? '🟡 偏乐观' :
-                     (capitalFlow.market.sentiment || 50) >= 40 ? '⚪ 中性' :
-                     (capitalFlow.market.sentiment || 50) >= 25 ? '🟡 偏悲观' : '🔴 高度悲观'}
+                    {format.sentimentDisplay.label}
                   </p>
                 </CardContent>
               </Card>
@@ -313,7 +337,15 @@ export default function DashboardPage() {
         {/* 第三区域：板块资金流向 */}
         {capitalFlow && (capitalFlow.topInflowSectors.length > 0 || capitalFlow.topOutflowSectors.length > 0) && (
           <section>
-            <h2 className="text-lg font-semibold mb-4">📈 板块资金流向</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="text-lg font-semibold">📈 板块资金流向</h2>
+              {marketMeta && !marketMeta.isRealtime && (
+                <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <Clock className="h-3 w-3" />
+                  收盘数据
+                </span>
+              )}
+            </div>
             <div className="grid gap-4 lg:grid-cols-2">
               {/* Top10 资金流入板块 */}
               <Card className="hover:shadow-md transition-shadow">
@@ -329,7 +361,7 @@ export default function DashboardPage() {
                     <div className="flex items-center justify-between text-xs text-muted-foreground border-b pb-2">
                       <div className="flex items-center gap-3">
                         <span className="w-6 text-center">排名</span>
-                        <span className="w-20">板块</span>
+                        <span className="w-28">板块</span>
                       </div>
                       <div className="flex items-center gap-4">
                         <span className="w-20 text-right">净流入(亿)</span>
@@ -342,11 +374,11 @@ export default function DashboardPage() {
                           <span className={`text-sm font-medium w-6 text-center ${index < 3 ? 'text-red-500 font-bold' : 'text-muted-foreground'}`}>
                             {index + 1}
                           </span>
-                          <span className="font-medium w-20">{sector.sector}</span>
+                          <span className="font-medium w-28 whitespace-nowrap">{sector.sector}</span>
                         </div>
                         <div className="flex items-center gap-4">
-                          <span className="text-sm font-medium w-20 text-right text-red-500">
-                            +{formatNumber(sector.netFlow)}
+                          <span className={`text-sm font-medium w-20 text-right ${getChangeColor(sector.netFlow)}`}>
+                            {sector.netFlow >= 0 ? '+' : ''}{formatNumber(sector.netFlow)}
                           </span>
                           <span className={`text-sm w-16 text-right ${getChangeColor(sector.changePct)}`}>
                             {getChangeSymbol(sector.changePct)}{formatNumber(Math.abs(sector.changePct))}%
@@ -372,7 +404,7 @@ export default function DashboardPage() {
                     <div className="flex items-center justify-between text-xs text-muted-foreground border-b pb-2">
                       <div className="flex items-center gap-3">
                         <span className="w-6 text-center">排名</span>
-                        <span className="w-20">板块</span>
+                        <span className="w-28">板块</span>
                       </div>
                       <div className="flex items-center gap-4">
                         <span className="w-20 text-right">净流出(亿)</span>
@@ -385,11 +417,11 @@ export default function DashboardPage() {
                           <span className={`text-sm font-medium w-6 text-center ${index < 3 ? 'text-green-500 font-bold' : 'text-muted-foreground'}`}>
                             {index + 1}
                           </span>
-                          <span className="font-medium w-20">{sector.sector}</span>
+                          <span className="font-medium w-28 whitespace-nowrap">{sector.sector}</span>
                         </div>
                         <div className="flex items-center gap-4">
-                          <span className="text-sm font-medium w-20 text-right text-green-500">
-                            {formatNumber(sector.netFlow)}
+                          <span className={`text-sm font-medium w-20 text-right ${getChangeColor(sector.netFlow)}`}>
+                            {sector.netFlow >= 0 ? '+' : ''}{formatNumber(sector.netFlow)}
                           </span>
                           <span className={`text-sm w-16 text-right ${getChangeColor(sector.changePct)}`}>
                             {getChangeSymbol(sector.changePct)}{formatNumber(Math.abs(sector.changePct))}%
