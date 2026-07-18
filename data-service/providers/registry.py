@@ -1,44 +1,112 @@
 # 数据源注册表 + 降级调度
 # 管理所有 provider 实例，按类别配置的优先级自动降级
+# 支持通过 CategoryConfig 自定义每个数据类别的数据源优先级和缓存策略
 
 import asyncio
 import json
 import os
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
 from providers.base import DataProvider
 
 # 缓存文件目录
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".cache")
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# 每个数据类别的数据源优先级配置
-# 修改此配置即可调整某类数据的首选数据源
-CATEGORY_SOURCES: Dict[str, List[str]] = {
+
+@dataclass
+class CategoryConfig:
+    """数据类别配置
+
+    每个数据类别（如 index_spot, northbound_flow 等）可以独立配置：
+    - sources: 数据源优先级列表，按顺序尝试
+    - cache_ttl: 缓存TTL（秒）
+    - fallback_to_file: 所有数据源失败时是否降级到文件缓存
+    """
+    sources: List[str]
+    cache_ttl: int = 600
+    fallback_to_file: bool = True
+
+
+# 默认配置：每个数据类别的数据源优先级和缓存策略
+DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     # 指数
-    "index_spot":           ["akshare", "tushare", "xueqiu"],
-    "index_daily":          ["akshare", "tushare"],
-    "index_realtime":       ["akshare", "tushare", "xueqiu"],
+    "index_spot": CategoryConfig(
+        sources=["akshare", "tushare", "xueqiu"],
+        cache_ttl=30,
+    ),
+    "index_daily": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=300,
+    ),
+    "index_realtime": CategoryConfig(
+        sources=["akshare", "tushare", "xueqiu"],
+        cache_ttl=30,
+    ),
     # 个股
-    "stock_spot":           ["akshare", "tushare", "xueqiu"],
-    "stock_daily":          ["akshare", "tushare"],
+    "stock_spot": CategoryConfig(
+        sources=["akshare", "tushare", "xueqiu"],
+        cache_ttl=30,
+    ),
+    "stock_daily": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=300,
+    ),
     # ETF
-    "etf_realtime":         ["akshare", "xueqiu", "tushare"],
-    "etf_daily":            ["akshare", "tushare"],
-    "etf_nav":              ["akshare", "tushare"],
+    "etf_realtime": CategoryConfig(
+        sources=["akshare", "xueqiu", "tushare"],
+        cache_ttl=30,
+    ),
+    "etf_daily": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=300,
+    ),
+    "etf_nav": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=300,
+    ),
     # 资金流向
-    "market_capital_flow":  ["akshare", "tushare"],
-    "sector_capital_flow":  ["akshare", "tushare"],
-    "northbound_flow":      ["akshare", "tushare"],
-    "northbound_history":   ["akshare", "tushare"],
-    "stock_capital_flow":   ["akshare", "tushare"],
-    "margin_data":          ["akshare", "tushare"],
-    "market_fund_flow_rank": ["akshare", "tushare"],
-    "market_sentiment":     ["akshare", "tushare"],
+    "market_capital_flow": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "sector_capital_flow": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "northbound_flow": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "northbound_history": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "stock_capital_flow": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "margin_data": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "market_fund_flow_rank": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=600,
+    ),
+    "market_sentiment": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=60,
+    ),
     # 新闻（仅 AKShare 支持）
-    "news":                 ["akshare"],
+    "news": CategoryConfig(
+        sources=["akshare"],
+        cache_ttl=300,
+    ),
 }
 
 
@@ -117,11 +185,24 @@ class ProviderRegistry:
 
     管理所有 provider 实例，按 CATEGORY_SOURCES 配置的优先级自动降级。
     同时提供带缓存的 fetch 方法，路由层通过 DataService 调用。
+
+    支持自定义配置：
+        custom_config = {
+            "index_spot": CategoryConfig(
+                sources=["xueqiu", "akshare"],  # 优先使用雪球
+                cache_ttl=15,
+            ),
+        }
+        registry = ProviderRegistry(custom_config=custom_config)
     """
 
-    def __init__(self):
+    def __init__(self, custom_config: Optional[Dict[str, CategoryConfig]] = None):
         self._providers: Dict[str, DataProvider] = {}
         self.cache = CacheManager()
+        # 合并默认配置和自定义配置
+        self._config = {**DEFAULT_CATEGORY_CONFIG}
+        if custom_config:
+            self._config.update(custom_config)
 
     def register(self, provider: DataProvider):
         """注册数据源"""
@@ -137,29 +218,36 @@ class ProviderRegistry:
         return list(self._providers.keys())
 
     async def fetch(self, category: str, method: str, cache_key: Optional[str] = None,
-                    cache_ttl: int = 600, **kwargs) -> Any:
+                    cache_ttl: Optional[int] = None, **kwargs) -> Any:
         """按优先级尝试各数据源，自动降级
 
         Args:
-            category: 数据类别（对应 CATEGORY_SOURCES 的 key）
+            category: 数据类别（对应 _config 的 key）
             method: provider 上的方法名
             cache_key: 缓存 key（None 则不使用缓存）
-            cache_ttl: 内存缓存 TTL（秒）
+            cache_ttl: 内存缓存 TTL（秒），None 则使用 CategoryConfig 默认值
             **kwargs: 传递给 provider 方法的参数
 
         Returns:
             第一个成功返回的数据
 
         Raises:
+            ValueError: 未知的数据类别
             Exception: 所有数据源都失败时，抛出最后一个异常
         """
+        config = self._config.get(category)
+        if not config:
+            raise ValueError(f"未知的数据类别: {category}")
+
+        sources = config.sources
+        ttl = cache_ttl or config.cache_ttl
+
         # 先检查缓存
         if cache_key:
             cached = self.cache.get_memory(cache_key)
             if cached is not None:
                 return cached
 
-        sources = CATEGORY_SOURCES.get(category, [])
         last_error = None
 
         for source_name in sources:
@@ -176,7 +264,7 @@ class ProviderRegistry:
                     if cache_key:
                         serializable = self._to_serializable(result)
                         if serializable is not None:
-                            self.cache.set(cache_key, serializable, memory_ttl=cache_ttl)
+                            self.cache.set(cache_key, serializable, memory_ttl=ttl)
                     return result
                 else:
                     print(f"[Registry] {source_name}.{method} 返回空数据，尝试下一个源")
@@ -189,11 +277,11 @@ class ProviderRegistry:
                 continue
 
         # 所有源都失败，尝试文件缓存降级
-        if cache_key:
+        if cache_key and config.fallback_to_file:
             cached = self.cache.get_file(cache_key)
             if cached is not None:
                 print(f"[Registry] 所有数据源失败，使用文件缓存: {cache_key}")
-                self.cache.set_memory(cache_key, cached, ttl_seconds=cache_ttl)
+                self.cache.set_memory(cache_key, cached, ttl_seconds=ttl)
                 return cached
 
         raise last_error or Exception(f"无可用数据源: {category}")
