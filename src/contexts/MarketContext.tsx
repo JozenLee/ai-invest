@@ -81,7 +81,14 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
           // Extract northbound data (unified structure)
           if (capitalData.data.northbound) {
-            setNorthbound(capitalData.data.northbound)
+            const nb = capitalData.data.northbound
+            // Validate: must have net value and it must be a non-NaN number
+            if (nb && typeof nb.net === 'number' && !isNaN(nb.net)) {
+              setNorthbound(nb)
+            } else {
+              console.warn('[MarketContext] Invalid northbound data:', nb)
+              setNorthbound(null)
+            }
           }
 
           // Extract sentiment index

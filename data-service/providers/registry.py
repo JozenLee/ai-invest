@@ -79,7 +79,7 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
         cache_ttl=600,
     ),
     "northbound_flow": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["akshare", "sina", "tushare"],
         cache_ttl=600,
     ),
     "northbound_history": CategoryConfig(
