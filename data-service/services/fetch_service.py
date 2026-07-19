@@ -212,14 +212,75 @@ class FetchService:
         Returns:
             处理后的数据列表
         """
+        if not raw_data:
+            return []
+
+        try:
+            # 尝试使用增强的 AI 分析器
+            from services.content_analyzer import content_analyzer
+
+            # 准备批量分析的数据
+            news_batch = []
+            for item in raw_data:
+                news_batch.append({
+                    "title": item.get("title", ""),
+                    "content": item.get("content", "")
+                })
+
+            # 批量AI分析
+            logger.info(f"开始AI批量分析: count={len(news_batch)}")
+            analysis_results = await content_analyzer.analyze_news_batch(
+                news_batch,
+                batch_size=10
+            )
+
+            # 合并分析结果
+            processed_data = []
+            for i, item in enumerate(raw_data):
+                try:
+                    analysis = analysis_results[i] if i < len(analysis_results) else {}
+
+                    processed_item = {
+                        **item,
+                        "category": analysis.get("category", "market"),
+                        "categoryConfidence": analysis.get("categoryConfidence", 0.5),
+                        "sentiment": analysis.get("sentiment", 0.0),
+                        "sentimentLabel": analysis.get("sentimentLabel", "neutral"),
+                        "sentimentConfidence": analysis.get("sentimentConfidence", 0.5),
+                        "keywords": analysis.get("keywords", []),
+                        "entities": analysis.get("entities", []),
+                        "sectors": self._extract_sectors(item.get("title", "")),
+                        "domainIds": analysis.get("domains", []),
+                        "aiProcessed": True,
+                        "aiProcessedAt": datetime.now().isoformat(),
+                        "aiError": None
+                    }
+
+                    processed_data.append(processed_item)
+
+                except Exception as e:
+                    logger.error(f"合并分析结果失败: {e}")
+                    processed_data.append({
+                        **item,
+                        "aiProcessed": False,
+                        "aiError": str(e)
+                    })
+
+            logger.info(f"AI分析完成: processed={len(processed_data)}")
+            return processed_data
+
+        except Exception as e:
+            logger.error(f"AI批量分析失败，使用简单规则: {e}")
+            # 降级到简单规则处理
+            return self._simple_process(raw_data)
+
+    def _simple_process(self, raw_data: List[Dict]) -> List[Dict]:
+        """简单规则处理（AI不可用时的降级方案）"""
         processed_data = []
 
-        # TODO: 集成 content_analyzer.py 进行AI分析
-        # 目前使用简单的规则处理
         for item in raw_data:
             try:
                 title = item.get("title", "")
-                content = item.get("content", "")
 
                 # 简单分类
                 category = self._categorize_news(title)
@@ -235,8 +296,10 @@ class FetchService:
                     "category": category,
                     "sentiment": sentiment_score,
                     "sentimentLabel": sentiment_label,
-                    "sentimentConfidence": 0.6,  # 简单规则的置信度较低
+                    "sentimentConfidence": 0.5,  # 简单规则的置信度较低
                     "sectors": sectors,
+                    "keywords": [],
+                    "entities": [],
                     "aiProcessed": True,
                     "aiProcessedAt": datetime.now().isoformat(),
                     "aiError": None
@@ -245,7 +308,7 @@ class FetchService:
                 processed_data.append(processed_item)
 
             except Exception as e:
-                logger.error(f"AI处理单条数据失败: {e}")
+                logger.error(f"简单处理单条数据失败: {e}")
                 processed_data.append({
                     **item,
                     "aiProcessed": False,
