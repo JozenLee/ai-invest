@@ -190,7 +190,7 @@ async def get_macro_capital_flow():
         # 并行获取数据（北向资金单独设置超时）
         marketDataTask = data_service.get_market_capital_flow()
         sectorDataTask = data_service.get_sector_capital_flow("今日")
-        northboundTask = asyncio.wait_for(data_service.get_northbound_flow(), timeout=25)
+        northboundTask = asyncio.wait_for(data_service.get_northbound_flow(), timeout=10)
         market_data, sector_data, northbound_data = await asyncio.gather(
             marketDataTask, sectorDataTask, northboundTask,
             return_exceptions=True,

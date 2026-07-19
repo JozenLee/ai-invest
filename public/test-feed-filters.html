@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>咨询流筛选框测试</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+        pre {
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 3px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>咨询流页面筛选框测试</h1>
+
+    <div class="test-section">
+        <h2>1. 加载页面</h2>
+        <button onclick="loadPage()">加载事件资讯页面</button>
+        <div id="page-load-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>2. 测试情感筛选 API</h2>
+        <button onclick="testSentimentFilters()">测试情感筛选</button>
+        <div id="sentiment-test-result"></div>
+    </div>
+
+    <div class="test-section">
+        <h2>3. 测试排序 API</h2>
+        <button onclick="testSortFilters()">测试排序筛选</button>
+        <div id="sort-test-result"></div>
+    </div>
+
+    <script>
+        async function loadPage() {
+            const resultDiv = document.getElementById('page-load-result');
+            resultDiv.innerHTML = '<p class="info">正在加载...</p>';
+
+            try {
+                const response = await fetch('http://localhost:3000/events/feed');
+                const html = await response.text();
+
+                // 检查是否包含关键中文文本
+                const checks = [
+                    { text: '事件资讯', name: '页面标题' },
+                    { text: '全部情感', name: '情感筛选-全部' },
+                    { text: '利好', name: '情感筛选-利好' },
+                    { text: '中性', name: '情感筛选-中性' },
+                    { text: '利空', name: '情感筛选-利空' },
+                    { text: '最新发布', name: '排序-最新发布' },
+                    { text: '情感最强', name: '排序-情感最强' },
+                    { text: '影响力最高', name: '排序-影响力最高' },
+                ];
+
+                let result = '<h3>页面检查结果：</h3><ul>';
+                let allPassed = true;
+
+                checks.forEach(check => {
+                    const found = html.includes(check.text);
+                    if (found) {
+                        result += `<li class="success">✓ ${check.name}: "${check.text}"</li>`;
+                    } else {
+                        result += `<li class="error">✗ ${check.name}: 未找到 "${check.text}"</li>`;
+                        allPassed = false;
+                    }
+                });
+
+                // 检查是否包含不应该出现的英文
+                const badTexts = ['value="利好"', 'value="中性"', 'value="利空"', 'value="最新发布"'];
+                badTexts.forEach(text => {
+                    if (html.includes(text)) {
+                        result += `<li class="error">✗ 发现问题: ${text}</li>`;
+                        allPassed = false;
+                    }
+                });
+
+                result += '</ul>';
+
+                if (allPassed) {
+                    result += '<p class="success"><strong>✓ 所有检查通过！</strong></p>';
+                } else {
+                    result += '<p class="error"><strong>✗ 存在问题，需要修复</strong></p>';
+                }
+
+                resultDiv.innerHTML = result;
+            } catch (error) {
+                resultDiv.innerHTML = `<p class="error">✗ 错误: ${error.message}</p>`;
+            }
+        }
+
+        async function testSentimentFilters() {
+            const resultDiv = document.getElementById('sentiment-test-result');
+            resultDiv.innerHTML = '<p class="info">正在测试...</p>';
+
+            const tests = [
+                { sentiment: 'all', name: '全部情感' },
+                { sentiment: 'bullish', name: '利好' },
+                { sentiment: 'neutral', name: '中性' },
+                { sentiment: 'bearish', name: '利空' },
+            ];
+
+            let result = '<h3>API 测试结果：</h3><ul>';
+            let allPassed = true;
+
+            for (const test of tests) {
+                try {
+                    const url = test.sentiment === 'all'
+                        ? '/api/events/feed?limit=5'
+                        : `/api/events/feed?limit=5&sentiment=${test.sentiment}`;
+                    const response = await fetch(url);
+                    const data = await response.json();
+
+                    if (data.success) {
+                        result += `<li class="success">✓ ${test.name} (${test.sentiment}): OK</li>`;
+                    } else {
+                        result += `<li class="error">✗ ${test.name} (${test.sentiment}): ${data.error || 'Failed'}</li>`;
+                        allPassed = false;
+                    }
+                } catch (error) {
+                    result += `<li class="error">✗ ${test.name} (${test.sentiment}): ${error.message}</li>`;
+                    allPassed = false;
+                }
+            }
+
+            result += '</ul>';
+            if (allPassed) {
+                result += '<p class="success"><strong>✓ 所有API测试通过！</strong></p>';
+            }
+
+            resultDiv.innerHTML = result;
+        }
+
+        async function testSortFilters() {
+            const resultDiv = document.getElementById('sort-test-result');
+            resultDiv.innerHTML = '<p class="info">正在测试...</p>';
+
+            const tests = [
+                { sortBy: 'publishTime', name: '最新发布' },
+                { sortBy: 'sentiment', name: '情感最强' },
+                { sortBy: 'impact', name: '影响力最高' },
+            ];
+
+            let result = '<h3>API 测试结果：</h3><ul>';
+            let allPassed = true;
+
+            for (const test of tests) {
+                try {
+                    const response = await fetch(`/api/events/feed?limit=5&sortBy=${test.sortBy}`);
+                    const data = await response.json();
+
+                    if (data.success) {
+                        result += `<li class="success">✓ ${test.name} (${test.sortBy}): OK</li>`;
+                    } else {
+                        result += `<li class="error">✗ ${test.name} (${test.sortBy}): ${data.error || 'Failed'}</li>`;
+                        allPassed = false;
+                    }
+                } catch (error) {
+                    result += `<li class="error">✗ ${test.name} (${test.sortBy}): ${error.message}</li>`;
+                    allPassed = false;
+                }
+            }
+
+            result += '</ul>';
+            if (allPassed) {
+                result += '<p class="success"><strong>✓ 所有API测试通过！</strong></p>';
+            }
+
+            resultDiv.innerHTML = result;
+        }
+    </script>
+</body>
+</html>

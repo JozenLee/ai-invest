@@ -91,10 +91,70 @@ export interface NewsArticle {
   source: string
   url?: string
   publishTime: string
-  category: EventCategory
+  category: EventCategory | string
+  categoryId?: string
+  categoryName?: string
+  domainId?: string
+  domainName?: string
   sentiment?: number
   impact?: ImpactMagnitude
   entities?: string  // JSON
   sectors?: string   // JSON
   createdAt: string
+}
+
+export interface NewsCategory {
+  id: string
+  name: string
+  code: string
+  parentId: string | null
+  sortOrder: number
+  isActive: boolean
+  children?: NewsCategory[]
+}
+
+export interface Domain {
+  id: string
+  name: string
+  code: string
+  description?: string
+  keywords: string[]
+  graphNodes: string[]
+  isActive: boolean
+}
+
+export interface DataSource {
+  id: string
+  name: string
+  type: string
+  provider: string
+  config: Record<string, any>
+  updateFrequency: number
+  isActive: boolean
+  lastFetchAt?: string
+}
+
+export interface Influencer {
+  id: string
+  name: string
+  platform: 'weibo' | 'bilibili' | 'xiaohongshu' | 'zhihu'
+  accountId: string
+  profileUrl?: string
+  avatarUrl?: string
+  category?: string
+  tags: string[]
+  isActive: boolean
+  postCount?: number
+  latestPostTime?: string
+}
+
+export interface InfluencerPost {
+  id: string
+  influencerId: string
+  content: string
+  originalUrl?: string
+  publishTime: string
+  sentiment?: number
+  extractedTopics: string[]
+  relatedDomains: string[]
 }

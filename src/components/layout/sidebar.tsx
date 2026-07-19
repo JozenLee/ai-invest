@@ -35,8 +35,8 @@ const navigation = [
     icon: Newspaper,
     children: [
       { name: '资讯流', href: '/events/feed' },
-      { name: '事件分析', href: '/events/analysis' },
       { name: '领域趋势', href: '/events/trends' },
+      { name: '大V监控', href: '/events/influencers' },
       { name: '数据源', href: '/events/sources' },
     ],
   },
