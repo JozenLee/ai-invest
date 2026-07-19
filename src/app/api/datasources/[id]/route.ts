@@ -9,11 +9,12 @@ const prisma = new PrismaClient()
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const dataSource = await prisma.dataSource.findUnique({
-      where: { id: params.id },
+      where: { id },
       include: {
         _count: {
           select: {
@@ -90,14 +91,15 @@ export async function GET(
  */
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const body = await request.json()
 
     // 检查数据源是否存在
     const existing = await prisma.dataSource.findUnique({
-      where: { id: params.id }
+      where: { id: id }
     })
 
     if (!existing) {
@@ -122,7 +124,7 @@ export async function PUT(
 
     // 更新数据源
     const updated = await prisma.dataSource.update({
-      where: { id: params.id },
+      where: { id: id },
       data: updateData
     })
 
@@ -158,12 +160,13 @@ export async function PUT(
  */
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     // 检查数据源是否存在
     const existing = await prisma.dataSource.findUnique({
-      where: { id: params.id },
+      where: { id: id },
       include: {
         _count: {
           select: {
@@ -195,7 +198,7 @@ export async function DELETE(
 
     // 删除数据源（会级联删除关联的日志，但不会删除文章）
     await prisma.dataSource.delete({
-      where: { id: params.id }
+      where: { id: id }
     })
 
     return NextResponse.json({

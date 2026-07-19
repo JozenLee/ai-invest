@@ -7,13 +7,14 @@ import { prisma } from '@/lib/db/prisma';
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     // 获取大V信息
     const influencer = await prisma.influencer.findUnique({
       where: {
-        id: params.id,
+        id: id,
       },
     });
 
@@ -31,7 +32,7 @@ export async function POST(
     const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000';
     
     try {
-      const response = await fetch(`${DATA_SERVICE_URL}/api/influencers/${params.id}/fetch`, {
+      const response = await fetch(`${DATA_SERVICE_URL}/api/influencers/${id}/fetch`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

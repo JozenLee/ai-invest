@@ -3,11 +3,12 @@ import { prisma } from '@/lib/db/prisma';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const influencer = await prisma.influencer.findUnique({
-      where: { id: params.id },
+      where: { id: id },
       include: {
         _count: { select: { posts: true } },
       },
@@ -47,9 +48,10 @@ export async function GET(
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const body = await request.json();
     const { name, category, tags, isActive } = body;
 
@@ -60,7 +62,7 @@ export async function PUT(
     if (isActive !== undefined) updateData.isActive = isActive;
 
     const influencer = await prisma.influencer.update({
-      where: { id: params.id },
+      where: { id: id },
       data: updateData,
     });
 
@@ -82,11 +84,12 @@ export async function PUT(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     await prisma.influencer.delete({
-      where: { id: params.id },
+      where: { id: id },
     });
 
     return NextResponse.json({

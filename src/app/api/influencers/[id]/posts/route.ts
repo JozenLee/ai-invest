@@ -3,19 +3,20 @@ import { prisma } from '@/lib/db/prisma';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params;
     const searchParams = request.nextUrl.searchParams;
     const limit = Math.min(parseInt(searchParams.get('limit') || '20'), 100);
     const offset = parseInt(searchParams.get('offset') || '0');
 
     const total = await prisma.influencerPost.count({
-      where: { influencerId: params.id },
+      where: { influencerId: id },
     });
 
     const posts = await prisma.influencerPost.findMany({
-      where: { influencerId: params.id },
+      where: { influencerId: id },
       orderBy: { publishTime: 'desc' },
       take: limit,
       skip: offset,

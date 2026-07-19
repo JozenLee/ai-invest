@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -99,6 +99,7 @@ app.include_router(etf.router, prefix="/api/etf", tags=["etf"])
 app.include_router(macro_flow.router, prefix="/api/macro-flow", tags=["macro-flow"])
 app.include_router(news.router, prefix="/api/news", tags=["news"])
 app.include_router(influencers.router, tags=["influencers"])
+app.include_router(providers.router, prefix="/api", tags=["providers"])
 
 @app.get("/health")
 async def health_check():
