@@ -5,21 +5,16 @@
 
 import logging
 import asyncio
+import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
 
-# 延迟导入避免循环依赖
-def get_db():
-    """获取数据库实例"""
-    try:
-        from db import db
-        return db
-    except ImportError:
-        logger.warning("Prisma Client未安装，数据持久化功能不可用")
-        return None
+# 导入数据库实例
+from db import db
 
 
 class FetchService:
@@ -375,11 +370,6 @@ class FetchService:
         """
         持久化数据到本地数据库
         """
-        db = get_db()
-        if not db:
-            logger.warning("数据库不可用，跳过持久化")
-            return 0
-
         stored_count = 0
 
         try:
@@ -389,40 +379,52 @@ class FetchService:
                     publish_time = self._parse_publish_time(item.get("publishTime", ""))
 
                     # 计算过期时间（默认7天后）
-                    expires_at = datetime.now() + timedelta(days=7)
+                    expires_at = (datetime.now() + timedelta(days=7)).isoformat()
+
+                    # 生成文章 ID
+                    import hashlib
+                    url = item.get("url", "")
+                    title = item.get("title", "")
+                    if url:
+                        article_id = hashlib.md5(url.encode()).hexdigest()
+                    else:
+                        article_id = hashlib.md5(f"{title}_{publish_time}".encode()).hexdigest()
 
                     # 准备数据
                     article_data = {
+                        "id": article_id,
                         "title": item.get("title", "")[:500],  # 限制长度
                         "content": item.get("content", "")[:10000],
-                        "summary": item.get("title", "")[:200],
+                        "summary": item.get("summary") or item.get("title", "")[:200],
                         "source": item.get("source", "未知"),
-                        "url": item.get("url"),
-                        "publishTime": publish_time,
+                        "url": url,
+                        "publishTime": publish_time.isoformat() if isinstance(publish_time, datetime) else publish_time,
                         "category": item.get("category", "market"),
                         "sentiment": item.get("sentiment"),
                         "sentimentLabel": item.get("sentimentLabel"),
                         "sentimentConfidence": item.get("sentimentConfidence", 0.0),
-                        "sectors": str(item.get("sectors", [])),  # JSON字符串
+                        "keywords": json.dumps(item.get("keywords", []), ensure_ascii=False) if item.get("keywords") else None,
+                        "entities": json.dumps(item.get("entities", []), ensure_ascii=False) if item.get("entities") else None,
+                        "sectors": json.dumps(item.get("sectors", []), ensure_ascii=False) if item.get("sectors") else None,
+                        "domainIds": json.dumps(item.get("domainIds", []), ensure_ascii=False) if item.get("domainIds") else None,
                         "sourceId": source_id,
                         "aiProcessed": item.get("aiProcessed", False),
-                        "aiProcessedAt": datetime.fromisoformat(item["aiProcessedAt"]) if item.get("aiProcessedAt") else None,
+                        "aiProcessedAt": item.get("aiProcessedAt"),
                         "aiError": item.get("aiError"),
                         "expiresAt": expires_at
                     }
 
                     # 检查是否已存在（根据URL去重）
                     if article_data["url"]:
-                        existing = await db.newsarticle.find_first(
-                            where={"url": article_data["url"]}
-                        )
-                        if existing:
+                        exists = await db.check_article_exists(article_data["url"])
+                        if exists:
                             logger.debug(f"文章已存在，跳过: {article_data['url']}")
                             continue
 
                     # 插入数据库
-                    await db.newsarticle.create(data=article_data)
-                    stored_count += 1
+                    result = await db.insert_news_article(article_data)
+                    if result:
+                        stored_count += 1
 
                 except Exception as e:
                     logger.error(f"插入单条数据失败: {e}, title={item.get('title', '')[:50]}")
@@ -477,25 +479,19 @@ class FetchService:
         status: str
     ) -> str:
         """创建采集日志"""
-        db = get_db()
-        if not db:
-            return f"log_{datetime.now().timestamp()}"
-
         try:
-            log = await db.datasourcelog.create(
-                data={
-                    "sourceId": source_id,
-                    "status": status,
-                    "message": "采集任务启动",
-                    "fetchedCount": 0,
-                    "processedCount": 0,
-                    "failedCount": 0
-                }
-            )
-            return log.id
+            log = await db.create_datasource_log({
+                "sourceId": source_id,
+                "status": status,
+                "message": "采集任务启动",
+                "fetchedCount": 0,
+                "processedCount": 0,
+                "failedCount": 0
+            })
+            return log
         except Exception as e:
             logger.error(f"创建采集日志失败: {e}")
-            return f"log_{datetime.now().timestamp()}"
+            return f"log_{int(datetime.now().timestamp() * 1000)}"
 
     async def _update_fetch_log(
         self,
@@ -509,23 +505,16 @@ class FetchService:
         error_detail: str = ""
     ):
         """更新采集日志"""
-        db = get_db()
-        if not db:
-            return
-
         try:
-            await db.datasourcelog.update(
-                where={"id": log_id},
-                data={
-                    "status": status,
-                    "message": message,
-                    "fetchedCount": fetched_count,
-                    "processedCount": processed_count,
-                    "failedCount": failed_count,
-                    "duration": duration,
-                    "errorDetail": error_detail
-                }
-            )
+            await db.update_datasource_log(log_id, {
+                "status": status,
+                "message": message,
+                "fetchedCount": fetched_count,
+                "processedCount": processed_count,
+                "failedCount": failed_count,
+                "duration": duration,
+                "errorDetail": error_detail
+            })
         except Exception as e:
             logger.error(f"更新采集日志失败: {e}")
 
@@ -537,18 +526,12 @@ class FetchService:
         error_message: str = ""
     ):
         """更新数据源状态"""
-        db = get_db()
-        if not db:
-            return
-
         try:
-            await db.datasource.update(
-                where={"id": source_id},
-                data={
-                    "lastFetchStatus": status,
-                    "lastFetchAt": last_fetch_at,
-                    "errorMessage": error_message if error_message else None
-                }
+            await db.update_datasource_status(
+                source_id=source_id,
+                status=status,
+                last_fetch_at=last_fetch_at.isoformat(),
+                error_message=error_message if error_message else None
             )
         except Exception as e:
             logger.error(f"更新数据源状态失败: {e}")
