@@ -26,6 +26,8 @@ import { EVENTS_TEXT } from '@/constants/events-text'
 interface DataSource {
   id: string
   name: string
+  category: string
+  categoryLabel: string
   type: string
   typeLabel: string
   driverType: string
@@ -50,7 +52,7 @@ interface DataSource {
 export default function DataSourcesPage() {
   const [dataSources, setDataSources] = useState<DataSource[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [typeFilter, setTypeFilter] = useState<string>('all')
+  const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
 
@@ -147,10 +149,10 @@ export default function DataSourcesPage() {
     await fetchDataSources()
   }
 
-  // 按类型筛选
-  const filteredSources = typeFilter === 'all'
+  // 按类别筛选
+  const filteredSources = categoryFilter === 'all'
     ? dataSources
-    : dataSources.filter((s) => s.type === typeFilter)
+    : dataSources.filter((s) => s.category === categoryFilter)
 
   // 计算统计数据
   const activeSources = dataSources.filter((s) => s.isActive).length
@@ -224,17 +226,17 @@ export default function DataSourcesPage() {
       <div className="space-y-4">
         {/* 筛选器 */}
         <div className="flex items-center gap-4">
-          <span className="text-sm font-medium">数据源类型：</span>
-          <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value ?? 'all')}>
+          <span className="text-sm font-medium">数据源类别：</span>
+          <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value ?? 'all')}>
             <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder={`${EVENTS_TEXT.common.all}类型`} />
+              <SelectValue placeholder={`${EVENTS_TEXT.common.all}类别`} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">{EVENTS_TEXT.common.all}类型</SelectItem>
-              <SelectItem value="financial">财经媒体</SelectItem>
-              <SelectItem value="social">社交媒体</SelectItem>
-              <SelectItem value="video">视频平台</SelectItem>
-              <SelectItem value="custom">自定义</SelectItem>
+              <SelectItem value="all">{EVENTS_TEXT.common.all}类别</SelectItem>
+              <SelectItem value="综合财经媒体">综合财经媒体</SelectItem>
+              <SelectItem value="科技媒体">科技媒体</SelectItem>
+              <SelectItem value="社交媒体">社交媒体</SelectItem>
+              <SelectItem value="视频平台">视频平台</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -273,10 +275,10 @@ export default function DataSourcesPage() {
             <div className="space-y-2">
               <h3 className="font-semibold">关于数据源</h3>
               <ul className="text-sm text-muted-foreground space-y-1">
-                <li>• <strong>财经媒体</strong>: 财联社、东方财富等主流财经网站</li>
+                <li>• <strong>综合财经媒体</strong>: 财联社、东方财富等主流财经网站</li>
+                <li>• <strong>科技媒体</strong>: 36氪、钛媒体等科技资讯平台</li>
                 <li>• <strong>社交媒体</strong>: 微博、小红书等社交平台</li>
                 <li>• <strong>视频平台</strong>: B站等视频内容平台</li>
-                <li>• <strong>自定义</strong>: RSS订阅、自定义API等</li>
                 <li>• 定时任务按配置自动采集最新资讯</li>
                 <li>• 采集的数据会自动更新到资讯流和趋势分析页面</li>
               </ul>
