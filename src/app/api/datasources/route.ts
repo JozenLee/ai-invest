@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { PrismaClient } from '@prisma/client'
-
-const prisma = new PrismaClient()
+import { prisma } from '@/lib/db/prisma'
+import {
+  getTypeLabel,
+  getDriverTypeLabel,
+  getStatusLabel,
+  getFetchStatusLabel,
+  getScheduleTypeLabel
+} from '@/lib/constants/datasource-labels'
 
 /**
  * GET /api/datasources
@@ -27,6 +32,7 @@ export async function GET(request: NextRequest) {
       where,
       orderBy: { createdAt: 'desc' },
       include: {
+        schedulerJobs: true,
         _count: {
           select: {
             articles: true,
@@ -38,27 +44,45 @@ export async function GET(request: NextRequest) {
     })
 
     // 格式化响应
-    const formatted = dataSources.map(ds => ({
-      id: ds.id,
-      name: ds.name,
-      type: ds.type,
-      driverType: ds.driverType,
-      provider: ds.provider,
-      config: JSON.parse(ds.config),
-      configSchema: ds.configSchema ? JSON.parse(ds.configSchema) : null,
-      updateFrequency: ds.updateFrequency,
-      isActive: ds.isActive,
-      lastFetchAt: ds.lastFetchAt?.toISOString(),
-      lastFetchStatus: ds.lastFetchStatus,
-      errorMessage: ds.errorMessage,
-      createdAt: ds.createdAt.toISOString(),
-      updatedAt: ds.updatedAt.toISOString(),
-      stats: {
-        articlesCount: ds._count.articles,
-        logsCount: ds._count.logs,
-        jobsCount: ds._count.schedulerJobs
+    const formatted = dataSources.map(ds => {
+      // 获取第一个调度任务（如果存在）
+      const schedulerJob = ds.schedulerJobs[0] || null
+
+      return {
+        id: ds.id,
+        name: ds.name,
+        type: ds.type,
+        typeLabel: getTypeLabel(ds.type),
+        driverType: ds.driverType,
+        driverTypeLabel: getDriverTypeLabel(ds.driverType),
+        provider: ds.provider,
+        config: JSON.parse(ds.config),
+        configSchema: ds.configSchema ? JSON.parse(ds.configSchema) : null,
+        updateFrequency: ds.updateFrequency,
+        isActive: ds.isActive,
+        statusLabel: getStatusLabel(ds.isActive),
+        lastFetchAt: ds.lastFetchAt?.toISOString(),
+        lastFetchStatus: ds.lastFetchStatus,
+        lastFetchStatusLabel: getFetchStatusLabel(ds.lastFetchStatus),
+        errorMessage: ds.errorMessage,
+        createdAt: ds.createdAt.toISOString(),
+        updatedAt: ds.updatedAt.toISOString(),
+        scheduler: schedulerJob ? {
+          id: schedulerJob.id,
+          scheduleType: schedulerJob.scheduleType,
+          scheduleTypeLabel: getScheduleTypeLabel(schedulerJob.scheduleType),
+          scheduleConfig: JSON.parse(schedulerJob.scheduleConfig),
+          isEnabled: schedulerJob.isEnabled,
+          lastRunAt: schedulerJob.lastRunAt?.toISOString(),
+          nextRunAt: schedulerJob.nextRunAt?.toISOString()
+        } : null,
+        stats: {
+          articlesCount: ds._count.articles,
+          logsCount: ds._count.logs,
+          jobsCount: ds._count.schedulerJobs
+        }
       }
-    }))
+    })
 
     return NextResponse.json({
       success: true,
