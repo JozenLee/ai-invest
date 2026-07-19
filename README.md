@@ -1,36 +1,57 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI投资分析系统
 
-## Getting Started
+面向个人投资者的智能投研分析平台，聚焦AI硬件产业链，投资标的为指数ETF。
 
-First, run the development server:
+## 快速开始
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# 安装依赖
+npm install
+cd data-service && pip install -r requirements.txt
+
+# 启动开发服务
+npm run dev                    # Next.js (http://localhost:3000)
+cd data-service && python3 main.py  # Python API (http://localhost:8000)
+
+# 数据库操作
+npm run db:migrate             # 运行迁移
+npm run db:seed                # 填充数据
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 技术栈
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **前端**: Next.js 16 + React 19 + TypeScript
+- **UI**: shadcn/ui + Tailwind CSS v4
+- **数据库**: SQLite + Prisma ORM v7
+- **AI**: Claude API (Anthropic)
+- **数据服务**: FastAPI + AKShare (Python)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## 核心功能
 
-## Learn More
+- 📊 市场数据监控（指数、ETF、资金流向）
+- 📰 AI驱动的新闻事件分析
+- 🕸️ 产业链知识图谱
+- 🤖 智能投资分析报告
+- 📈 投资组合管理
 
-To learn more about Next.js, take a look at the following resources:
+## 文档
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- [项目说明](CLAUDE.md) - 项目概览和常用命令
+- [快速开始](QUICK_START.md) - 详细启动指南
+- [部署指南](DEPLOYMENT.md) - 生产环境部署
+- [开发指南](NEXT_SESSION_GUIDE.md) - 新会话启动和开发路径
+- [开发计划](docs/DEVELOPMENT-PLAN.md) - 详细技术规划
+- [进度追踪](docs/PROGRESS.md) - 当前开发进度
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 项目状态
 
-## Deploy on Vercel
+当前进度: **40% 完成**
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- ✅ Phase 1: 基础框架搭建 (100%)
+- ✅ Phase 2: 管理增强 (100%)
+- ⏸️ Phase 3: 功能扩展 (0%)
+- ⏸️ Phase 4: 架构优化 (0%)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## License
+
+MIT
