@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { claudeClient } from '@/lib/ai/claude'
+import { aiAnalysisService } from '@/lib/services/ai-analysis.service'
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const analysis = await claudeClient.analyzeEvent({
+    const analysis = await aiAnalysisService.analyzeEvent({
       title,
       content: content || '',
       source: source || '未知',
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
     console.error('事件分析失败:', error)
     return NextResponse.json({
       success: false,
-      error: '事件分析失败，Claude API 可能未配置或不可用',
+      error: '事件分析失败，AI 服务可能未配置或不可用',
       data: null,
     })
   }

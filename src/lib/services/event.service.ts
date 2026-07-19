@@ -1,7 +1,7 @@
 // 事件分析服务
 // 提供新闻采集、事件分析、趋势聚合等功能
 
-import { claudeClient, EventAnalysisRequest, EventAnalysisResponse } from '@/lib/ai/claude'
+import { aiAnalysisService, EventAnalysisRequest, EventAnalysisResponse } from '@/lib/services/ai-analysis.service'
 import prisma from '@/lib/db/prisma'
 
 export interface NewsArticle {
@@ -241,7 +241,7 @@ export class EventService {
       publishTime: article.publishTime
     }
 
-    const analysis = await claudeClient.analyzeEvent(request)
+    const analysis = await aiAnalysisService.analyzeEvent(request)
 
     // 保存分析结果到数据库
     await this.saveAnalysis(article.id, analysis)
