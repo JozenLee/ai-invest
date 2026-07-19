@@ -1,146 +1,169 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
+import { PrismaClient } from '@prisma/client'
 
-// 新闻数据源配置
-const NEWS_DATA_SOURCES = [
-  // 综合财经媒体
-  {
-    id: 'cls_news',
-    name: '财联社',
-    description: '实时财经新闻资讯，覆盖A股、港股、美股市场动态',
-    category: '综合财经媒体',
-    provider: '财联社',
-    website: 'https://www.cls.cn',
-    updateFrequency: '实时',
-    coverage: ['A股', '港股', '美股', '宏观经济'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-  {
-    id: 'eastmoney_news',
-    name: '东方财富',
-    description: '全面的财经资讯平台，提供股票、基金、债券等市场信息',
-    category: '综合财经媒体',
-    provider: '东方财富',
-    website: 'https://www.eastmoney.com',
-    updateFrequency: '实时',
-    coverage: ['A股', '基金', '债券', '期货'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-  {
-    id: 'sina_finance',
-    name: '新浪财经',
-    description: '权威财经新闻门户，覆盖国内外金融市场',
-    category: '综合财经媒体',
-    provider: '新浪财经',
-    website: 'https://finance.sina.com.cn',
-    updateFrequency: '实时',
-    coverage: ['A股', '港股', '美股', '宏观经济'],
-    dataQuality: 'high',
-    status: 'active',
-  },
+const prisma = new PrismaClient()
 
-  // 行业专业媒体
-  {
-    id: 'semi_insight',
-    name: '半导体行业观察',
-    description: '专注于半导体、芯片产业的深度分析和新闻报道',
-    category: '行业专业媒体',
-    provider: '半导体行业观察',
-    website: 'https://www.semiinsights.com',
-    updateFrequency: '每日',
-    coverage: ['半导体', '芯片', 'GPU', 'AI芯片'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-  {
-    id: 'optic_comm',
-    name: '光通信之家',
-    description: '光通信、光模块行业专业资讯平台',
-    category: '行业专业媒体',
-    provider: '光通信之家',
-    website: 'https://www.ofweek.com',
-    updateFrequency: '每日',
-    coverage: ['光模块', '光通信', 'CPO', '光纤'],
-    dataQuality: 'medium',
-    status: 'active',
-  },
-  {
-    id: 'datacenter_world',
-    name: '数据中心世界',
-    description: '数据中心、云计算、算力基础设施行业资讯',
-    category: '行业专业媒体',
-    provider: '数据中心世界',
-    website: 'https://www.datacenterdynamics.com',
-    updateFrequency: '每日',
-    coverage: ['数据中心', '云计算', '算力', '服务器'],
-    dataQuality: 'medium',
-    status: 'active',
-  },
+/**
+ * GET /api/datasources
+ * 获取所有数据源列表（从数据库读取）
+ *
+ * Query参数:
+ * - type: 数据源类型过滤
+ * - isActive: 是否激活
+ */
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const type = searchParams.get('type')
+    const isActive = searchParams.get('isActive')
 
-  // 政策与监管
-  {
-    id: 'csrc_announcement',
-    name: '证监会公告',
-    description: '中国证券监督管理委员会官方公告和政策发布',
-    category: '政策与监管',
-    provider: '中国证监会',
-    website: 'http://www.csrc.gov.cn',
-    updateFrequency: '不定期',
-    coverage: ['证券市场', '监管政策', 'IPO', '再融资'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-  {
-    id: 'miit_policy',
-    name: '工信部政策',
-    description: '工业和信息化部政策文件，涉及半导体、人工智能等产业政策',
-    category: '政策与监管',
-    provider: '工业和信息化部',
-    website: 'https://www.miit.gov.cn',
-    updateFrequency: '不定期',
-    coverage: ['产业政策', '半导体', '人工智能', '新能源'],
-    dataQuality: 'high',
-    status: 'active',
-  },
+    // 构建查询条件
+    const where: any = {}
+    if (type) where.type = type
+    if (isActive !== null) where.isActive = isActive === 'true'
 
-  // 国际视角
-  {
-    id: 'bloomberg',
-    name: 'Bloomberg',
-    description: '全球领先的商业、金融信息和新闻资讯提供商',
-    category: '国际视角',
-    provider: '彭博社',
-    website: 'https://www.bloomberg.com',
-    updateFrequency: '实时',
-    coverage: ['全球市场', '宏观经济', '科技', '金融'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-  {
-    id: 'reuters',
-    name: 'Reuters',
-    description: '国际新闻机构，提供全球商业、金融、政治和科技新闻',
-    category: '国际视角',
-    provider: '路透社',
-    website: 'https://www.reuters.com',
-    updateFrequency: '实时',
-    coverage: ['全球市场', '宏观经济', '政治', '科技'],
-    dataQuality: 'high',
-    status: 'active',
-  },
-]
+    // 查询数据库
+    const dataSources = await prisma.dataSource.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        _count: {
+          select: {
+            articles: true,
+            logs: true,
+            schedulerJobs: true
+          }
+        }
+      }
+    })
 
-export async function GET() {
-  const categories = [...new Set(NEWS_DATA_SOURCES.map(s => s.category))]
+    // 格式化响应
+    const formatted = dataSources.map(ds => ({
+      id: ds.id,
+      name: ds.name,
+      type: ds.type,
+      driverType: ds.driverType,
+      provider: ds.provider,
+      config: JSON.parse(ds.config),
+      configSchema: ds.configSchema ? JSON.parse(ds.configSchema) : null,
+      updateFrequency: ds.updateFrequency,
+      isActive: ds.isActive,
+      lastFetchAt: ds.lastFetchAt?.toISOString(),
+      lastFetchStatus: ds.lastFetchStatus,
+      errorMessage: ds.errorMessage,
+      createdAt: ds.createdAt.toISOString(),
+      updatedAt: ds.updatedAt.toISOString(),
+      stats: {
+        articlesCount: ds._count.articles,
+        logsCount: ds._count.logs,
+        jobsCount: ds._count.schedulerJobs
+      }
+    }))
 
-  return NextResponse.json({
-    success: true,
-    data: {
-      sources: NEWS_DATA_SOURCES,
-      categories: categories,
-      total: NEWS_DATA_SOURCES.length,
-      activeCount: NEWS_DATA_SOURCES.filter(s => s.status === 'active').length,
-    },
-  })
+    return NextResponse.json({
+      success: true,
+      data: formatted,
+      count: formatted.length
+    })
+
+  } catch (error) {
+    console.error('获取数据源列表失败:', error)
+    return NextResponse.json(
+      {
+        success: false,
+        error: '获取数据源列表失败',
+        message: error instanceof Error ? error.message : '未知错误'
+      },
+      { status: 500 }
+    )
+  }
+}
+
+/**
+ * POST /api/datasources
+ * 创建新数据源
+ *
+ * Body:
+ * - name: 数据源名称
+ * - type: 类型 (financial/social/video/custom)
+ * - driverType: 驱动类型 (api/crawler/rss/social)
+ * - provider: 提供商标识
+ * - config: 配置信息 (JSON)
+ * - updateFrequency: 更新频率（分钟）
+ * - isActive: 是否激活
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json()
+
+    // 验证必填字段
+    const { name, type, driverType, provider, config } = body
+    if (!name || !type || !driverType || !provider || !config) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: '缺少必填字段',
+          required: ['name', 'type', 'driverType', 'provider', 'config']
+        },
+        { status: 400 }
+      )
+    }
+
+    // 验证类型
+    const validTypes = ['financial', 'social', 'video', 'custom']
+    const validDriverTypes = ['api', 'crawler', 'rss', 'social']
+
+    if (!validTypes.includes(type)) {
+      return NextResponse.json(
+        { success: false, error: `无效的type，必须是: ${validTypes.join(', ')}` },
+        { status: 400 }
+      )
+    }
+
+    if (!validDriverTypes.includes(driverType)) {
+      return NextResponse.json(
+        { success: false, error: `无效的driverType，必须是: ${validDriverTypes.join(', ')}` },
+        { status: 400 }
+      )
+    }
+
+    // 创建数据源
+    const dataSource = await prisma.dataSource.create({
+      data: {
+        name,
+        type,
+        driverType,
+        provider,
+        config: JSON.stringify(config),
+        configSchema: body.configSchema ? JSON.stringify(body.configSchema) : null,
+        updateFrequency: body.updateFrequency || 60,
+        isActive: body.isActive ?? true
+      }
+    })
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        id: dataSource.id,
+        name: dataSource.name,
+        type: dataSource.type,
+        driverType: dataSource.driverType,
+        provider: dataSource.provider,
+        isActive: dataSource.isActive,
+        createdAt: dataSource.createdAt.toISOString()
+      },
+      message: '数据源创建成功'
+    }, { status: 201 })
+
+  } catch (error) {
+    console.error('创建数据源失败:', error)
+    return NextResponse.json(
+      {
+        success: false,
+        error: '创建数据源失败',
+        message: error instanceof Error ? error.message : '未知错误'
+      },
+      { status: 500 }
+    )
+  }
 }
