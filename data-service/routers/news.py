@@ -167,6 +167,11 @@ def _build_news_item(row: dict, idx: int, prefix: str = "cls") -> dict:
 @router.get("/feed")
 async def get_news_feed(
     category: Optional[str] = Query(default=None, description="新闻分类"),
+    categoryId: Optional[str] = Query(default=None, description="分类ID"),
+    domainId: Optional[str] = Query(default=None, description="领域ID"),
+    keyword: Optional[str] = Query(default=None, description="关键词搜索"),
+    sentiment: Optional[str] = Query(default=None, description="情感筛选: bullish/neutral/bearish"),
+    sortBy: Optional[str] = Query(default="publishTime", description="排序方式: publishTime/sentiment/impact"),
     limit: int = Query(default=20, ge=1, le=100, description="返回数量"),
     offset: int = Query(default=0, ge=0, description="偏移量"),
 ):
@@ -191,8 +196,45 @@ async def get_news_feed(
                 "data": None,
             }
 
+        # 分类筛选
         if category:
             news_list = [n for n in news_list if n.get("category") == category]
+
+        # 分类ID筛选（前端传递的是categoryId）
+        if categoryId:
+            news_list = [n for n in news_list if n.get("categoryId") == categoryId]
+
+        # 领域筛选
+        if domainId:
+            news_list = [n for n in news_list if n.get("domainId") == domainId]
+
+        # 关键词筛选
+        if keyword:
+            keyword_lower = keyword.lower()
+            news_list = [
+                n for n in news_list
+                if keyword_lower in n.get("title", "").lower()
+                or keyword_lower in n.get("content", "").lower()
+                or keyword_lower in n.get("summary", "").lower()
+            ]
+
+        # 情感筛选
+        if sentiment:
+            if sentiment == "bullish":
+                news_list = [n for n in news_list if n.get("sentiment") and n.get("sentiment") > 0.2]
+            elif sentiment == "bearish":
+                news_list = [n for n in news_list if n.get("sentiment") and n.get("sentiment") < -0.2]
+            elif sentiment == "neutral":
+                news_list = [n for n in news_list if n.get("sentiment") is None or abs(n.get("sentiment", 0)) <= 0.2]
+
+        # 排序
+        if sortBy == "sentiment":
+            # 按情感值降序排序（利好在前）
+            news_list.sort(key=lambda x: x.get("sentiment") or 0, reverse=True)
+        elif sortBy == "impact":
+            # 按影响力降序排序
+            news_list.sort(key=lambda x: x.get("impact") or 0, reverse=True)
+        # publishTime 已经在 prepare_news_dataframe 中按时间倒序排列
 
         return {
             "success": True,

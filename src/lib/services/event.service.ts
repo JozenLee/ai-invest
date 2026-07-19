@@ -49,30 +49,106 @@ export class EventService {
    */
   async getNewsFeed(params: {
     category?: string
+    categoryIds?: string[]
+    domainId?: string
+    keyword?: string
+    sentiment?: string
+    sortBy?: string
     limit?: number
     offset?: number
   }): Promise<{ total: number; items: NewsArticle[] }> {
-    const { category, limit = 20, offset = 0 } = params
+    const {
+      category,
+      categoryIds,
+      domainId,
+      keyword,
+      sentiment,
+      sortBy = 'publishTime',
+      limit = 20,
+      offset = 0,
+    } = params
 
     // 优先从本地数据库读取（定时采集的数据）
     try {
-      const where: Record<string, unknown> = {}
-      if (category) where.category = category
+      const where: any = {}
+
+      // 分类筛选
+      if (categoryIds && categoryIds.length > 0) {
+        where.categoryId = { in: categoryIds }
+      } else if (category) {
+        where.category = category
+      }
+
+      // 领域筛选
+      if (domainId) {
+        where.domainId = domainId
+      }
+
+      // 情感筛选
+      if (sentiment) {
+        switch (sentiment) {
+          case 'bullish':
+            where.sentiment = { gt: 0.2 }
+            break
+          case 'bearish':
+            where.sentiment = { lt: -0.2 }
+            break
+          case 'neutral':
+            where.sentiment = { gte: -0.2, lte: 0.2 }
+            break
+        }
+      }
+
+      // 关键词搜索 - 使用AND包装，确保与其他条件正确组合
+      if (keyword) {
+        const otherConditions = { ...where }
+        where.AND = [
+          otherConditions,
+          {
+            OR: [
+              { title: { contains: keyword } },
+              { content: { contains: keyword } },
+              { summary: { contains: keyword } },
+            ],
+          },
+        ]
+        // 清除已经包含在AND中的条件
+        Object.keys(otherConditions).forEach(key => {
+          if (key !== 'AND') delete where[key]
+        })
+      }
+
+      // 排序
+      const orderBy: Record<string, string> = {}
+      switch (sortBy) {
+        case 'sentiment':
+          orderBy.sentiment = 'desc'
+          break
+        case 'impact':
+          orderBy.impact = 'desc'
+          break
+        default:
+          orderBy.publishTime = 'desc'
+      }
 
       const [total, articles] = await Promise.all([
         prisma.newsArticle.count({ where }),
         prisma.newsArticle.findMany({
           where,
-          orderBy: { publishTime: 'desc' },
+          orderBy,
           skip: offset,
           take: limit,
+          include: {
+            categoryRef: true,
+            domain: true,
+          },
         }),
       ])
 
       if (total > 0) {
         return {
           total,
-          items: articles.map(a => ({
+          items: articles.map((a) => ({
             id: a.id,
             title: a.title,
             content: a.content || '',
@@ -80,7 +156,11 @@ export class EventService {
             source: a.source || '财联社',
             url: a.url || undefined,
             publishTime: a.publishTime?.toISOString() || new Date().toISOString(),
-            category: a.category || 'market',
+            category: a.categoryRef?.code || a.category || 'market',
+            categoryId: a.categoryId || undefined,
+            categoryName: a.categoryRef?.name || undefined,
+            domainId: a.domainId || undefined,
+            domainName: a.domain?.name || undefined,
             sentiment: a.sentiment || undefined,
             impact: a.impact || undefined,
             entities: a.entities ? JSON.parse(a.entities as string) : undefined,
@@ -93,10 +173,14 @@ export class EventService {
     }
 
     // 降级：从Python数据服务获取
-    const response = await fetch(
-      `${DATA_SERVICE_URL}/api/news/feed?limit=${limit}&offset=${offset}${category ? `&category=${category}` : ''}`,
-      { next: { revalidate: 300 }, signal: AbortSignal.timeout(30000) }
-    )
+    let url = `${DATA_SERVICE_URL}/api/news/feed?limit=${limit}&offset=${offset}`
+    if (category) url += `&category=${category}`
+    if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`
+
+    const response = await fetch(url, {
+      next: { revalidate: 300 },
+      signal: AbortSignal.timeout(30000),
+    })
 
     if (!response.ok) {
       throw new Error(`Python数据服务响应异常: ${response.status}`)
@@ -109,7 +193,7 @@ export class EventService {
 
     return {
       total: data.data.total || 0,
-      items: data.data.items || []
+      items: data.data.items || [],
     }
   }
 
