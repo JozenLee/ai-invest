@@ -72,10 +72,12 @@ async function main() {
 
   // 创建默认领域
   const domains = [
-    { id: 'dom_ai', name: 'AI算力', code: 'ai', description: '人工智能、芯片、服务器、数据中心等', keywords: '["AI","芯片","GPU","服务器","数据中心","算力"]', graphNodes: '[]' },
-    { id: 'dom_new_energy', name: '新能源', code: 'new_energy', description: '光伏、风电、储能、新能源汽车等', keywords: '["光伏","风电","储能","新能源汽车","锂电"]', graphNodes: '[]' },
-    { id: 'dom_medical', name: '医药医疗', code: 'medical', description: '创新药、医疗器械、医疗服务等', keywords: '["创新药","医疗器械","医疗服务","CXO"]', graphNodes: '[]' },
-    { id: 'dom_semiconductor', name: '半导体', code: 'semiconductor', description: '芯片设计、晶圆制造、封装测试等', keywords: '["半导体","芯片","晶圆","封装","光刻"]', graphNodes: '[]' },
+    { id: 'dom_ai', name: 'AI算力', code: 'ai', description: '人工智能、芯片、服务器、数据中心等', keywords: '["AI","芯片","GPU","服务器","数据中心","算力","大模型"]', graphNodes: '[]' },
+    { id: 'dom_new_energy', name: '新能源', code: 'new_energy', description: '光伏、风电、储能、新能源汽车等', keywords: '["光伏","风电","储能","新能源汽车","锂电","电池"]', graphNodes: '[]' },
+    { id: 'dom_medical', name: '医药医疗', code: 'medical', description: '创新药、医疗器械、医疗服务等', keywords: '["创新药","医疗器械","医疗服务","CXO","疫苗","生物医药"]', graphNodes: '[]' },
+    { id: 'dom_semiconductor', name: '半导体', code: 'semiconductor', description: '芯片设计、晶圆制造、封装测试等', keywords: '["半导体","芯片","晶圆","封装","光刻","集成电路"]', graphNodes: '[]' },
+    { id: 'dom_internet', name: '互联网', code: 'internet', description: '电商、社交、游戏、云计算等', keywords: '["互联网","电商","社交","游戏","云计算","SaaS"]', graphNodes: '[]' },
+    { id: 'dom_finance', name: '金融', code: 'finance', description: '银行、保险、证券、基金等', keywords: '["金融","银行","保险","证券","基金","投资"]', graphNodes: '[]' },
   ]
 
   for (const domain of domains) {

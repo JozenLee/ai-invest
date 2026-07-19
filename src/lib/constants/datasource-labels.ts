@@ -106,6 +106,27 @@ export function getScheduleTypeLabel(scheduleType: string): string {
   return SCHEDULE_TYPE_LABELS[scheduleType] || scheduleType
 }
 
+// ==================== 数据源分类 (category) ====================
+
+/**
+ * 数据源分类映射
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  '综合财经媒体': '综合财经媒体',
+  '科技媒体': '科技媒体',
+  '社交媒体': '社交媒体',
+  '视频平台': '视频平台',
+}
+
+/**
+ * 获取数据源分类的中文标签
+ * @param category - 数据源分类
+ * @returns 中文标签
+ */
+export function getCategoryLabel(category: string): string {
+  return CATEGORY_LABELS[category] || category
+}
+
 // ==================== 导出汇总 ====================
 
 export default {
@@ -114,4 +135,5 @@ export default {
   getStatusLabel,
   getFetchStatusLabel,
   getScheduleTypeLabel,
+  getCategoryLabel,
 }

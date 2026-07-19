@@ -7,31 +7,50 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const category = searchParams.get('category') || undefined
     const categoryId = searchParams.get('categoryId') || undefined
+    const categoryIdsParam = searchParams.get('categoryIds') || undefined
     const domainId = searchParams.get('domainId') || undefined
+    const domainIdsParam = searchParams.get('domainIds') || undefined
     const keyword = searchParams.get('keyword') || undefined
     const sentiment = searchParams.get('sentiment') || undefined
+    const sentimentsParam = searchParams.get('sentiments') || undefined
     const sortBy = searchParams.get('sortBy') || 'publishTime'
     const limit = parseInt(searchParams.get('limit') || '20')
     const offset = parseInt(searchParams.get('offset') || '0')
 
-    // 如果指定了categoryId，获取该分类及其子分类的文章
+    // 处理多个分类ID（支持逗号分隔的多选）
     let categoryIds: string[] | undefined
-    if (categoryId) {
-      const category = await prisma.newsCategory.findUnique({
-        where: { id: categoryId },
-        include: { children: true },
-      })
-      if (category) {
-        categoryIds = [categoryId, ...category.children.map((c) => c.id)]
-      }
+
+    if (categoryIdsParam) {
+      // 多选逻辑：只使用用户选择的分类ID，不展开子分类
+      // 因为当前分类体系是平级的，不存在父子关系
+      categoryIds = categoryIdsParam.split(',').filter(Boolean)
+    } else if (categoryId) {
+      // 兼容旧的单选逻辑
+      categoryIds = [categoryId]
+    }
+
+    // 处理多个领域ID（支持逗号分隔的多选）
+    let domainIds: string[] | undefined
+    if (domainIdsParam) {
+      domainIds = domainIdsParam.split(',').filter(Boolean)
+    } else if (domainId) {
+      domainIds = [domainId]
+    }
+
+    // 处理多个情感筛选（支持逗号分隔的多选）
+    let sentiments: string[] | undefined
+    if (sentimentsParam) {
+      sentiments = sentimentsParam.split(',').filter(Boolean)
+    } else if (sentiment) {
+      sentiments = [sentiment]
     }
 
     const result = await eventService.getNewsFeed({
       category,
       categoryIds,
-      domainId,
+      domainIds,
       keyword,
-      sentiment,
+      sentiments,
       sortBy,
       limit,
       offset,

@@ -26,6 +26,7 @@ import { EVENTS_TEXT } from '@/constants/events-text'
 import { PageHeader } from '@/components/events/PageHeader'
 import { StatCard } from '@/components/events/StatCard'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
+import { MultiSelect } from '@/components/events/MultiSelect'
 
 interface NewsArticle {
   id: string
@@ -81,13 +82,50 @@ export default function EventsFeedPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [categories, setCategories] = useState<NewsCategory[]>([])
   const [domains, setDomains] = useState<Domain[]>([])
-  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
-  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null)
-  const [selectedDomainId, setSelectedDomainId] = useState<string | null>(null)
-  const [sentimentFilter, setSentimentFilter] = useState<string>('all')
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([])
+  const [selectedDomainIds, setSelectedDomainIds] = useState<string[]>([])
+  const [selectedSentiments, setSelectedSentiments] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<string>('publishTime')
   const [keyword, setKeyword] = useState('')
   const [searchInput, setSearchInput] = useState('')
+
+  // 分类分组配置（排除分组名本身）
+  const categoryGroups = [
+    {
+      name: '科技类',
+      categories: ['cat_ai', 'cat_chip', 'cat_internet', 'cat_breakthrough', 'cat_product']
+    },
+    {
+      name: '财经类',
+      categories: ['cat_capital', 'cat_macro', 'cat_earnings']
+    },
+    {
+      name: '产业类',
+      categories: ['cat_supply', 'cat_capacity', 'cat_competition', 'cat_new_energy', 'cat_medical']
+    },
+    {
+      name: '政策类',
+      categories: ['cat_policy', 'cat_regulation', 'cat_government']
+    },
+    {
+      name: '国际类',
+      categories: ['cat_geopolitics', 'cat_global_market', 'cat_trade']
+    },
+    {
+      name: '其他',
+      categories: ['cat_society', 'cat_event', 'cat_consume', 'cat_merger']
+    }
+  ]
+
+  // 根据分组获取分类选项
+  const getCategoriesByGroup = (groupCodes: string[]) => {
+    return categories
+      .filter(cat => groupCodes.includes(cat.id))
+      .map(cat => ({
+        value: cat.id,
+        label: cat.name
+      }))
+  }
 
   // 获取分类数据
   const fetchCategories = async () => {
@@ -124,9 +162,17 @@ export default function EventsFeedPage() {
     setIsLoading(true)
     try {
       let url = '/api/events/feed?limit=50'
-      if (selectedCategoryId) url += `&categoryId=${selectedCategoryId}`
-      if (selectedDomainId && selectedDomainId !== 'all') url += `&domainId=${selectedDomainId}`
-      if (sentimentFilter && sentimentFilter !== 'all') url += `&sentiment=${sentimentApiMap[sentimentFilter] || sentimentFilter}`
+      if (selectedCategoryIds.length > 0) {
+        // 多个分类用逗号分隔，后端需要支持OR查询
+        url += `&categoryIds=${selectedCategoryIds.join(',')}`
+      }
+      if (selectedDomainIds.length > 0) {
+        url += `&domainIds=${selectedDomainIds.join(',')}`
+      }
+      if (selectedSentiments.length > 0) {
+        const mappedSentiments = selectedSentiments.map(s => sentimentApiMap[s] || s)
+        url += `&sentiments=${mappedSentiments.join(',')}`
+      }
       if (sortBy) url += `&sortBy=${sortApiMap[sortBy] || sortBy}`
       if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`
 
@@ -142,7 +188,7 @@ export default function EventsFeedPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedCategoryId, selectedDomainId, sentimentFilter, sortBy, keyword])
+  }, [selectedCategoryIds, selectedDomainIds, selectedSentiments, sortBy, keyword])
 
   useEffect(() => {
     fetchCategories()
@@ -164,13 +210,12 @@ export default function EventsFeedPage() {
   }
 
   const clearFilters = () => {
-    setSelectedCategoryId(null)
-    setSelectedDomainId(null)
-    setSentimentFilter('all')
+    setSelectedCategoryIds([])
+    setSelectedDomainIds([])
+    setSelectedSentiments([])
     setSortBy('publishTime')
     setKeyword('')
     setSearchInput('')
-    setExpandedCategory(null)
   }
 
   const getSentimentInfo = (sentiment?: number) => {
@@ -202,59 +247,10 @@ export default function EventsFeedPage() {
     }
   }
 
-  const toggleCategory = (categoryId: string) => {
-    if (expandedCategory === categoryId) {
-      setExpandedCategory(null)
-    } else {
-      setExpandedCategory(categoryId)
-    }
-  }
-
-  const selectCategory = (categoryId: string | null) => {
-    setSelectedCategoryId(categoryId)
-  }
-
-  // 查找分类名称（包括子分类）
+  // 查找分类名称
   const findCategoryName = (categoryId: string): string => {
-    // 先在一级分类中查找
-    const topCategory = categories.find(c => c.id === categoryId)
-    if (topCategory) return topCategory.name
-
-    // 在子分类中查找
-    for (const cat of categories) {
-      if (cat.children) {
-        const subCategory = cat.children.find(c => c.id === categoryId)
-        if (subCategory) return subCategory.name
-      }
-    }
-
-    return categoryId
-  }
-
-  // 获取所有分类选项（包括子分类）
-  const getCategoryOptions = () => {
-    const options: Array<{ value: string; label: string; group?: string }> = []
-
-    categories.forEach(cat => {
-      if (cat.children && cat.children.length > 0) {
-        // 有子分类的父分类
-        cat.children.forEach(subCat => {
-          options.push({
-            value: subCat.id,
-            label: subCat.name,
-            group: cat.name
-          })
-        })
-      } else {
-        // 没有子分类的独立分类
-        options.push({
-          value: cat.id,
-          label: cat.name
-        })
-      }
-    })
-
-    return options
+    const category = categories.find(c => c.id === categoryId)
+    return category ? category.name : categoryId
   }
 
   // 计算统计数据
@@ -350,38 +346,98 @@ export default function EventsFeedPage() {
             </div>
           </div>
 
-          {/* 情感和排序筛选 */}
-          <div className="flex flex-wrap gap-3">
-            <Select value={sentimentFilter} onValueChange={(value) => setSentimentFilter(value || 'all')}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue>
-                  {sentimentDisplayMap[sentimentFilter]}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{EVENTS_TEXT.feed.filter.sentimentAll}</SelectItem>
-                <SelectItem value="bullish">{EVENTS_TEXT.feed.filter.sentimentBullish}</SelectItem>
-                <SelectItem value="neutral">{EVENTS_TEXT.feed.filter.sentimentNeutral}</SelectItem>
-                <SelectItem value="bearish">{EVENTS_TEXT.feed.filter.sentimentBearish}</SelectItem>
-              </SelectContent>
-            </Select>
+          {/* 分类、情感、领域和排序筛选 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {/* 科技类 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[0].categories)}
+              placeholder={categoryGroups[0].name}
+              title={categoryGroups[0].name}
+              className="w-full"
+            />
 
-            <Select value={selectedDomainId || 'all'} onValueChange={(value) => setSelectedDomainId(value === 'all' ? null : value)}>
-              <SelectTrigger className="w-[160px]">
-                <SelectValue placeholder={`${EVENTS_TEXT.common.all}领域`} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">{EVENTS_TEXT.common.all}领域</SelectItem>
-                {domains.map((domain) => (
-                  <SelectItem key={domain.id} value={domain.id}>
-                    {domain.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {/* 财经类 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[1].categories)}
+              placeholder={categoryGroups[1].name}
+              title={categoryGroups[1].name}
+              className="w-full"
+            />
 
+            {/* 产业类 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[2].categories)}
+              placeholder={categoryGroups[2].name}
+              title={categoryGroups[2].name}
+              className="w-full"
+            />
+
+            {/* 政策类 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[3].categories)}
+              placeholder={categoryGroups[3].name}
+              title={categoryGroups[3].name}
+              className="w-full"
+            />
+
+            {/* 国际类 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[4].categories)}
+              placeholder={categoryGroups[4].name}
+              title={categoryGroups[4].name}
+              className="w-full"
+            />
+
+            {/* 其他 */}
+            <MultiSelect
+              value={selectedCategoryIds}
+              onChange={setSelectedCategoryIds}
+              options={getCategoriesByGroup(categoryGroups[5].categories)}
+              placeholder={categoryGroups[5].name}
+              title={categoryGroups[5].name}
+              className="w-full"
+            />
+
+            {/* 情感筛选 */}
+            <MultiSelect
+              value={selectedSentiments}
+              onChange={setSelectedSentiments}
+              options={[
+                { value: 'bullish', label: EVENTS_TEXT.feed.filter.sentimentBullish },
+                { value: 'neutral', label: EVENTS_TEXT.feed.filter.sentimentNeutral },
+                { value: 'bearish', label: EVENTS_TEXT.feed.filter.sentimentBearish },
+              ]}
+              placeholder="情感筛选"
+              title="选择情感"
+              className="w-full"
+            />
+
+            {/* 领域筛选 */}
+            <MultiSelect
+              value={selectedDomainIds}
+              onChange={setSelectedDomainIds}
+              options={domains.map(domain => ({
+                value: domain.id,
+                label: domain.name,
+              }))}
+              placeholder="领域筛选"
+              title="选择领域"
+              className="w-full"
+            />
+
+            {/* 排序 */}
             <Select value={sortBy} onValueChange={(value) => setSortBy(value || 'publishTime')}>
-              <SelectTrigger className="w-[160px]">
+              <SelectTrigger className="w-full">
                 <SelectValue>
                   {sortDisplayMap[sortBy]}
                 </SelectValue>
@@ -394,71 +450,56 @@ export default function EventsFeedPage() {
             </Select>
           </div>
 
-          {/* 分类标签 - 使用Select逻辑 */}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant={selectedCategoryId === null ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setSelectedCategoryId(null)}
-            >
-              {EVENTS_TEXT.common.all}
-            </Button>
-            {categories.map((cat) => {
-              if (cat.children && cat.children.length > 0) {
-                // 有子分类，使用Select组件
-                const isChildSelected = cat.children.some(c => c.id === selectedCategoryId)
-                return (
-                  <Select
-                    key={cat.id}
-                    value={selectedCategoryId || 'none'}
-                    onValueChange={(value) => setSelectedCategoryId(value === 'none' ? null : value)}
-                  >
-                    <SelectTrigger className={`h-9 px-3 ${isChildSelected ? 'border-primary bg-primary text-primary-foreground' : ''}`}>
-                      <SelectValue>{cat.name}</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {cat.children.map((subCat) => (
-                        <SelectItem key={subCat.id} value={subCat.id}>
-                          {subCat.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )
-              } else {
-                // 没有子分类，普通按钮
-                return (
-                  <Button
-                    key={cat.id}
-                    variant={selectedCategoryId === cat.id ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => setSelectedCategoryId(cat.id)}
-                  >
-                    {cat.name}
-                  </Button>
-                )
-              }
-            })}
-          </div>
+          {/* 分类筛选 - 移除旧的树形选择器 */}
 
           {/* 当前筛选条件 */}
-          {(selectedCategoryId || (selectedDomainId && selectedDomainId !== 'all') || sentimentFilter !== 'all' || keyword) && (
+          {(selectedCategoryIds.length > 0 || selectedDomainIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
             <div className="flex flex-wrap items-center gap-2 text-sm pt-2 border-t">
               <span className="text-muted-foreground">当前筛选：</span>
-              {selectedCategoryId && (
-                <Badge variant="secondary" className="cursor-pointer" onClick={() => setSelectedCategoryId(null)}>
-                  分类: {findCategoryName(selectedCategoryId)} ×
-                </Badge>
+              {selectedCategoryIds.length > 0 && (
+                <>
+                  {selectedCategoryIds.map((categoryId) => (
+                    <Badge
+                      key={categoryId}
+                      variant="secondary"
+                      className="cursor-pointer"
+                      onClick={() => setSelectedCategoryIds(prev => prev.filter(id => id !== categoryId))}
+                    >
+                      {findCategoryName(categoryId)} ×
+                    </Badge>
+                  ))}
+                </>
               )}
-              {selectedDomainId && selectedDomainId !== 'all' && (
-                <Badge variant="secondary" className="cursor-pointer" onClick={() => setSelectedDomainId(null)}>
-                  领域: {domains.find(d => d.id === selectedDomainId)?.name || selectedDomainId} ×
-                </Badge>
+              {selectedDomainIds.length > 0 && (
+                <>
+                  {selectedDomainIds.map((domainId) => {
+                    const domain = domains.find(d => d.id === domainId)
+                    return (
+                      <Badge
+                        key={domainId}
+                        variant="secondary"
+                        className="cursor-pointer"
+                        onClick={() => setSelectedDomainIds(prev => prev.filter(id => id !== domainId))}
+                      >
+                        {domain?.name || domainId} ×
+                      </Badge>
+                    )
+                  })}
+                </>
               )}
-              {sentimentFilter !== 'all' && (
-                <Badge variant="secondary" className="cursor-pointer" onClick={() => setSentimentFilter('all')}>
-                  情感: {sentimentDisplayMap[sentimentFilter] || sentimentFilter} ×
-                </Badge>
+              {selectedSentiments.length > 0 && (
+                <>
+                  {selectedSentiments.map((sentiment) => (
+                    <Badge
+                      key={sentiment}
+                      variant="secondary"
+                      className="cursor-pointer"
+                      onClick={() => setSelectedSentiments(prev => prev.filter(s => s !== sentiment))}
+                    >
+                      {sentimentDisplayMap[sentiment] || sentiment} ×
+                    </Badge>
+                  ))}
+                </>
               )}
               {keyword && (
                 <Badge variant="secondary" className="cursor-pointer" onClick={() => { setKeyword(''); setSearchInput('') }}>

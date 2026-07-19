@@ -5,7 +5,8 @@ import {
   getDriverTypeLabel,
   getStatusLabel,
   getFetchStatusLabel,
-  getScheduleTypeLabel
+  getScheduleTypeLabel,
+  getCategoryLabel
 } from '@/lib/constants/datasource-labels'
 
 /**
@@ -14,17 +15,20 @@ import {
  *
  * Query参数:
  * - type: 数据源类型过滤
+ * - category: 数据源分类过滤
  * - isActive: 是否激活
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const type = searchParams.get('type')
+    const category = searchParams.get('category')
     const isActive = searchParams.get('isActive')
 
     // 构建查询条件
     const where: any = {}
     if (type) where.type = type
+    if (category) where.category = category
     if (isActive !== null) where.isActive = isActive === 'true'
 
     // 查询数据库
@@ -51,6 +55,8 @@ export async function GET(request: NextRequest) {
       return {
         id: ds.id,
         name: ds.name,
+        category: ds.category,
+        categoryLabel: getCategoryLabel(ds.category),
         type: ds.type,
         typeLabel: getTypeLabel(ds.type),
         driverType: ds.driverType,

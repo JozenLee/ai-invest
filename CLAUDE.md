@@ -10,6 +10,10 @@
 - **AI**: Claude API (Anthropic SDK)
 - **数据服务**: FastAPI + AKShare (Python)
 
+## 环境配置
+1. 复制环境变量模板：`cp .env.example .env`
+2. 编辑 `.env` 文件，填写 `ANTHROPIC_API_KEY` 等配置
+
 ## 常用命令
 ```bash
 # Next.js应用
@@ -23,6 +27,9 @@ npm run typecheck    # TypeScript类型检查
 cd data-service
 pip install -r requirements.txt
 python main.py       # 启动数据服务 (端口8000)
+
+# AI功能测试
+python3 test-ai-classification.py
 
 # 验收测试
 bash scripts/acceptance-test.sh

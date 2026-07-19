@@ -334,35 +334,68 @@ class ContentAnalyzer:
             return self._simple_categorize(content), 0.6
 
         try:
-            prompt = f"""分析以下新闻内容，从以下类别中选择最合适的一个：
-- policy: 政策相关（政策、补贴、规划、意见）
-- earnings: 财报业绩（财报、业绩、营收、利润）
-- product: 产品发布（发布、新品、产品、推出）
-- partnership: 合作并购（合作、并购、收购、战略）
-- supply: 供应链（供应、产能、出货、订单）
-- tech: 技术创新（技术、突破、研发、创新）
-- regulation: 监管政策（制裁、管制、限制、出口）
-- market: 市场动态（其他市场相关）
+            prompt = f"""分析以下新闻内容，从以下22个类别中选择最合适的一个：
 
-只返回类别名称，不要其他内容。
+科技类:
+- ai: 人工智能、大模型相关
+- chip: 芯片、半导体相关
+- internet: 互联网、电商、社交
+- product: 产品发布、新品推出
+- breakthrough: 技术突破、研发创新
+
+财经类:
+- earnings: 财报、业绩、营收、利润
+- merger: 合作、并购、收购、战略
+- capital: 上市、IPO、融资、股市
+- macro: GDP、CPI、央行、货币政策
+
+政策类:
+- policy: 产业政策、补贴、规划
+- regulation: 监管、制裁、管制、限制
+- government: 政府动态、部委、国务院
+
+社会类:
+- event: 社会事件、突发事件
+- consume: 消费、生活、零售
+
+国际类:
+- geopolitics: 地缘政治、国际关系
+- global_market: 全球市场、海外市场
+- trade: 国际贸易、进出口
+
+产业类:
+- supply: 供应链、出货、订单
+- capacity: 产能扩张、建厂、投产
+- competition: 竞争格局、市场份额
+- new_energy: 新能源、光伏、电动车
+- medical: 医药、医疗、创新药
+
+只返回类别代码，不要其他内容。
 
 内容：
 {content[:800]}"""
 
             response = self.client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=20,
+                max_tokens=30,
                 messages=[{"role": "user", "content": prompt}]
             )
 
             result = response.content[0].text.strip().lower()
-            valid_categories = ["policy", "earnings", "product", "partnership", "supply", "tech", "regulation", "market"]
+            valid_categories = [
+                "ai", "chip", "internet", "product", "breakthrough",
+                "earnings", "merger", "capital", "macro",
+                "policy", "regulation", "government",
+                "event", "consume",
+                "geopolitics", "global_market", "trade",
+                "supply", "capacity", "competition", "new_energy", "medical"
+            ]
 
             for cat in valid_categories:
                 if cat in result:
                     return cat, 0.85
 
-            return "market", 0.5
+            return "global_market", 0.5
 
         except Exception as e:
             logger.error(f"AI分类失败: {e}")
@@ -439,25 +472,68 @@ class ContentAnalyzer:
             return self._simple_entities(content)
 
     def _simple_categorize(self, content: str) -> str:
-        """简化版分类"""
+        """简化版分类（降级方案）"""
         content_lower = content.lower()
 
-        if any(kw in content_lower for kw in ["政策", "补贴", "规划", "意见"]):
-            return "policy"
-        elif any(kw in content_lower for kw in ["财报", "业绩", "营收", "利润"]):
-            return "earnings"
+        # 科技类
+        if any(kw in content_lower for kw in ["人工智能", "大模型", "深度学习", "机器学习"]):
+            return "ai"
+        elif any(kw in content_lower for kw in ["芯片", "半导体", "晶圆", "GPU", "CPU"]):
+            return "chip"
+        elif any(kw in content_lower for kw in ["互联网", "电商", "社交", "游戏", "云计算"]):
+            return "internet"
         elif any(kw in content_lower for kw in ["发布", "新品", "产品", "推出"]):
             return "product"
-        elif any(kw in content_lower for kw in ["合作", "并购", "收购", "战略"]):
-            return "partnership"
-        elif any(kw in content_lower for kw in ["供应", "产能", "出货", "订单"]):
-            return "supply"
         elif any(kw in content_lower for kw in ["技术", "突破", "研发", "创新"]):
-            return "tech"
-        elif any(kw in content_lower for kw in ["制裁", "管制", "限制", "出口"]):
+            return "breakthrough"
+
+        # 财经类
+        elif any(kw in content_lower for kw in ["财报", "业绩", "营收", "利润", "净利润"]):
+            return "earnings"
+        elif any(kw in content_lower for kw in ["合作", "并购", "收购", "战略", "投资"]):
+            return "merger"
+        elif any(kw in content_lower for kw in ["上市", "ipo", "融资", "股市", "股价"]):
+            return "capital"
+        elif any(kw in content_lower for kw in ["gdp", "cpi", "央行", "货币", "经济"]):
+            return "macro"
+
+        # 政策类
+        elif any(kw in content_lower for kw in ["政策", "补贴", "规划", "意见"]):
+            return "policy"
+        elif any(kw in content_lower for kw in ["制裁", "管制", "限制", "出口管制", "监管"]):
             return "regulation"
+        elif any(kw in content_lower for kw in ["政府", "国务院", "部委", "发改委"]):
+            return "government"
+
+        # 社会类
+        elif any(kw in content_lower for kw in ["事故", "灾害", "突发"]):
+            return "event"
+        elif any(kw in content_lower for kw in ["消费", "零售", "购物", "生活"]):
+            return "consume"
+
+        # 国际类
+        elif any(kw in content_lower for kw in ["地缘", "冲突", "战争", "外交"]):
+            return "geopolitics"
+        elif any(kw in content_lower for kw in ["海外", "美股", "欧洲", "日本"]):
+            return "global_market"
+        elif any(kw in content_lower for kw in ["贸易", "进出口", "关税"]):
+            return "trade"
+
+        # 产业类
+        elif any(kw in content_lower for kw in ["供应", "出货", "订单"]):
+            return "supply"
+        elif any(kw in content_lower for kw in ["扩产", "建厂", "投产", "产能"]):
+            return "capacity"
+        elif any(kw in content_lower for kw in ["市场份额", "竞争", "格局"]):
+            return "competition"
+        elif any(kw in content_lower for kw in ["新能源", "光伏", "风电", "电动车", "锂电"]):
+            return "new_energy"
+        elif any(kw in content_lower for kw in ["医药", "医疗", "创新药", "疫苗"]):
+            return "medical"
+
+        # 默认
         else:
-            return "market"
+            return "global_market"
 
     def _simple_keywords(self, content: str) -> List[str]:
         """简化版关键词提取"""

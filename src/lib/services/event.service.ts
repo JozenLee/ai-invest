@@ -50,9 +50,9 @@ export class EventService {
   async getNewsFeed(params: {
     category?: string
     categoryIds?: string[]
-    domainId?: string
+    domainIds?: string[]
     keyword?: string
-    sentiment?: string
+    sentiments?: string[]
     sortBy?: string
     limit?: number
     offset?: number
@@ -60,9 +60,9 @@ export class EventService {
     const {
       category,
       categoryIds,
-      domainId,
+      domainIds,
       keyword,
-      sentiment,
+      sentiments,
       sortBy = 'publishTime',
       limit = 20,
       offset = 0,
@@ -79,23 +79,28 @@ export class EventService {
         where.category = category
       }
 
-      // 领域筛选
-      if (domainId) {
-        where.domainId = domainId
+      // 领域筛选（支持多选）
+      if (domainIds && domainIds.length > 0) {
+        where.domainId = { in: domainIds }
       }
 
-      // 情感筛选
-      if (sentiment) {
-        switch (sentiment) {
-          case 'bullish':
-            where.sentiment = { gt: 0.2 }
-            break
-          case 'bearish':
-            where.sentiment = { lt: -0.2 }
-            break
-          case 'neutral':
-            where.sentiment = { gte: -0.2, lte: 0.2 }
-            break
+      // 情感筛选（支持多选）
+      if (sentiments && sentiments.length > 0) {
+        const sentimentConditions = sentiments.map(sentiment => {
+          switch (sentiment) {
+            case 'bullish':
+              return { sentiment: { gt: 0.2 } }
+            case 'bearish':
+              return { sentiment: { lt: -0.2 } }
+            case 'neutral':
+              return { sentiment: { gte: -0.2, lte: 0.2 } }
+            default:
+              return null
+          }
+        }).filter(Boolean)
+
+        if (sentimentConditions.length > 0) {
+          where.OR = sentimentConditions
         }
       }
 
@@ -637,16 +642,41 @@ export class EventService {
         },
       });
 
-      // 分类映射表
+      // 分类映射表 - 支持22类完整映射
       const categoryMap: Record<string, string[]> = {
-        policy: ['政策', '宏观政策', '产业政策'],
-        earnings: ['业绩', '财报', '盈利'],
+        // 科技类
+        ai: ['人工智能', 'AI', '大模型'],
+        chip: ['芯片', '半导体', 'GPU'],
+        internet: ['互联网', '电商', '社交'],
         product: ['产品', '新品', '发布'],
-        partnership: ['合作', '战略合作', '并购'],
-        supply: ['供应链', '供应', '产能'],
-        tech: ['技术', '研发', '创新'],
-        regulation: ['监管', '合规', '法规'],
-        market: ['市场', '行情', '趋势'],
+        breakthrough: ['技术', '研发', '创新', '突破'],
+
+        // 财经类
+        earnings: ['业绩', '财报', '盈利', '营收'],
+        merger: ['合作', '并购', '收购', '战略'],
+        capital: ['资本', '上市', 'IPO', '融资'],
+        macro: ['宏观', '经济', 'GDP', '央行'],
+
+        // 政策类
+        policy: ['政策', '规划', '补贴'],
+        regulation: ['监管', '制裁', '管制'],
+        government: ['政府', '国务院', '部委'],
+
+        // 社会类
+        event: ['事件', '突发', '事故'],
+        consume: ['消费', '零售', '生活'],
+
+        // 国际类
+        geopolitics: ['地缘', '政治', '外交'],
+        global_market: ['市场', '全球', '海外'],
+        trade: ['贸易', '进出口', '关税'],
+
+        // 产业类
+        supply: ['供应', '供应链', '订单'],
+        capacity: ['产能', '扩产', '建厂'],
+        competition: ['竞争', '格局', '份额'],
+        new_energy: ['新能源', '光伏', '电动'],
+        medical: ['医药', '医疗', '创新药'],
       };
 
       const keywords = categoryMap[aiCategory] || [];

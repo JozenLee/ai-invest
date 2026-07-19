@@ -27,7 +27,7 @@ def get_anthropic_client():
     _client_initialized = True
 
     # 读取环境变量
-    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
     base_url = os.getenv("ANTHROPIC_BASE_URL")
 
     print(f"[AI] 初始化 Anthropic 客户端...")
@@ -129,7 +129,7 @@ async def health_check():
         健康状态和配置信息
     """
     client = get_anthropic_client()
-    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+    api_key = os.getenv("ANTHROPIC_API_KEY")
     model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
     return {
@@ -171,7 +171,14 @@ async def analyze_event(request: EventAnalysisRequest):
 请分析以下新闻事件，并以JSON格式返回分析结果。
 
 分析维度：
-1. 事件分类（policy/earnings/product/partnership/supply/tech/regulation/market）
+1. 事件分类 - 从以下22个类别中选择最匹配的一个：
+   科技类: ai(人工智能), chip(芯片半导体), internet(互联网), product(产品发布), breakthrough(技术突破)
+   财经类: earnings(财报业绩), merger(合作并购), capital(资本市场), macro(宏观经济)
+   政策类: policy(政策法规), regulation(监管制裁), government(政府动态)
+   社会类: event(社会事件), consume(消费生活)
+   国际类: geopolitics(地缘政治), global_market(全球市场), trade(国际贸易)
+   产业类: supply(供应链), capacity(产能扩张), competition(竞争格局), new_energy(新能源), medical(医药医疗)
+
 2. 情感分析（-1到1的分数，以及置信度）
 3. 影响评估（时间跨度、影响力度1-5、受影响板块及方向）
 4. 实体识别（公司、板块、产品、人物）
@@ -325,7 +332,7 @@ def build_event_analysis_prompt(request: EventAnalysisRequest) -> str:
 
 请以JSON格式返回分析结果，包含以下字段：
 {{
-  "category": "事件分类",
+  "category": "事件分类（从22个类别中选择：ai/chip/internet/product/breakthrough/earnings/merger/capital/macro/policy/regulation/government/event/consume/geopolitics/global_market/trade/supply/capacity/competition/new_energy/medical）",
   "sentiment": {{
     "score": 情感分数(-1到1),
     "confidence": 置信度(0到1),
