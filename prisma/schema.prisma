@@ -188,6 +188,7 @@ model DataSource {
   type            String   // 类型：financial/social/video/custom
   driverType      String   @default("api") // 驱动类型：api/crawler/rss/social
   provider        String   // 提供商标识
+  category        String   @default("综合财经媒体") // 数据源分类
   config          String   // JSON: 配置信息（URL、API key等）
   configSchema    String?  // JSON Schema: 用于UI动态生成表单
   updateFrequency Int      @default(60) // 更新频率（分钟）
