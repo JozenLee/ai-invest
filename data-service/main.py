@@ -12,7 +12,7 @@ from datetime import datetime
 # 加载环境变量
 load_dotenv()
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -108,6 +108,7 @@ app.include_router(providers.router, prefix="/api", tags=["providers"])
 app.include_router(ai.router, prefix="/api", tags=["ai"])
 app.include_router(search.router, prefix="", tags=["search"])
 app.include_router(cache.router, prefix="", tags=["cache"])
+app.include_router(datasources.router, prefix="/api", tags=["datasources"])
 
 @app.get("/health")
 async def health_check():
