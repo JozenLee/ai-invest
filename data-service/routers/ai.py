@@ -10,18 +10,56 @@ from datetime import datetime
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
-# 检查 Anthropic API Key
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-
-# 延迟导入 Anthropic（避免未配置时报错）
+# 全局客户端变量
 anthropic_client = None
-if ANTHROPIC_API_KEY:
+_client_initialized = False
+
+def get_anthropic_client():
+    """
+    延迟初始化 Anthropic 客户端
+    在第一次调用时才读取环境变量并初始化
+    """
+    global anthropic_client, _client_initialized
+
+    if _client_initialized:
+        return anthropic_client
+
+    _client_initialized = True
+
+    # 读取环境变量
+    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+
+    print(f"[AI] 初始化 Anthropic 客户端...")
+    print(f"[AI] API Key: {'已设置' if api_key else '未设置'}")
+    print(f"[AI] Base URL: {base_url}")
+
+    if not api_key:
+        print(f"[AI] ❌ API Key 未配置")
+        return None
+
     try:
         from anthropic import Anthropic
-        anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+        # 构建客户端参数
+        client_kwargs = {"api_key": api_key}
+
+        # 如果配置了自定义 base_url（第三方 API）
+        if base_url:
+            client_kwargs["base_url"] = base_url
+            print(f"✓ 使用第三方 Anthropic API: {base_url}")
+
+        anthropic_client = Anthropic(**client_kwargs)
+        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        print(f"✓ Anthropic API 已配置，模型: {model}")
+
+        return anthropic_client
     except ImportError:
         print("Warning: anthropic package not installed")
+        return None
+    except Exception as e:
+        print(f"[AI] ❌ 初始化失败: {e}")
+        return None
 
 
 class EventAnalysisRequest(BaseModel):
@@ -90,10 +128,15 @@ async def health_check():
     Returns:
         健康状态和配置信息
     """
+    client = get_anthropic_client()
+    api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+
     return {
-        "status": "healthy" if anthropic_client else "unavailable",
-        "api_key_configured": bool(ANTHROPIC_API_KEY),
-        "model": CLAUDE_MODEL,
+        "status": "healthy" if client else "unavailable",
+        "api_key_configured": bool(api_key),
+        "model": model,
+        "base_url": os.getenv("ANTHROPIC_BASE_URL"),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -109,7 +152,8 @@ async def analyze_event(request: EventAnalysisRequest):
     Returns:
         事件分析结果
     """
-    if not anthropic_client:
+    client = get_anthropic_client()
+    if not client:
         raise HTTPException(
             status_code=503,
             detail="AI service unavailable: ANTHROPIC_API_KEY not configured"
@@ -117,9 +161,10 @@ async def analyze_event(request: EventAnalysisRequest):
 
     try:
         prompt = build_event_analysis_prompt(request)
+        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
 
-        message = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
+        message = client.messages.create(
+            model=model,
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
             system="""你是一位资深的金融分析师，专注于AI硬件产业链分析。
@@ -167,7 +212,8 @@ async def analyze_batch(request: BatchAnalysisRequest):
     Returns:
         批量分析结果
     """
-    if not anthropic_client:
+    client = get_anthropic_client()
+    if not client:
         raise HTTPException(
             status_code=503,
             detail="AI service unavailable: ANTHROPIC_API_KEY not configured"
@@ -212,7 +258,8 @@ async def extract_investment_ideas(request: InvestmentIdeasRequest):
     Returns:
         提取的投资理念
     """
-    if not anthropic_client:
+    client = get_anthropic_client()
+    if not client:
         raise HTTPException(
             status_code=503,
             detail="AI service unavailable: ANTHROPIC_API_KEY not configured"
@@ -235,8 +282,10 @@ async def extract_investment_ideas(request: InvestmentIdeasRequest):
   "confidence": "置信度(0-1)"
 }}"""
 
-        message = anthropic_client.messages.create(
-            model=CLAUDE_MODEL,
+        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+
+        message = client.messages.create(
+            model=model,
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
             system="你是一位专业的投资分析师，擅长提取和总结投资理念。"

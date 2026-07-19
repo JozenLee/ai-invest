@@ -2,10 +2,15 @@
 # FastAPI + AKShare
 
 import logging
+import os
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
+
+# 加载环境变量
+load_dotenv()
 
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache
 
