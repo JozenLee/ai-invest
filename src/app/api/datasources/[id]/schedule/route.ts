@@ -77,7 +77,10 @@ export async function PATCH(
       if (Object.keys(dataSourceUpdate).length > 0) {
         updatedDataSource = await tx.dataSource.update({
           where: { id },
-          data: dataSourceUpdate
+          data: dataSourceUpdate,
+          include: {
+            schedulerJobs: true
+          }
         })
       }
 
