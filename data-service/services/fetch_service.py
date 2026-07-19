@@ -5,11 +5,21 @@
 
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
 logger = logging.getLogger(__name__)
+
+# 延迟导入避免循环依赖
+def get_db():
+    """获取数据库实例"""
+    try:
+        from db import db
+        return db
+    except ImportError:
+        logger.warning("Prisma Client未安装，数据持久化功能不可用")
+        return None
 
 
 class FetchService:
@@ -301,15 +311,102 @@ class FetchService:
     ) -> int:
         """
         持久化数据到本地数据库
-
-        TODO: 集成 Prisma Client Python
-        目前返回模拟结果
         """
-        # TODO: 使用 Prisma Client 批量插入
-        # await prisma.newsarticle.create_many(data=data)
+        db = get_db()
+        if not db:
+            logger.warning("数据库不可用，跳过持久化")
+            return 0
 
-        logger.info(f"数据持久化: source_id={source_id}, count={len(data)}")
-        return len(data)
+        stored_count = 0
+
+        try:
+            for item in data:
+                try:
+                    # 解析发布时间
+                    publish_time = self._parse_publish_time(item.get("publishTime", ""))
+
+                    # 计算过期时间（默认7天后）
+                    expires_at = datetime.now() + timedelta(days=7)
+
+                    # 准备数据
+                    article_data = {
+                        "title": item.get("title", "")[:500],  # 限制长度
+                        "content": item.get("content", "")[:10000],
+                        "summary": item.get("title", "")[:200],
+                        "source": item.get("source", "未知"),
+                        "url": item.get("url"),
+                        "publishTime": publish_time,
+                        "category": item.get("category", "market"),
+                        "sentiment": item.get("sentiment"),
+                        "sentimentLabel": item.get("sentimentLabel"),
+                        "sentimentConfidence": item.get("sentimentConfidence", 0.0),
+                        "sectors": str(item.get("sectors", [])),  # JSON字符串
+                        "sourceId": source_id,
+                        "aiProcessed": item.get("aiProcessed", False),
+                        "aiProcessedAt": datetime.fromisoformat(item["aiProcessedAt"]) if item.get("aiProcessedAt") else None,
+                        "aiError": item.get("aiError"),
+                        "expiresAt": expires_at
+                    }
+
+                    # 检查是否已存在（根据URL去重）
+                    if article_data["url"]:
+                        existing = await db.newsarticle.find_first(
+                            where={"url": article_data["url"]}
+                        )
+                        if existing:
+                            logger.debug(f"文章已存在，跳过: {article_data['url']}")
+                            continue
+
+                    # 插入数据库
+                    await db.newsarticle.create(data=article_data)
+                    stored_count += 1
+
+                except Exception as e:
+                    logger.error(f"插入单条数据失败: {e}, title={item.get('title', '')[:50]}")
+                    continue
+
+            logger.info(f"数据持久化完成: source_id={source_id}, stored={stored_count}/{len(data)}")
+            return stored_count
+
+        except Exception as e:
+            logger.error(f"数据持久化失败: {e}")
+            return stored_count
+
+    def _parse_publish_time(self, time_str: str) -> datetime:
+        """解析发布时间"""
+        if not time_str:
+            return datetime.now()
+
+        try:
+            # 尝试标准格式
+            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"]:
+                try:
+                    return datetime.strptime(time_str, fmt)
+                except ValueError:
+                    continue
+
+            # 相对时间处理
+            import re
+            now = datetime.now()
+
+            if "天前" in time_str:
+                match = re.search(r"(\d+)\s*天前", time_str)
+                if match:
+                    return now - timedelta(days=int(match.group(1)))
+            elif "小时前" in time_str:
+                match = re.search(r"(\d+)\s*小时前", time_str)
+                if match:
+                    return now - timedelta(hours=int(match.group(1)))
+            elif "分钟前" in time_str:
+                match = re.search(r"(\d+)\s*分钟前", time_str)
+                if match:
+                    return now - timedelta(minutes=int(match.group(1)))
+
+            return now
+
+        except Exception as e:
+            logger.warning(f"时间解析失败: {time_str}, error={e}")
+            return datetime.now()
 
     async def _create_fetch_log(
         self,
@@ -317,10 +414,25 @@ class FetchService:
         status: str
     ) -> str:
         """创建采集日志"""
-        # TODO: 使用 Prisma Client 创建日志
-        # log = await prisma.datasourcelog.create(...)
-        # return log.id
-        return f"log_{datetime.now().timestamp()}"
+        db = get_db()
+        if not db:
+            return f"log_{datetime.now().timestamp()}"
+
+        try:
+            log = await db.datasourcelog.create(
+                data={
+                    "sourceId": source_id,
+                    "status": status,
+                    "message": "采集任务启动",
+                    "fetchedCount": 0,
+                    "processedCount": 0,
+                    "failedCount": 0
+                }
+            )
+            return log.id
+        except Exception as e:
+            logger.error(f"创建采集日志失败: {e}")
+            return f"log_{datetime.now().timestamp()}"
 
     async def _update_fetch_log(
         self,
@@ -334,8 +446,25 @@ class FetchService:
         error_detail: str = ""
     ):
         """更新采集日志"""
-        # TODO: 使用 Prisma Client 更新日志
-        pass
+        db = get_db()
+        if not db:
+            return
+
+        try:
+            await db.datasourcelog.update(
+                where={"id": log_id},
+                data={
+                    "status": status,
+                    "message": message,
+                    "fetchedCount": fetched_count,
+                    "processedCount": processed_count,
+                    "failedCount": failed_count,
+                    "duration": duration,
+                    "errorDetail": error_detail
+                }
+            )
+        except Exception as e:
+            logger.error(f"更新采集日志失败: {e}")
 
     async def _update_source_status(
         self,
@@ -345,8 +474,21 @@ class FetchService:
         error_message: str = ""
     ):
         """更新数据源状态"""
-        # TODO: 使用 Prisma Client 更新数据源
-        pass
+        db = get_db()
+        if not db:
+            return
+
+        try:
+            await db.datasource.update(
+                where={"id": source_id},
+                data={
+                    "lastFetchStatus": status,
+                    "lastFetchAt": last_fetch_at,
+                    "errorMessage": error_message if error_message else None
+                }
+            )
+        except Exception as e:
+            logger.error(f"更新数据源状态失败: {e}")
 
 
 # 全局单例
