@@ -610,6 +610,95 @@ export class EventService {
       }
     }
   }
+
+  /**
+   * 将 AI 分类结果映射到 NewsCategory
+   * @param aiCategory AI 返回的分类 code (policy/earnings/product/partnership/supply/tech/regulation/market)
+   * @returns 数据库中的 NewsCategory ID，如果找不到则返回 null
+   */
+  async mapAICategoryToDatabase(aiCategory: string): Promise<string | null> {
+    try {
+      // 尝试通过 code 直接匹配
+      const category = await prisma.newsCategory.findFirst({
+        where: {
+          code: aiCategory,
+          isActive: true,
+        },
+      });
+
+      if (category) {
+        return category.id;
+      }
+
+      // 如果没有找到，尝试模糊匹配名称
+      const categories = await prisma.newsCategory.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+
+      // 分类映射表
+      const categoryMap: Record<string, string[]> = {
+        policy: ['政策', '宏观政策', '产业政策'],
+        earnings: ['业绩', '财报', '盈利'],
+        product: ['产品', '新品', '发布'],
+        partnership: ['合作', '战略合作', '并购'],
+        supply: ['供应链', '供应', '产能'],
+        tech: ['技术', '研发', '创新'],
+        regulation: ['监管', '合规', '法规'],
+        market: ['市场', '行情', '趋势'],
+      };
+
+      const keywords = categoryMap[aiCategory] || [];
+      for (const cat of categories) {
+        if (keywords.some(keyword => cat.name.includes(keyword))) {
+          return cat.id;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('映射 AI 分类失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 将 AI 领域关键词映射到 Domain
+   * @param keywords AI 提取的关键词数组
+   * @returns 匹配的 Domain ID 数组
+   */
+  async mapAIKeywordsToDomains(keywords: string[]): Promise<string[]> {
+    try {
+      const domains = await prisma.domain.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+
+      const matchedDomainIds = new Set<string>();
+
+      for (const domain of domains) {
+        const domainKeywords = domain.keywords ? JSON.parse(domain.keywords) : [];
+
+        // 检查是否有关键词匹配
+        const hasMatch = keywords.some(keyword =>
+          domainKeywords.some((dk: string) =>
+            keyword.includes(dk) || dk.includes(keyword)
+          )
+        );
+
+        if (hasMatch) {
+          matchedDomainIds.add(domain.id);
+        }
+      }
+
+      return Array.from(matchedDomainIds);
+    } catch (error) {
+      console.error('映射 AI 关键词到领域失败:', error);
+      return [];
+    }
+  }
 }
 
 // 全局单例

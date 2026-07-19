@@ -1,8 +1,8 @@
 # 事件驱动系统重构 - 当前进度报告
 
 **日期**: 2026-07-19  
-**会话**: Phase 1 完成 + Phase 2 R5 完成  
-**状态**: ✅ Phase 1 完成，✅ Phase 2 R5 完成
+**会话**: Phase 1 完成 + Phase 2 R5-R6 完成  
+**状态**: ✅ Phase 1 完成，✅ Phase 2 R5-R6 完成 (50%)
 
 ---
 
@@ -53,50 +53,47 @@
 - ✅ 提交2：Phase 1 测试脚本
 - ✅ 提交3：统计仪表盘 API（Phase 2 开始）
 
-### Phase 2 启动（30%）
+### Phase 2 启动（50%）
 
 **R5: 采集日志和监控（✅ 已完成）**
 - ✅ 创建 `src/app/api/datasources/logs/route.ts`
-  - GET /api/datasources/logs 端点
-  - 支持 sourceId、status 筛选
-  - 支持分页（limit/offset）
-  - 返回完整日志详情和统计数据
-  
 - ✅ 创建 LogViewer 组件
-  - 日志列表展示
-  - 状态过滤器（全部/成功/失败/运行中）
-  - 详情展开面板
-  - 实时刷新功能（每30秒）
-  - 相对时间显示
-  
 - ✅ 创建 HealthMonitor 组件
-  - 健康度评分算法（0-100）
-  - 24小时采集成功率
-  - 统计卡片（总次数、成功、失败、运行中）
-  - 成功率趋势图表（12个时间点）
-  - 失败警告提示
-  
 - ✅ 创建数据源详情页 `/sources/[id]/page.tsx`
-  - 统计卡片（采集次数、文章数、最后采集时间等）
-  - 配置信息展示
-  - 操作按钮（手动采集、编辑、启停、删除）
-  - 集成 HealthMonitor 和 LogViewer
-  
-- ✅ 新增 UI 组件
-  - Progress 组件
-  - Skeleton 组件
-  
-- ✅ 安装依赖
-  - @tanstack/react-query
-  - date-fns
-  - recharts
-  - @radix-ui/react-progress
-  
-- ✅ 修复类型错误
-  - event.service.ts 类定义修复
-  - 所有组件类型检查通过
+- ✅ 新增 UI 组件（Progress、Skeleton）
+- ✅ 安装依赖（@tanstack/react-query、date-fns、recharts）
 
 **完成报告**: `docs/reports/R5-completion-report.md`
+
+**R6: 分类体系与 AI 清洗集成（✅ 已完成）**
+- ✅ 创建 NewsCategory 管理 API
+  - GET /api/events/categories（扁平列表）
+  - GET /api/events/categories/tree（树形结构）
+  
+- ✅ 创建 Domain 管理 API
+  - GET /api/events/domains
+  
+- ✅ 创建 CategoryTreeSelect 组件
+  - 树形结构展示
+  - 多选支持
+  - 展开/收起节点
+  - 自动展开已选择项的父节点
+  - 最大选择数量限制
+  
+- ✅ AI 分类映射逻辑
+  - mapAICategoryToDatabase() 方法
+  - mapAIKeywordsToDomains() 方法
+  - 支持精确匹配和模糊匹配
+  
+- ✅ 新增 UI 组件
+  - Checkbox 组件
+  - Popover 组件
+  
+- ✅ 安装依赖
+  - @radix-ui/react-checkbox
+  - @radix-ui/react-popover
+
+**完成报告**: `docs/reports/R6-completion-report.md`
 
 ---
 
