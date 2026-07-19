@@ -152,23 +152,210 @@ model MarketCapitalFlow {
 
 // ==================== 事件与资讯 ====================
 
-model NewsArticle {
+model NewsCategory {
+  id        String   @id @default(cuid())
+  name      String   // 中文名称（如：科技、政治）
+  code      String   @unique // 英文代码（如：tech、politics）
+  parentId  String?  // 父分类ID，null为一级分类
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  parent   NewsCategory?  @relation("CategoryTree", fields: [parentId], references: [id])
+  children NewsCategory[] @relation("CategoryTree")
+  articles NewsArticle[]
+
+  @@index([parentId])
+}
+
+model Domain {
   id          String   @id @default(cuid())
-  title       String
-  content     String
-  summary     String?  // AI生成摘要
-  source      String
-  url         String?  @unique
-  publishTime DateTime
-  category    String   // policy/earnings/product/...
-  sentiment   Float?   // -1 ~ +1
-  impact      Int?     // 1~5
-  entities    String?  // JSON: 关联实体
-  sectors     String?  // JSON: 关联板块
+  name        String   // 领域名称（如：AI算力、新能源、医药）
+  code        String   @unique // 英文代码
+  description String?
+  keywords    String?  // JSON: 关键词列表
+  graphNodes  String?  // JSON: 关联的知识图谱节点ID
+  isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
+
+  articles     NewsArticle[]
+  influencers  DomainInfluencer[]
+}
+
+model DataSource {
+  id              String   @id @default(cuid())
+  name            String   // 数据源名称
+  type            String   // 类型：financial/social/video/custom
+  driverType      String   @default("api") // 驱动类型：api/crawler/rss/social
+  provider        String   // 提供商标识
+  config          String   // JSON: 配置信息（URL、API key等）
+  configSchema    String?  // JSON Schema: 用于UI动态生成表单
+  updateFrequency Int      @default(60) // 更新频率（分钟）
+  isActive        Boolean  @default(true)
+  lastFetchAt     DateTime?
+  lastFetchStatus String?  // 最后采集状态：success/failed/running
+  errorMessage    String?  // 最后错误信息
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  articles      NewsArticle[]
+  logs          DataSourceLog[]
+  schedulerJobs SchedulerJob[]
+}
+
+model DataSourceLog {
+  id             String   @id @default(cuid())
+  sourceId       String
+  jobId          String?  // 关联调度任务ID
+  status         String   // success/failed/running
+  message        String?
+  fetchedCount   Int      @default(0)
+  processedCount Int      @default(0) // AI处理成功数量
+  failedCount    Int      @default(0) // 处理失败数量
+  duration       Int?     // 耗时（毫秒）
+  errorDetail    String?  // 详细错误信息
+  createdAt      DateTime @default(now())
+
+  source DataSource @relation(fields: [sourceId], references: [id])
+
+  @@index([sourceId])
+  @@index([createdAt])
+  @@index([status])
+}
+
+model NewsArticle {
+  id                  String    @id @default(cuid())
+  title               String
+  content             String
+  summary             String?   // AI生成摘要
+  source              String
+  url                 String?   @unique
+  publishTime         DateTime
+  category            String    // 保留旧字段兼容，后续迁移
+  categoryId          String?   // 关联新分类表
+  categoryConfidence  Float?    @default(0) // 分类置信度
+  domainId            String?   // 关联领域
+  domainIds           String?   // JSON: 多领域支持
+  sourceId            String?   // 关联数据源
+  sentiment           Float?    // -1 ~ +1
+  sentimentLabel      String?   // bullish/neutral/bearish
+  sentimentConfidence Float?    @default(0) // 情感置信度
+  impact              Int?      // 1~5
+  entities            String?   // JSON: 关联实体
+  keywords            String?   // JSON: 提取的关键词
+  sectors             String?   // JSON: 关联板块
+  aiProcessed         Boolean   @default(false) // 是否已AI处理
+  aiProcessedAt       DateTime? // AI处理时间
+  aiError             String?   // AI处理错误
+  expiresAt           DateTime? // 过期时间
+  createdAt           DateTime  @default(now())
+
+  categoryRef NewsCategory? @relation(fields: [categoryId], references: [id])
+  domain      Domain?       @relation(fields: [domainId], references: [id])
+  sourceRef   DataSource?   @relation(fields: [sourceId], references: [id])
 
   @@index([publishTime])
   @@index([category])
+  @@index([categoryId])
+  @@index([domainId])
+  @@index([sourceId])
+  @@index([aiProcessed])
+  @@index([expiresAt])
+  @@index([sentimentLabel])
+}
+
+// ==================== 调度任务 ====================
+
+model SchedulerJob {
+  id             String    @id @default(cuid())
+  sourceId       String    // 关联数据源
+  scheduleType   String    // cron/interval/webhook
+  scheduleConfig String    // JSON: 调度配置 (cron表达式、interval分钟数等)
+  isEnabled      Boolean   @default(true)
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  source DataSource @relation(fields: [sourceId], references: [id])
+
+  @@index([sourceId])
+  @@index([isEnabled, nextRunAt])
+}
+
+// ==================== 筛选规则 ====================
+
+model FilterRule {
+  id          String   @id @default(cuid())
+  name        String   // 规则名称
+  description String?  // 规则描述
+  config      String   // JSON: 筛选配置
+  isActive    Boolean  @default(true)
+  priority    Int      @default(0) // 优先级，数值越大优先级越高
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ==================== 存储配置 ====================
+
+model StorageConfig {
+  id               String    @id @default(cuid())
+  retentionDays    Int       @default(7)    // 数据保留天数
+  maxArticles      Int       @default(10000) // 最大文章数
+  archiveEnabled   Boolean   @default(false) // 是否启用归档
+  archiveAfterDays Int       @default(30)    // 归档天数
+  cleanupSchedule  String    @default("0 2 * * *") // 清理调度Cron表达式
+  lastCleanupAt    DateTime? // 最后清理时间
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+}
+
+// ==================== 大V监控 ====================
+
+model Influencer {
+  id         String   @id @default(cuid())
+  name       String   // 大V名称
+  platform   String   // 平台：weibo/bilibili/xiaohongshu/zhihu
+  accountId  String   // 平台账号ID
+  profileUrl String?  // 主页链接
+  avatarUrl  String?  // 头像链接
+  category   String?  // 擅长领域：tech/finance/macro
+  tags       String?  // JSON: 标签（如：AI、半导体、宏观经济）
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  posts      InfluencerPost[]
+  domains    DomainInfluencer[]
+
+  @@unique([platform, accountId])
+}
+
+model InfluencerPost {
+  id              String   @id @default(cuid())
+  influencerId    String
+  content         String   // 内容/摘要
+  originalUrl     String?  // 原文链接
+  publishTime     DateTime
+  sentiment       Float?   // 情感分数
+  extractedTopics String?  // JSON: 提取的主题/观点
+  relatedDomains  String?  // JSON: 关联领域
+  createdAt       DateTime @default(now())
+
+  influencer Influencer @relation(fields: [influencerId], references: [id])
+
+  @@index([influencerId])
+  @@index([publishTime])
+}
+
+model DomainInfluencer {
+  domainId     String
+  influencerId String
+  relevance    Float    @default(1.0) // 相关度
+
+  domain     Domain      @relation(fields: [domainId], references: [id])
+  influencer Influencer  @relation(fields: [influencerId], references: [id])
+
+  @@id([domainId, influencerId])
 }
 
 // ==================== 知识图谱 ====================

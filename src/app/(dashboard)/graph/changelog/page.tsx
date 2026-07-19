@@ -62,6 +62,15 @@ const actionLabels: Record<string, { label: string; icon: typeof Plus; color: st
   delete_edge: { label: '删除关系', icon: GitBranch, color: 'bg-red-100 text-red-700' },
 }
 
+const actionApiMap: Record<string, string> = {
+  '添加节点': 'add_node',
+  '更新节点': 'update_node',
+  '删除节点': 'delete_node',
+  '添加关系': 'add_edge',
+  '更新关系': 'update_edge',
+  '删除关系': 'delete_edge',
+}
+
 const sourceLabels: Record<string, string> = {
   manual: '手动操作',
   ai_suggested: 'AI建议',
@@ -140,7 +149,7 @@ export default function GraphChangelogPage() {
 
   const filteredLogs = logs.filter(log => {
     if (actionFilter === 'all') return true
-    return log.action === actionFilter
+    return log.action === (actionApiMap[actionFilter] || actionFilter)
   })
 
   const sortedLogs = [...filteredLogs].sort((a, b) => {
@@ -192,12 +201,12 @@ export default function GraphChangelogPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">全部操作</SelectItem>
-                  <SelectItem value="add_node">添加节点</SelectItem>
-                  <SelectItem value="update_node">更新节点</SelectItem>
-                  <SelectItem value="delete_node">删除节点</SelectItem>
-                  <SelectItem value="add_edge">添加关系</SelectItem>
-                  <SelectItem value="update_edge">更新关系</SelectItem>
-                  <SelectItem value="delete_edge">删除关系</SelectItem>
+                  <SelectItem value="添加节点">添加节点</SelectItem>
+                  <SelectItem value="更新节点">更新节点</SelectItem>
+                  <SelectItem value="删除节点">删除节点</SelectItem>
+                  <SelectItem value="添加关系">添加关系</SelectItem>
+                  <SelectItem value="更新关系">更新关系</SelectItem>
+                  <SelectItem value="删除关系">删除关系</SelectItem>
                 </SelectContent>
               </Select>
             </div>

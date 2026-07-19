@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { scoreService } from '@/lib/services/score.service'
-import { claudeClient } from '@/lib/ai/claude'
+import { aiAnalysisService } from '@/lib/services/ai-analysis.service'
 import { calculateAllIndicators, generateSignals, DailyData } from '@/lib/indicators'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
@@ -195,7 +195,7 @@ ${contextInfo}
 5. 风险提示
 6. 投资建议（买入/持有/卖出，建议仓位，持有周期）`
 
-  return claudeClient.analyzeEvent({
+  return aiAnalysisService.analyzeEvent({
     title: `${etfInfo.name}投资分析`,
     content: prompt,
     source: 'AI分析',

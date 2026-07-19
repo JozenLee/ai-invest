@@ -93,9 +93,25 @@ const RELATION_TYPES = [
   { value: 'support', label: '支撑' },
 ]
 
+const RELATION_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  RELATION_TYPES.map((t) => [t.value, t.label])
+)
+
 const NODE_TYPE_LABELS: Record<string, string> = Object.fromEntries(
   NODE_TYPES.map((t) => [t.value, t.label])
 )
+
+const CYCLE_POS_MAP: Record<string, string> = {
+  '上升': 'upturn',
+  '顶部': 'peak',
+  '下降': 'downturn',
+  '底部': 'trough',
+}
+
+const DIRECTION_MAP: Record<string, string> = {
+  '正向': 'positive',
+  '负向': 'negative',
+}
 
 // --------------- 类型 ---------------
 
@@ -619,15 +635,18 @@ export default function GraphEditPage() {
               <div className="space-y-2">
                 <Label>类型 *</Label>
                 <Select
-                  value={nodeForm.type}
-                  onValueChange={(v) => setNodeForm({ ...nodeForm, type: v ?? '' })}
+                  value={NODE_TYPE_LABELS[nodeForm.type] || nodeForm.type}
+                  onValueChange={(v) => {
+                    const nodeType = NODE_TYPES.find(t => t.label === v)
+                    setNodeForm({ ...nodeForm, type: (nodeType?.value || v) ?? '' })
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {NODE_TYPES.map((t) => (
-                      <SelectItem key={t.value} value={t.value}>
+                      <SelectItem key={t.value} value={t.label}>
                         {t.label}
                       </SelectItem>
                     ))}
@@ -685,18 +704,18 @@ export default function GraphEditPage() {
               <div className="space-y-2">
                 <Label>周期位置</Label>
                 <Select
-                  value={nodeForm.cyclePos || '__none__'}
-                  onValueChange={(v) => setNodeForm({ ...nodeForm, cyclePos: (v === '__none__' || !v) ? '' : v })}
+                  value={nodeForm.cyclePos ? (Object.keys(CYCLE_POS_MAP).find(k => CYCLE_POS_MAP[k] === nodeForm.cyclePos) || '__none__') : '__none__'}
+                  onValueChange={(v) => setNodeForm({ ...nodeForm, cyclePos: (v === '__none__' || !v) ? '' : (CYCLE_POS_MAP[v] || v) })}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="未设置" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">未设置</SelectItem>
-                    <SelectItem value="upturn">上升</SelectItem>
-                    <SelectItem value="peak">顶部</SelectItem>
-                    <SelectItem value="downturn">下降</SelectItem>
-                    <SelectItem value="trough">底部</SelectItem>
+                    <SelectItem value="上升">上升</SelectItem>
+                    <SelectItem value="顶部">顶部</SelectItem>
+                    <SelectItem value="下降">下降</SelectItem>
+                    <SelectItem value="底部">底部</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -786,15 +805,18 @@ export default function GraphEditPage() {
               <div className="space-y-2">
                 <Label>关系类型 *</Label>
                 <Select
-                  value={edgeForm.relation}
-                  onValueChange={(v) => setEdgeForm({ ...edgeForm, relation: v ?? '' })}
+                  value={RELATION_TYPE_LABELS[edgeForm.relation] || edgeForm.relation}
+                  onValueChange={(v) => {
+                    const relType = RELATION_TYPES.find(r => r.label === v)
+                    setEdgeForm({ ...edgeForm, relation: (relType?.value || v) ?? '' })
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {RELATION_TYPES.map((r) => (
-                      <SelectItem key={r.value} value={r.value}>
+                      <SelectItem key={r.value} value={r.label}>
                         {r.label}
                       </SelectItem>
                     ))}
@@ -805,15 +827,15 @@ export default function GraphEditPage() {
               <div className="space-y-2">
                 <Label>方向</Label>
                 <Select
-                  value={edgeForm.direction}
-                  onValueChange={(v) => setEdgeForm({ ...edgeForm, direction: v ?? 'positive' })}
+                  value={Object.keys(DIRECTION_MAP).find(k => DIRECTION_MAP[k] === edgeForm.direction) || '正向'}
+                  onValueChange={(v) => setEdgeForm({ ...edgeForm, direction: (v ? DIRECTION_MAP[v] : null) || v || 'positive' })}
                 >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="positive">正向</SelectItem>
-                    <SelectItem value="negative">负向</SelectItem>
+                    <SelectItem value="正向">正向</SelectItem>
+                    <SelectItem value="负向">负向</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

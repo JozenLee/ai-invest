@@ -9,3 +9,16 @@ pydantic>=2.0.0
 httpx>=0.24.0
 apscheduler>=3.10.0
 tushare>=1.4.0
+
+# 社交媒体数据源
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+bilibili-api-python>=16.0.0
+
+# AI内容分析
+anthropic>=0.18.0
+
+# 数据库
+aiosqlite>=0.19.0
+prisma>=0.13.0

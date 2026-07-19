@@ -1,2 +1,14 @@
-# 统一数据层
-# 提供数据源抽象基类、注册表和降级调度
+"""
+数据源 Providers 模块
+"""
+from .bilibili_provider import BilibiliProvider
+from .weibo_provider import WeiboProvider
+from .xiaohongshu_provider import XiaohongshuProvider
+from .loader import ProviderLoader
+
+__all__ = [
+    'BilibiliProvider',
+    'WeiboProvider',
+    'XiaohongshuProvider',
+    'ProviderLoader',
+]

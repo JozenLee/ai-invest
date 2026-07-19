@@ -1,7 +1,7 @@
 // 事件分析服务
 // 提供新闻采集、事件分析、趋势聚合等功能
 
-import { claudeClient, EventAnalysisRequest, EventAnalysisResponse } from '@/lib/ai/claude'
+import { aiAnalysisService, EventAnalysisRequest, EventAnalysisResponse } from '@/lib/services/ai-analysis.service'
 import prisma from '@/lib/db/prisma'
 
 export interface NewsArticle {
@@ -56,7 +56,7 @@ export class EventService {
     sortBy?: string
     limit?: number
     offset?: number
-  }): Promise<{ total: number; items: NewsArticle[] }> {
+  }): Promise<{ total: number; items: NewsArticle[]; source: 'local' | 'remote' }> {
     const {
       category,
       categoryIds,
@@ -141,19 +141,23 @@ export class EventService {
           include: {
             categoryRef: true,
             domain: true,
+            sourceRef: true,
           },
         }),
       ])
 
       if (total > 0) {
+        console.log(`✅ 从本地数据库获取新闻: ${articles.length}/${total} 条`)
+
         return {
           total,
+          source: 'local',
           items: articles.map((a) => ({
             id: a.id,
             title: a.title,
             content: a.content || '',
             summary: a.summary || undefined,
-            source: a.source || '财联社',
+            source: a.sourceRef?.name || a.source || '财联社',
             url: a.url || undefined,
             publishTime: a.publishTime?.toISOString() || new Date().toISOString(),
             category: a.categoryRef?.code || a.category || 'market',
@@ -162,14 +166,19 @@ export class EventService {
             domainId: a.domainId || undefined,
             domainName: a.domain?.name || undefined,
             sentiment: a.sentiment || undefined,
+            sentimentLabel: a.sentimentLabel || undefined,
             impact: a.impact || undefined,
             entities: a.entities ? JSON.parse(a.entities as string) : undefined,
             sectors: a.sectors ? JSON.parse(a.sectors as string) : undefined,
+            keywords: a.keywords ? JSON.parse(a.keywords as string) : undefined,
+            aiProcessed: a.aiProcessed || false,
           })),
         }
       }
-    } catch {
-      // 本地数据库无数据，降级到Python服务
+
+      console.log('⚠️ 本地数据库无数据，降级到Python服务')
+    } catch (error) {
+      console.error('❌ 本地数据库查询失败，降级到Python服务:', error)
     }
 
     // 降级：从Python数据服务获取
@@ -191,8 +200,11 @@ export class EventService {
       throw new Error(data.error || '无法获取新闻数据')
     }
 
+    console.log(`🔄 从Python服务获取新闻: ${data.data.items?.length || 0} 条`)
+
     return {
       total: data.data.total || 0,
+      source: 'remote',
       items: data.data.items || [],
     }
   }
@@ -229,7 +241,7 @@ export class EventService {
       publishTime: article.publishTime
     }
 
-    const analysis = await claudeClient.analyzeEvent(request)
+    const analysis = await aiAnalysisService.analyzeEvent(request)
 
     // 保存分析结果到数据库
     await this.saveAnalysis(article.id, analysis)
@@ -398,6 +410,294 @@ export class EventService {
     const { deleted } = await this.cleanupExpiredNews(retentionDays)
 
     return { saved, deleted }
+  }
+
+  /**
+   * 获取数据源列表
+   */
+  async getDataSources(): Promise<Array<{
+    id: string
+    name: string
+    type: string
+    driverType: string
+    isActive: boolean
+    lastFetchAt?: string
+    lastFetchStatus?: string
+    stats: {
+      articlesCount: number
+      logsCount: number
+      jobsCount: number
+    }
+  }>> {
+    try {
+      const sources = await prisma.dataSource.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          _count: {
+            select: {
+              articles: true,
+              logs: true,
+              schedulerJobs: true
+            }
+          }
+        }
+      })
+
+      return sources.map(s => ({
+        id: s.id,
+        name: s.name,
+        type: s.type,
+        driverType: s.driverType,
+        isActive: s.isActive,
+        lastFetchAt: s.lastFetchAt?.toISOString(),
+        lastFetchStatus: s.lastFetchStatus || undefined,
+        stats: {
+          articlesCount: s._count.articles,
+          logsCount: s._count.logs,
+          jobsCount: s._count.schedulerJobs
+        }
+      }))
+    } catch (error) {
+      console.error('获取数据源列表失败:', error)
+      return []
+    }
+  }
+
+  /**
+   * 获取采集日志
+   */
+  async getFetchLogs(params: {
+    sourceId?: string
+    status?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ total: number; items: Array<any> }> {
+    try {
+      const where: any = {}
+      if (params.sourceId) where.sourceId = params.sourceId
+      if (params.status) where.status = params.status
+
+      const [total, logs] = await Promise.all([
+        prisma.dataSourceLog.count({ where }),
+        prisma.dataSourceLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: params.offset || 0,
+          take: params.limit || 50,
+          include: {
+            source: {
+              select: {
+                name: true,
+                type: true
+              }
+            }
+          }
+        })
+      ])
+
+      return {
+        total,
+        items: logs.map(log => ({
+          id: log.id,
+          sourceId: log.sourceId,
+          sourceName: log.source.name,
+          sourceType: log.source.type,
+          status: log.status,
+          message: log.message,
+          fetchedCount: log.fetchedCount,
+          processedCount: log.processedCount,
+          failedCount: log.failedCount,
+          duration: log.duration,
+          errorDetail: log.errorDetail,
+          createdAt: log.createdAt.toISOString()
+        }))
+      }
+    } catch (error) {
+      console.error('获取采集日志失败:', error)
+      return { total: 0, items: [] }
+    }
+  }
+
+  /**
+   * 获取综合统计数据
+   */
+  async getDashboardStats(): Promise<{
+    articles: {
+      total: number
+      today: number
+      aiProcessed: number
+      bySource: Array<{ source: string; count: number }>
+    }
+    dataSources: {
+      total: number
+      active: number
+      lastFetch: string | null
+    }
+    sentiment: {
+      bullish: number
+      neutral: number
+      bearish: number
+    }
+  }> {
+    try {
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+
+      const [
+        totalArticles,
+        todayArticles,
+        aiProcessedArticles,
+        sourceStats,
+        dataSources,
+        sentimentStats
+      ] = await Promise.all([
+        prisma.newsArticle.count(),
+        prisma.newsArticle.count({
+          where: {
+            createdAt: { gte: today }
+          }
+        }),
+        prisma.newsArticle.count({
+          where: { aiProcessed: true }
+        }),
+        prisma.newsArticle.groupBy({
+          by: ['source'],
+          _count: true,
+          orderBy: { _count: { source: 'desc' } },
+          take: 10
+        }),
+        prisma.dataSource.findMany({
+          orderBy: { lastFetchAt: 'desc' },
+          take: 1
+        }),
+        Promise.all([
+          prisma.newsArticle.count({ where: { sentiment: { gt: 0.2 } } }),
+          prisma.newsArticle.count({ where: { sentiment: { gte: -0.2, lte: 0.2 } } }),
+          prisma.newsArticle.count({ where: { sentiment: { lt: -0.2 } } })
+        ])
+      ])
+
+      const allSources = await prisma.dataSource.count()
+      const activeSources = await prisma.dataSource.count({ where: { isActive: true } })
+
+      return {
+        articles: {
+          total: totalArticles,
+          today: todayArticles,
+          aiProcessed: aiProcessedArticles,
+          bySource: sourceStats.map(s => ({
+            source: s.source,
+            count: s._count
+          }))
+        },
+        dataSources: {
+          total: allSources,
+          active: activeSources,
+          lastFetch: dataSources[0]?.lastFetchAt?.toISOString() || null
+        },
+        sentiment: {
+          bullish: sentimentStats[0],
+          neutral: sentimentStats[1],
+          bearish: sentimentStats[2]
+        }
+      }
+    } catch (error) {
+      console.error('获取统计数据失败:', error)
+      return {
+        articles: { total: 0, today: 0, aiProcessed: 0, bySource: [] },
+        dataSources: { total: 0, active: 0, lastFetch: null },
+        sentiment: { bullish: 0, neutral: 0, bearish: 0 }
+      }
+    }
+  }
+
+  /**
+   * 将 AI 分类结果映射到 NewsCategory
+   * @param aiCategory AI 返回的分类 code (policy/earnings/product/partnership/supply/tech/regulation/market)
+   * @returns 数据库中的 NewsCategory ID，如果找不到则返回 null
+   */
+  async mapAICategoryToDatabase(aiCategory: string): Promise<string | null> {
+    try {
+      // 尝试通过 code 直接匹配
+      const category = await prisma.newsCategory.findFirst({
+        where: {
+          code: aiCategory,
+          isActive: true,
+        },
+      });
+
+      if (category) {
+        return category.id;
+      }
+
+      // 如果没有找到，尝试模糊匹配名称
+      const categories = await prisma.newsCategory.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+
+      // 分类映射表
+      const categoryMap: Record<string, string[]> = {
+        policy: ['政策', '宏观政策', '产业政策'],
+        earnings: ['业绩', '财报', '盈利'],
+        product: ['产品', '新品', '发布'],
+        partnership: ['合作', '战略合作', '并购'],
+        supply: ['供应链', '供应', '产能'],
+        tech: ['技术', '研发', '创新'],
+        regulation: ['监管', '合规', '法规'],
+        market: ['市场', '行情', '趋势'],
+      };
+
+      const keywords = categoryMap[aiCategory] || [];
+      for (const cat of categories) {
+        if (keywords.some(keyword => cat.name.includes(keyword))) {
+          return cat.id;
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('映射 AI 分类失败:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 将 AI 领域关键词映射到 Domain
+   * @param keywords AI 提取的关键词数组
+   * @returns 匹配的 Domain ID 数组
+   */
+  async mapAIKeywordsToDomains(keywords: string[]): Promise<string[]> {
+    try {
+      const domains = await prisma.domain.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+
+      const matchedDomainIds = new Set<string>();
+
+      for (const domain of domains) {
+        const domainKeywords = domain.keywords ? JSON.parse(domain.keywords) : [];
+
+        // 检查是否有关键词匹配
+        const hasMatch = keywords.some(keyword =>
+          domainKeywords.some((dk: string) =>
+            keyword.includes(dk) || dk.includes(keyword)
+          )
+        );
+
+        if (hasMatch) {
+          matchedDomainIds.add(domain.id);
+        }
+      }
+
+      return Array.from(matchedDomainIds);
+    } catch (error) {
+      console.error('映射 AI 关键词到领域失败:', error);
+      return [];
+    }
   }
 }
 
