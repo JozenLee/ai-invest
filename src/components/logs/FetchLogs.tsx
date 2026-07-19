@@ -151,7 +151,7 @@ export function FetchLogs({ sourceId, autoRefresh = false, refreshInterval = 300
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value || 'all')}>
               <SelectTrigger className="w-32">
                 <SelectValue />
               </SelectTrigger>

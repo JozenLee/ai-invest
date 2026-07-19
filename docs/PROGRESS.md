@@ -1,8 +1,8 @@
 # 事件驱动系统重构 - 当前进度报告
 
 **日期**: 2026-07-19  
-**会话**: Phase 1 完成 + Phase 2 启动  
-**状态**: ✅ Phase 1 完成，Phase 2 已开始
+**会话**: Phase 1 完成 + Phase 2 R5 完成  
+**状态**: ✅ Phase 1 完成，✅ Phase 2 R5 完成
 
 ---
 
@@ -53,13 +53,50 @@
 - ✅ 提交2：Phase 1 测试脚本
 - ✅ 提交3：统计仪表盘 API（Phase 2 开始）
 
-### Phase 2 启动（5%）
+### Phase 2 启动（30%）
 
-**R5: 采集日志和监控（已开始）**
-- ✅ 创建 `src/app/api/stats/dashboard/route.ts`
-  - GET /api/stats/dashboard 端点
-  - 返回数据源、文章、情感、采集统计
-  - 计算最近24小时采集成功率
+**R5: 采集日志和监控（✅ 已完成）**
+- ✅ 创建 `src/app/api/datasources/logs/route.ts`
+  - GET /api/datasources/logs 端点
+  - 支持 sourceId、status 筛选
+  - 支持分页（limit/offset）
+  - 返回完整日志详情和统计数据
+  
+- ✅ 创建 LogViewer 组件
+  - 日志列表展示
+  - 状态过滤器（全部/成功/失败/运行中）
+  - 详情展开面板
+  - 实时刷新功能（每30秒）
+  - 相对时间显示
+  
+- ✅ 创建 HealthMonitor 组件
+  - 健康度评分算法（0-100）
+  - 24小时采集成功率
+  - 统计卡片（总次数、成功、失败、运行中）
+  - 成功率趋势图表（12个时间点）
+  - 失败警告提示
+  
+- ✅ 创建数据源详情页 `/sources/[id]/page.tsx`
+  - 统计卡片（采集次数、文章数、最后采集时间等）
+  - 配置信息展示
+  - 操作按钮（手动采集、编辑、启停、删除）
+  - 集成 HealthMonitor 和 LogViewer
+  
+- ✅ 新增 UI 组件
+  - Progress 组件
+  - Skeleton 组件
+  
+- ✅ 安装依赖
+  - @tanstack/react-query
+  - date-fns
+  - recharts
+  - @radix-ui/react-progress
+  
+- ✅ 修复类型错误
+  - event.service.ts 类定义修复
+  - 所有组件类型检查通过
+
+**完成报告**: `docs/reports/R5-completion-report.md`
 
 ---
 
@@ -83,14 +120,9 @@
 
 ## 📋 待完成的工作（Phase 2-4）
 
-### Phase 2: 管理增强（剩余95%）
+### Phase 2: 管理增强（剩余70%）
 
-**R5: 采集日志和监控（剩余工作）**
-- [ ] 创建 `/api/datasources/logs` API
-- [ ] 创建数据源详情页 `/sources/[id]/page.tsx`
-- [ ] 创建 LogViewer 组件
-- [ ] 创建 HealthMonitor 组件
-- [ ] 创建统计图表组件
+**R5: 采集日志和监控（✅ 已完成）**
 
 **R6: 分类体系集成（未开始）**
 - [ ] 创建 NewsCategory 管理 API
@@ -142,11 +174,29 @@ data-service/
 ├── db.py                                    # ⭐ SQLite 访问层（已完成）
 └── test_phase1.py                           # ⭐ Phase 1 测试脚本
 
-src/app/api/stats/dashboard/
-└── route.ts                                 # ⭐ 统计仪表盘 API
+src/app/api/
+├── stats/dashboard/route.ts                 # ⭐ 统计仪表盘 API
+└── datasources/logs/route.ts                # ⭐ 采集日志 API
 
-docs/superpowers/specs/
-└── 2026-07-19-event-driven-design.md        # ⭐ 完整设计文档
+src/app/(dashboard)/events/sources/[id]/
+└── page.tsx                                 # ⭐ 数据源详情页
+
+src/components/
+├── datasources/
+│   ├── LogViewer.tsx                        # ⭐ 日志查看器组件
+│   └── HealthMonitor.tsx                    # ⭐ 健康监控组件
+└── ui/
+    ├── progress.tsx                         # ⭐ Progress 组件
+    └── skeleton.tsx                         # ⭐ Skeleton 组件
+
+docs/
+├── superpowers/specs/
+│   └── 2026-07-19-event-driven-design.md    # ⭐ 完整设计文档
+└── reports/
+    └── R5-completion-report.md              # ⭐ R5 完成报告
+
+scripts/
+└── test-r5.sh                               # ⭐ R5 测试脚本
 ```
 
 ### 修改文件
@@ -154,6 +204,12 @@ docs/superpowers/specs/
 data-service/
 ├── services/fetch_service.py                # ✅ 已更新使用 db.py
 └── requirements.txt                         # ✅ 已添加 aiosqlite
+
+src/
+├── lib/services/event.service.ts            # ✅ 修复类定义
+└── components/logs/FetchLogs.tsx            # ✅ 修复类型错误
+
+package.json                                 # ✅ 新增依赖包
 ```
 
 ---

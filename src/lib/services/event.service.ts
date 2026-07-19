@@ -411,7 +411,6 @@ export class EventService {
 
     return { saved, deleted }
   }
-}
 
   /**
    * 获取数据源列表
@@ -611,6 +610,7 @@ export class EventService {
       }
     }
   }
+}
 
 // 全局单例
 export const eventService = new EventService()
