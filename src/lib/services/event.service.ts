@@ -51,6 +51,7 @@ export class EventService {
     category?: string
     categoryIds?: string[]
     domainIds?: string[]
+    sourceIds?: string[]
     keyword?: string
     sentiments?: string[]
     sortBy?: string
@@ -61,6 +62,7 @@ export class EventService {
       category,
       categoryIds,
       domainIds,
+      sourceIds,
       keyword,
       sentiments,
       sortBy = 'publishTime',
@@ -82,6 +84,11 @@ export class EventService {
       // 领域筛选（支持多选）
       if (domainIds && domainIds.length > 0) {
         where.domainId = { in: domainIds }
+      }
+
+      // 数据源筛选（支持多选）
+      if (sourceIds && sourceIds.length > 0) {
+        where.sourceId = { in: sourceIds }
       }
 
       // 情感筛选（支持多选）

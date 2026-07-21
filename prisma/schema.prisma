@@ -36,6 +36,20 @@ model UserSetting {
   user          User   @relation(fields: [userId], references: [id])
 }
 
+model UserPreferences {
+  id                  String   @id @default(cuid())
+  userId              String?  @unique
+
+  showEstimatedData   Boolean  @default(true)
+  showDataQualityBadge Boolean @default(true)
+  autoRefreshInterval Int      @default(300000)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
 // ==================== 投资组合 ====================
 
 model Portfolio {

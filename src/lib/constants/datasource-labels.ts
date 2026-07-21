@@ -93,7 +93,7 @@ export function getFetchStatusLabel(status: string | null): string {
  */
 const SCHEDULE_TYPE_LABELS: Record<string, string> = {
   cron: 'Cron表达式',
-  interval: '定时间隔',
+  interval: '定时轮询',
   webhook: 'Webhook触发',
 }
 

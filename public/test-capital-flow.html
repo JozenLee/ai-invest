@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head><title>Test Capital Flow</title></head>
+<body>
+<h1>Testing Capital Flow API</h1>
+<pre id="output"></pre>
+<script>
+async function testAPI() {
+  const output = document.getElementById('output');
+  try {
+    output.textContent += '开始请求...\n';
+    const res = await fetch('/api/market/capital-flow');
+    output.textContent += `状态: ${res.status}\n`;
+    
+    const data = await res.json();
+    output.textContent += `成功: ${data.success}\n`;
+    output.textContent += `有数据: ${!!data.data}\n`;
+    output.textContent += `数据类型: ${typeof data}\n`;
+    output.textContent += `是否为空对象: ${JSON.stringify(data) === '{}'}\n`;
+    output.textContent += `键数量: ${Object.keys(data).length}\n`;
+    output.textContent += `完整响应:\n${JSON.stringify(data, null, 2)}`;
+  } catch (err) {
+    output.textContent += `错误: ${err.message}\n`;
+  }
+}
+testAPI();
+</script>
+</body>
+</html>

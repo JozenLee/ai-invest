@@ -21,6 +21,7 @@ import {
   Clock,
 } from 'lucide-react'
 import { useMarketContext } from '@/contexts/MarketContext'
+import { usePreferences } from '@/hooks/usePreferences'
 
 // 数据说明配置
 const dataTooltips = {
@@ -64,6 +65,16 @@ const dataTooltips = {
     description: '当日主力资金净流出最多的行业板块，反映市场回避方向。',
     calculation: '按行业分类统计主力净流出金额，取Top10。数据来源：东方财富行业资金流向。',
   },
+  dataQualityEstimated: {
+    title: '数据质量：估算值',
+    description: '当前显示的资金流向数据为估算值，非实际交易数据。',
+    calculation: '由于大盘资金流向数据源暂时不可用，系统使用行业资金流向汇总估算。主力资金方向大致准确，但散户资金为反向估算，数值可能存在偏差。建议结合其他指标综合判断。',
+  },
+  dataQualityCached: {
+    title: '数据质量：缓存数据',
+    description: '当前显示的资金流向数据为缓存数据，非最新数据。',
+    calculation: '所有数据源暂时不可用，系统显示最近缓存的数据。数据可能已过时，建议稍后刷新或等待数据源恢复后获取最新数据。',
+  },
 }
 
 // Info按钮组件
@@ -89,6 +100,7 @@ function InfoButton({ tooltip }: { tooltip: keyof typeof dataTooltips }) {
 
 export default function DashboardPage() {
   const { indices, capitalFlow, isLoading, error, source, lastUpdate, marketMeta, refetch, format } = useMarketContext()
+  const { preferences } = usePreferences()
 
   const formatNumber = (num: number, decimals = 2) => {
     return num.toFixed(decimals)
@@ -227,6 +239,48 @@ export default function DashboardPage() {
                   <Clock className="h-3 w-3" />
                   非交易时间，数据可能为上一交易日
                 </span>
+              )}
+              {/* 数据质量标识 */}
+              {preferences.showDataQualityBadge && capitalFlow.dataQuality === 'realtime' && (
+                <Badge variant="default" className="text-xs text-green-600 border-green-600">
+                  ✓ 真实数据
+                </Badge>
+              )}
+              {preferences.showDataQualityBadge && capitalFlow.dataQuality === 'estimated' && (
+                <Tooltip>
+                  <TooltipTrigger>
+                    <Badge variant="outline" className="text-xs text-yellow-600 dark:text-yellow-400 border-yellow-400 cursor-help">
+                      ⚠️ 估算数据
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs p-3">
+                    <div className="space-y-1.5">
+                      <p className="font-semibold text-sm">{dataTooltips.dataQualityEstimated.title}</p>
+                      <p className="text-xs text-muted-foreground">{dataTooltips.dataQualityEstimated.description}</p>
+                      <div className="pt-1.5 border-t border-muted-foreground/20">
+                        <p className="text-xs"><span className="font-medium">说明：</span>{dataTooltips.dataQualityEstimated.calculation}</p>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {preferences.showDataQualityBadge && capitalFlow.dataQuality === 'cached' && (
+                <Tooltip>
+                  <TooltipTrigger>
+                    <Badge variant="secondary" className="text-xs cursor-help">
+                      📦 缓存数据
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs p-3">
+                    <div className="space-y-1.5">
+                      <p className="font-semibold text-sm">{dataTooltips.dataQualityCached.title}</p>
+                      <p className="text-xs text-muted-foreground">{dataTooltips.dataQualityCached.description}</p>
+                      <div className="pt-1.5 border-t border-muted-foreground/20">
+                        <p className="text-xs"><span className="font-medium">说明：</span>{dataTooltips.dataQualityCached.calculation}</p>
+                      </div>
+                    </div>
+                  </TooltipContent>
+                </Tooltip>
               )}
             </div>
             <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-5">

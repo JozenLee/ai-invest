@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
     const categoryIdsParam = searchParams.get('categoryIds') || undefined
     const domainId = searchParams.get('domainId') || undefined
     const domainIdsParam = searchParams.get('domainIds') || undefined
+    const sourceIdsParam = searchParams.get('sourceIds') || undefined
     const keyword = searchParams.get('keyword') || undefined
     const sentiment = searchParams.get('sentiment') || undefined
     const sentimentsParam = searchParams.get('sentiments') || undefined
@@ -37,6 +38,12 @@ export async function GET(request: NextRequest) {
       domainIds = [domainId]
     }
 
+    // 处理多个数据源ID（支持逗号分隔的多选）
+    let sourceIds: string[] | undefined
+    if (sourceIdsParam) {
+      sourceIds = sourceIdsParam.split(',').filter(Boolean)
+    }
+
     // 处理多个情感筛选（支持逗号分隔的多选）
     let sentiments: string[] | undefined
     if (sentimentsParam) {
@@ -49,6 +56,7 @@ export async function GET(request: NextRequest) {
       category,
       categoryIds,
       domainIds,
+      sourceIds,
       keyword,
       sentiments,
       sortBy,

@@ -215,6 +215,9 @@ export interface NorthboundData {
   source: string       // 数据来源
 }
 
+// Data quality indicator for market data
+export type DataQuality = 'realtime' | 'estimated' | 'cached' | 'unavailable'
+
 export interface CapitalFlowData {
   market: {
     institutionalNet: number
@@ -229,7 +232,7 @@ export interface CapitalFlowData {
   topOutflowSectors: UnifiedSectorFlow[]
   source?: string
   dataDate?: string
-  dataQuality?: 'realtime' | 'estimated' | 'unknown' | 'unavailable'
+  dataQuality?: DataQuality
 }
 
 export interface MarketMeta {

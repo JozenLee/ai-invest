@@ -164,11 +164,12 @@ class DataProvider(ABC):
 
     # ==================== 新闻 ====================
 
-    async def get_news(self, keyword: str = "财联社", limit: int = 50) -> pd.DataFrame:
+    async def get_news(self, keyword: str = "财联社", limit: int = 50, api: str = "stock_news_em") -> pd.DataFrame:
         """获取新闻资讯（可选实现）
 
         Args:
-            keyword: 新闻来源关键词
+            keyword: 新闻来源关键词或搜索关键词
             limit: 返回条数
+            api: API接口名称（用于支持多个新闻接口的Provider）
         """
         raise NotImplementedError(f"{self.name} 不支持新闻数据")

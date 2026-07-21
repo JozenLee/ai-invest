@@ -20,7 +20,7 @@ import { PageHeader } from '@/components/events/PageHeader'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { StatCard } from '@/components/events/StatCard'
 import { DataSourceCard } from '@/components/events/DataSourceCard'
-import { SchedulerDrawer } from '@/components/events/SchedulerDrawer'
+import { SchedulerDialog } from '@/components/events/SchedulerDialog'
 import { EVENTS_TEXT } from '@/constants/events-text'
 
 interface DataSource {
@@ -54,7 +54,7 @@ export default function DataSourcesPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
 
   // 获取数据源列表
   const fetchDataSources = async () => {
@@ -140,12 +140,12 @@ export default function DataSourcesPage() {
     const source = dataSources.find(ds => ds.id === id)
     if (source) {
       setSelectedSource(source)
-      setIsDrawerOpen(true)
+      setIsDialogOpen(true)
     }
   }
 
   // 调度器设置更新后的回调
-  const handleDrawerUpdate = async () => {
+  const handleDialogUpdate = async () => {
     await fetchDataSources()
   }
 
@@ -229,10 +229,12 @@ export default function DataSourcesPage() {
           <span className="text-sm font-medium">数据源类别：</span>
           <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value ?? 'all')}>
             <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder={`${EVENTS_TEXT.common.all}类别`} />
+              <SelectValue>
+                {categoryFilter === 'all' ? '全部类别' : categoryFilter}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">{EVENTS_TEXT.common.all}类别</SelectItem>
+              <SelectItem value="all">全部类别</SelectItem>
               <SelectItem value="综合财经媒体">综合财经媒体</SelectItem>
               <SelectItem value="科技媒体">科技媒体</SelectItem>
               <SelectItem value="社交媒体">社交媒体</SelectItem>
@@ -287,13 +289,13 @@ export default function DataSourcesPage() {
         </CardContent>
       </Card>
 
-      {/* 调度器设置抽屉 */}
+      {/* 调度器设置对话框 */}
       {selectedSource && (
-        <SchedulerDrawer
-          open={isDrawerOpen}
-          onOpenChange={setIsDrawerOpen}
+        <SchedulerDialog
+          open={isDialogOpen}
+          onOpenChange={setIsDialogOpen}
           dataSource={selectedSource}
-          onUpdate={handleDrawerUpdate}
+          onUpdate={handleDialogUpdate}
         />
       )}
     </div>

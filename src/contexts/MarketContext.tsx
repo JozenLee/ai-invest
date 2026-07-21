@@ -39,17 +39,30 @@ export function MarketProvider({ children }: MarketProviderProps) {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
   const fetchData = useCallback(async () => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[MarketContext] 开始获取数据...')
+    }
     setIsLoading(true)
     setError(null)
 
     try {
-      const clientTimeout = AbortSignal.timeout(30000)
+      // Reduced timeout for better UX - fail fast and show cached data
+      const clientTimeout = AbortSignal.timeout(10000)
+
+      const startTime = Date.now()
 
       // Parallel requests for index data and capital flow data
       const [overviewRes, capitalRes] = await Promise.all([
         fetch('/api/market/overview', { signal: clientTimeout }),
         fetch('/api/market/capital-flow', { signal: clientTimeout }),
       ])
+
+      const fetchDuration = Date.now() - startTime
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`[MarketContext] API 请求完成 (${fetchDuration}ms)`)
+        console.log(`  - overview: ${overviewRes.status}`)
+        console.log(`  - capital-flow: ${capitalRes.status}`)
+      }
 
       // Process index data
       if (overviewRes.ok) {
@@ -70,73 +83,99 @@ export function MarketProvider({ children }: MarketProviderProps) {
           }
         }
       } else {
+        console.error('[MarketContext] overview 请求失败:', overviewRes.status)
         setIndices([])
       }
 
       // Process capital flow data
       if (capitalRes.ok) {
         const capitalData = await capitalRes.json()
-        if (capitalData.success && capitalData.data) {
-          setCapitalFlow(capitalData.data)
 
-          // Extract northbound data (unified structure)
-          if (capitalData.data.northbound) {
-            const nb = capitalData.data.northbound
-            // Validate: must have net value and it must be a non-NaN number
-            if (nb && typeof nb.net === 'number' && !isNaN(nb.net)) {
-              setNorthbound(nb)
-            } else {
-              console.warn('[MarketContext] Invalid northbound data:', nb)
-              setNorthbound(null)
-            }
-          }
-
-          // Extract sentiment index
-          if (capitalData.data.market?.sentiment !== undefined) {
-            setSentiment(capitalData.data.market.sentiment)
-          }
-
-          // Prefer capital flow's source (more precise)
-          if (capitalData.data.source) {
-            setSource(capitalData.data.source)
-          } else if (capitalData.source) {
-            setSource(capitalData.source)
-          }
-
-          // Prefer capital flow's meta (more complete)
-          if (capitalData.data?.meta || capitalData.meta) {
-            setMarketMeta(capitalData.data?.meta || capitalData.meta)
-          }
-        } else {
+        // Defensive check: ensure not empty object
+        if (!capitalData || Object.keys(capitalData).length === 0) {
+          console.error('[MarketContext] capital-flow 返回空对象')
           setCapitalFlow(null)
-          if (capitalData.error) {
-            setError(capitalData.error)
-          }
-          if (capitalData.meta) {
-            setMarketMeta(capitalData.meta)
+        } else {
+          if (capitalData.success && capitalData.data) {
+            setCapitalFlow(capitalData.data)
+
+            // Extract northbound data (unified structure)
+            if (capitalData.data.northbound) {
+              const nb = capitalData.data.northbound
+              // Validate: must have net value and it must be a non-NaN number
+              if (nb && typeof nb.net === 'number' && !isNaN(nb.net)) {
+                setNorthbound(nb)
+              } else {
+                console.warn('[MarketContext] Invalid northbound data:', nb)
+                setNorthbound(null)
+              }
+            }
+
+            // Extract sentiment index
+            if (capitalData.data.market?.sentiment !== undefined) {
+              setSentiment(capitalData.data.market.sentiment)
+            }
+
+            // Prefer capital flow's source (more precise)
+            if (capitalData.data.source) {
+              setSource(capitalData.data.source)
+            } else if (capitalData.source) {
+              setSource(capitalData.source)
+            }
+
+            // Prefer capital flow's meta (more complete)
+            if (capitalData.data?.meta || capitalData.meta) {
+              setMarketMeta(capitalData.data?.meta || capitalData.meta)
+            }
+          } else {
+            // Data service unavailable - don't pollute console with verbose logs
+            setCapitalFlow(null)
+            if (capitalData.error) {
+              console.warn('[MarketContext] 资金流向数据不可用:', capitalData.error)
+              setError(capitalData.error)
+            }
+            if (capitalData.meta) {
+              setMarketMeta(capitalData.meta)
+            }
           }
         }
       } else {
+        console.error('[MarketContext] capital-flow 请求失败:', capitalRes.status)
         setCapitalFlow(null)
       }
 
       setLastUpdate(new Date())
     } catch (err) {
-      console.error('Failed to fetch market data:', err)
-      setError('Network request failed. Please check if the data service is running.')
-      setIndices([])
-      setCapitalFlow(null)
+      const errorMessage = err instanceof Error ? err.message : String(err)
+      console.error('[MarketContext] 数据获取失败:', errorMessage)
+
+      // Provide user-friendly error message
+      if (errorMessage.includes('aborted')) {
+        setError('数据请求超时，请检查网络连接或稍后重试')
+      } else {
+        setError('网络请求失败，请确认数据服务已启动')
+      }
+
+      // Keep existing data on error - don't clear everything
+      // setIndices([])
+      // setCapitalFlow(null)
     } finally {
       setIsLoading(false)
     }
   }, [])
 
+  // 初始加载
   useEffect(() => {
     fetchData()
+  }, [fetchData])
 
-    // Refresh every 30s during trading hours, every 5 minutes otherwise
+  // 自动刷新定时器
+  useEffect(() => {
+    // 交易时段每30秒刷新，非交易时段每5分钟刷新
     const refreshInterval = marketMeta?.isOpen ? 30 * 1000 : 5 * 60 * 1000
-    const interval = setInterval(fetchData, refreshInterval)
+    const interval = setInterval(() => {
+      fetchData()
+    }, refreshInterval)
 
     return () => clearInterval(interval)
   }, [marketMeta?.isOpen, fetchData])

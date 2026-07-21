@@ -227,8 +227,8 @@ async def get_macro_capital_flow():
             market_total = main_net + retail_net
             data_date = str(market_data.get("日期", datetime.now().strftime("%Y-%m-%d")))
 
-            total_abs = abs(main_net) + abs(retail_net)
-            retail_pct = round((retail_net / total_abs) * 100, 2) if total_abs > 0 else 0
+            # 散户净占比 = -主力净占比（资金零和博弈）
+            retail_pct = round(-main_pct, 2)
         else:
             main_net = retail_net = market_total = 0
             main_pct = retail_pct = 0

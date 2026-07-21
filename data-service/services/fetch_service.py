@@ -160,19 +160,38 @@ class FetchService:
 
     async def _get_provider(self, driver_type: str, config: Dict[str, Any]):
         """根据驱动类型获取对应的 Provider"""
-        # TODO: 实现驱动注册表，动态获取 Provider
-        # 目前先使用现有的 AKShare Provider
-        from services.data_service import data_service
-        return data_service
+        provider_name = config.get("provider", "akshare")
+
+        if provider_name == "xueqiu":
+            from providers.xueqiu_provider import XueqiuProvider
+            return XueqiuProvider()
+        elif provider_name == "akshare":
+            # 直接使用AKShareProvider实例，而不是data_service
+            from providers.akshare_provider import AKShareProvider
+            return AKShareProvider()
+        else:
+            # 默认使用 AKShare
+            logger.warning(f"未知的provider: {provider_name}，使用默认的akshare")
+            from providers.akshare_provider import AKShareProvider
+            return AKShareProvider()
 
     async def _fetch_data(self, provider, config: Dict[str, Any]) -> List[Dict]:
         """执行数据采集"""
         try:
-            # 目前使用财联社新闻作为示例
+            # 动态使用配置中的关键词和限制
+            keywords = config.get("keywords", [])
+            keyword = keywords[0] if keywords else config.get("keyword", "")
+            limit = config.get("limit", 50)
+            api = config.get("api", "stock_news_em")  # 新增：API类型
+
+            logger.info(f"开始采集数据: api={api}, keyword={keyword}, limit={limit}")
+
             import pandas as pd
-            df = await provider.get_news(keyword="财联社", limit=50)
+            # 调用Provider的get_news方法，传入api参数
+            df = await provider.get_news(keyword=keyword, limit=limit, api=api)
 
             if df.empty:
+                logger.warning("采集结果为空")
                 return []
 
             # 转换为字典列表
@@ -183,9 +202,10 @@ class FetchService:
                     "content": str(row.get("新闻内容", "")),
                     "url": str(row.get("新闻链接", "")),
                     "publishTime": str(row.get("发布时间", "")),
-                    "source": "财联社"
+                    "source": str(row.get("来源", "未知"))  # 动态获取来源
                 })
 
+            logger.info(f"成功转换 {len(news_list)} 条数据")
             return news_list
 
         except Exception as e:

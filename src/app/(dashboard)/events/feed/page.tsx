@@ -41,9 +41,16 @@ interface NewsArticle {
   categoryName?: string
   domainId?: string
   domainName?: string
+  sourceId?: string
   sentiment?: number
   impact?: number
   sectors?: string[]
+}
+
+interface DataSource {
+  id: string
+  name: string
+  category: string
 }
 
 const sentimentConfig = {
@@ -82,8 +89,10 @@ export default function EventsFeedPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [categories, setCategories] = useState<NewsCategory[]>([])
   const [domains, setDomains] = useState<Domain[]>([])
+  const [dataSources, setDataSources] = useState<DataSource[]>([])
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([])
   const [selectedDomainIds, setSelectedDomainIds] = useState<string[]>([])
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
   const [selectedSentiments, setSelectedSentiments] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<string>('publishTime')
   const [keyword, setKeyword] = useState('')
@@ -157,6 +166,21 @@ export default function EventsFeedPage() {
     }
   }
 
+  // 获取数据源列表
+  const fetchDataSources = async () => {
+    try {
+      const response = await fetch('/api/datasources')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success && data.data) {
+          setDataSources(data.data)
+        }
+      }
+    } catch (error) {
+      console.error('获取数据源失败:', error)
+    }
+  }
+
   // 获取新闻数据
   const fetchNews = useCallback(async () => {
     setIsLoading(true)
@@ -168,6 +192,9 @@ export default function EventsFeedPage() {
       }
       if (selectedDomainIds.length > 0) {
         url += `&domainIds=${selectedDomainIds.join(',')}`
+      }
+      if (selectedSourceIds.length > 0) {
+        url += `&sourceIds=${selectedSourceIds.join(',')}`
       }
       if (selectedSentiments.length > 0) {
         const mappedSentiments = selectedSentiments.map(s => sentimentApiMap[s] || s)
@@ -188,11 +215,12 @@ export default function EventsFeedPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedCategoryIds, selectedDomainIds, selectedSentiments, sortBy, keyword])
+  }, [selectedCategoryIds, selectedDomainIds, selectedSourceIds, selectedSentiments, sortBy, keyword])
 
   useEffect(() => {
     fetchCategories()
     fetchDomains()
+    fetchDataSources()
   }, [])
 
   useEffect(() => {
@@ -212,6 +240,7 @@ export default function EventsFeedPage() {
   const clearFilters = () => {
     setSelectedCategoryIds([])
     setSelectedDomainIds([])
+    setSelectedSourceIds([])
     setSelectedSentiments([])
     setSortBy('publishTime')
     setKeyword('')
@@ -435,6 +464,19 @@ export default function EventsFeedPage() {
               className="w-full"
             />
 
+            {/* 数据源筛选 */}
+            <MultiSelect
+              value={selectedSourceIds}
+              onChange={setSelectedSourceIds}
+              options={dataSources.map(source => ({
+                value: source.id,
+                label: source.name,
+              }))}
+              placeholder="数据源筛选"
+              title="选择数据源"
+              className="w-full"
+            />
+
             {/* 排序 */}
             <Select value={sortBy} onValueChange={(value) => setSortBy(value || 'publishTime')}>
               <SelectTrigger className="w-full">
@@ -453,7 +495,7 @@ export default function EventsFeedPage() {
           {/* 分类筛选 - 移除旧的树形选择器 */}
 
           {/* 当前筛选条件 */}
-          {(selectedCategoryIds.length > 0 || selectedDomainIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
+          {(selectedCategoryIds.length > 0 || selectedDomainIds.length > 0 || selectedSourceIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
             <div className="flex flex-wrap items-center gap-2 text-sm pt-2 border-t">
               <span className="text-muted-foreground">当前筛选：</span>
               {selectedCategoryIds.length > 0 && (
@@ -482,6 +524,23 @@ export default function EventsFeedPage() {
                         onClick={() => setSelectedDomainIds(prev => prev.filter(id => id !== domainId))}
                       >
                         {domain?.name || domainId} ×
+                      </Badge>
+                    )
+                  })}
+                </>
+              )}
+              {selectedSourceIds.length > 0 && (
+                <>
+                  {selectedSourceIds.map((sourceId) => {
+                    const source = dataSources.find(s => s.id === sourceId)
+                    return (
+                      <Badge
+                        key={sourceId}
+                        variant="secondary"
+                        className="cursor-pointer"
+                        onClick={() => setSelectedSourceIds(prev => prev.filter(id => id !== sourceId))}
+                      >
+                        {source?.name || sourceId} ×
                       </Badge>
                     )
                   })}

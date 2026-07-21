@@ -12,6 +12,15 @@ from datetime import datetime
 # 加载环境变量
 load_dotenv()
 
+# 修复：禁用系统代理，避免AKShare/requests库代理问题
+# macOS系统配置了HTTP代理(127.0.0.1:1082)但代理连接不稳定
+# 直连东方财富API更可靠
+os.environ.pop('HTTP_PROXY', None)
+os.environ.pop('HTTPS_PROXY', None)
+os.environ.pop('http_proxy', None)
+os.environ.pop('https_proxy', None)
+os.environ['NO_PROXY'] = '*'
+
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources
 
 # 配置日志
@@ -91,7 +100,10 @@ app = FastAPI(
 # CORS配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://100.80.210.104:3000",  # 内网访问
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

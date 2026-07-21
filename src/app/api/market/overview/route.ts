@@ -62,7 +62,7 @@ export async function GET() {
   try {
     // 优先：Python 数据服务（多源聚合）
     const response = await fetch(`${DATA_SERVICE_URL}/api/market/overview`, {
-      signal: AbortSignal.timeout(20000),
+      signal: AbortSignal.timeout(15000), // Reduced from 20s to 15s for better UX
     })
 
     if (response.ok) {
