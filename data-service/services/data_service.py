@@ -32,6 +32,10 @@ class DataService:
         if self._initialized:
             return
 
+        # 注册 NewsNow（财经新闻聚合）
+        from providers.newsnow_provider import NewsNowProvider
+        self.registry.register(NewsNowProvider())
+
         # 注册 AKShare
         from providers.akshare_provider import AKShareProvider
         self.registry.register(AKShareProvider())

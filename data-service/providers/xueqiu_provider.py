@@ -363,12 +363,8 @@ class XueqiuProvider(DataProvider):
                                 else:
                                     url_link = ""
 
-                                # 解析时间戳
-                                created_at = item.get("created_at", 0)
-                                if created_at:
-                                    publish_time = datetime.fromtimestamp(created_at / 1000).strftime("%Y-%m-%d %H:%M:%S")
-                                else:
-                                    publish_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                # 解析时间戳（优先级：created_at > 当前时间）
+                                publish_time = self._extract_publish_time(item)
 
                                 # 关键词过滤
                                 if keyword:
@@ -402,6 +398,41 @@ class XueqiuProvider(DataProvider):
         except Exception as e:
             print(f"[Xueqiu] 获取新闻失败: {e}")
             return self._generate_sample_news(keyword, limit)
+
+    def _extract_publish_time(self, item: Dict) -> str:
+        """
+        从雪球API响应中提取发布时间
+
+        优先级：
+        1. created_at字段（Unix时间戳，毫秒）
+        2. 当前时间（降级方案，记录警告）
+
+        Args:
+            item: 雪球API返回的单条动态数据
+
+        Returns:
+            时间字符串 (YYYY-MM-DD HH:MM:SS)
+        """
+        try:
+            # 优先级1: created_at字段（Unix时间戳毫秒）
+            created_at = item.get("created_at", 0)
+            if created_at and created_at > 0:
+                try:
+                    # 雪球API的时间戳是毫秒级
+                    timestamp = int(created_at) / 1000
+                    dt = datetime.fromtimestamp(timestamp)
+                    return dt.strftime("%Y-%m-%d %H:%M:%S")
+                except (ValueError, TypeError, OSError) as e:
+                    print(f"[Xueqiu] 解析created_at字段失败: {e}, value={created_at}")
+
+            # 降级方案：使用当前时间
+            title_preview = str(item.get("title", item.get("text", "")))[:50]
+            print(f"[Xueqiu] 警告：未找到有效的created_at字段，使用当前时间 (preview={title_preview})")
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        except Exception as e:
+            print(f"[Xueqiu] 提取发布时间时发生未知错误: {e}")
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     def _generate_sample_news(self, keyword: str = "", limit: int = 10) -> pd.DataFrame:
         """生成示例新闻数据（用于API不可用时的降级方案）"""

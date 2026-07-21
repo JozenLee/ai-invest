@@ -53,6 +53,7 @@ export default function DataSourcesPage() {
   const [dataSources, setDataSources] = useState<DataSource[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [categoryFilter, setCategoryFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all') // 新增：状态筛选
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
 
@@ -149,10 +150,10 @@ export default function DataSourcesPage() {
     await fetchDataSources()
   }
 
-  // 按类别筛选
-  const filteredSources = categoryFilter === 'all'
-    ? dataSources
-    : dataSources.filter((s) => s.category === categoryFilter)
+  // 按类别和状态筛选
+  const filteredSources = dataSources
+    .filter((s) => categoryFilter === 'all' || s.category === categoryFilter)
+    .filter((s) => statusFilter === 'all' || (statusFilter === 'active' ? s.isActive : !s.isActive))
 
   // 计算统计数据
   const activeSources = dataSources.filter((s) => s.isActive).length
@@ -225,22 +226,41 @@ export default function DataSourcesPage() {
       {/* 数据源列表 */}
       <div className="space-y-4">
         {/* 筛选器 */}
-        <div className="flex items-center gap-4">
-          <span className="text-sm font-medium">数据源类别：</span>
-          <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value ?? 'all')}>
-            <SelectTrigger className="w-[180px]">
-              <SelectValue>
-                {categoryFilter === 'all' ? '全部类别' : categoryFilter}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部类别</SelectItem>
-              <SelectItem value="综合财经媒体">综合财经媒体</SelectItem>
-              <SelectItem value="科技媒体">科技媒体</SelectItem>
-              <SelectItem value="社交媒体">社交媒体</SelectItem>
-              <SelectItem value="视频平台">视频平台</SelectItem>
-            </SelectContent>
-          </Select>
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">类别：</span>
+            <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value ?? 'all')}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue>
+                  {categoryFilter === 'all' ? '全部类别' : categoryFilter}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部类别</SelectItem>
+                <SelectItem value="综合财经媒体">综合财经媒体</SelectItem>
+                <SelectItem value="AI行业资讯">AI行业资讯</SelectItem>
+                <SelectItem value="半导体行业">半导体行业</SelectItem>
+                <SelectItem value="科技创投媒体">科技创投媒体</SelectItem>
+                <SelectItem value="社交媒体">社交媒体</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">状态：</span>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value ?? 'all')}>
+              <SelectTrigger className="w-[140px]">
+                <SelectValue>
+                  {statusFilter === 'all' ? '全部状态' : statusFilter === 'active' ? '仅激活' : '仅禁用'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="active">仅激活 ({activeSources})</SelectItem>
+                <SelectItem value="inactive">仅禁用 ({inactiveSources})</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         {/* 数据源卡片 */}
@@ -277,12 +297,13 @@ export default function DataSourcesPage() {
             <div className="space-y-2">
               <h3 className="font-semibold">关于数据源</h3>
               <ul className="text-sm text-muted-foreground space-y-1">
-                <li>• <strong>综合财经媒体</strong>: 财联社、东方财富等主流财经网站</li>
-                <li>• <strong>科技媒体</strong>: 36氪、钛媒体等科技资讯平台</li>
-                <li>• <strong>社交媒体</strong>: 微博、小红书等社交平台</li>
-                <li>• <strong>视频平台</strong>: B站等视频内容平台</li>
-                <li>• 定时任务按配置自动采集最新资讯</li>
-                <li>• 采集的数据会自动更新到资讯流和趋势分析页面</li>
+                <li>• <strong>NewsNow 热榜聚合</strong>: 华尔街见闻、财联社、澎湃财经、36氪等主流财经平台热榜</li>
+                <li>• <strong>AKShare 财经数据</strong>: 财联社资讯、AI资讯、芯片资讯、财新网等专业财经内容</li>
+                <li>• <strong>社交媒体</strong>: 雪球等投资社区的实时讨论和观点</li>
+                <li>• 系统优先使用 NewsNow 数据源，自动降级到 AKShare 和雪球</li>
+                <li>• 定时任务按配置自动采集最新资讯（30-180分钟不等）</li>
+                <li>• 采集的数据会经过 AI 分类和情感分析，自动更新到资讯流</li>
+                <li>• 灰色数据源已禁用但数据保留，可随时重新激活</li>
               </ul>
             </div>
           </div>

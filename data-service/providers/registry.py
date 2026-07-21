@@ -101,18 +101,13 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 新闻资讯
     "news": CategoryConfig(
-        sources=["akshare", "xueqiu"],
+        sources=["newsnow", "akshare", "xueqiu"],  # NewsNow优先：多平台聚合
         cache_ttl=300,
         fallback_to_file=False,
     ),
     "market_sentiment": CategoryConfig(
         sources=["akshare", "tushare"],
         cache_ttl=60,
-    ),
-    # 新闻（仅 AKShare 支持）
-    "news": CategoryConfig(
-        sources=["akshare"],
-        cache_ttl=300,
     ),
 }
 

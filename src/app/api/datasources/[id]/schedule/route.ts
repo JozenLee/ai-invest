@@ -8,11 +8,13 @@ import { prisma } from '@/lib/db/prisma'
  * 功能：
  * - 更新 DataSource.updateFrequency (更新频率，单位：分钟)
  * - 更新关联的 SchedulerJob.scheduleConfig (调度配置)
+ * - 支持 domainFilter 配置
  *
  * Body:
  * - updateFrequency?: number (可选，更新频率，单位：分钟)
  * - scheduleType?: string (可选，调度类型：cron/interval/webhook)
- * - scheduleConfig?: string (可选，调度配置，JSON字符串)
+ * - scheduleConfig?: object | string (可选，调度配置，可以是对象或JSON字符串)
+ *   - 支持包含 domainFilter: { domainIds: string[], mode?: 'include' | 'exclude' }
  */
 export async function PATCH(
   request: NextRequest,
@@ -47,6 +49,69 @@ export async function PATCH(
           },
           { status: 400 }
         )
+      }
+    }
+
+    // 验证 scheduleConfig 中的 domainFilter
+    if (body.scheduleConfig !== undefined) {
+      let scheduleConfig: any
+
+      // 处理字符串或对象格式
+      if (typeof body.scheduleConfig === 'string') {
+        try {
+          scheduleConfig = JSON.parse(body.scheduleConfig)
+        } catch (e) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: '参数错误',
+              message: 'scheduleConfig 不是有效的JSON格式'
+            },
+            { status: 400 }
+          )
+        }
+      } else {
+        scheduleConfig = body.scheduleConfig
+      }
+
+      // 验证 domainFilter 中的 domainIds
+      if (scheduleConfig.domainFilter?.domainIds) {
+        const domainIds = scheduleConfig.domainFilter.domainIds
+
+        if (!Array.isArray(domainIds)) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: '参数错误',
+              message: 'domainFilter.domainIds 必须是数组'
+            },
+            { status: 400 }
+          )
+        }
+
+        // 验证所有 domainId 是否存在
+        if (domainIds.length > 0) {
+          const existingDomains = await prisma.domain.findMany({
+            where: {
+              id: { in: domainIds }
+            },
+            select: { id: true }
+          })
+
+          const existingIds = new Set(existingDomains.map(d => d.id))
+          const invalidIds = domainIds.filter(id => !existingIds.has(id))
+
+          if (invalidIds.length > 0) {
+            return NextResponse.json(
+              {
+                success: false,
+                error: '参数错误',
+                message: `以下 domainId 不存在: ${invalidIds.join(', ')}`
+              },
+              { status: 400 }
+            )
+          }
+        }
       }
     }
 
@@ -94,7 +159,10 @@ export async function PATCH(
         }
 
         if (body.scheduleConfig !== undefined) {
-          jobUpdate.scheduleConfig = body.scheduleConfig
+          // 确保 scheduleConfig 是字符串格式存储
+          jobUpdate.scheduleConfig = typeof body.scheduleConfig === 'string'
+            ? body.scheduleConfig
+            : JSON.stringify(body.scheduleConfig)
         } else if (body.updateFrequency !== undefined && body.scheduleType === undefined) {
           // 如果只更新频率，且调度类型是 interval，自动更新 scheduleConfig
           for (const job of dataSource.schedulerJobs) {

@@ -21,7 +21,7 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +40,13 @@ async def lifespan(app: FastAPI):
 
     # 启动定时任务调度器
     await scheduler_service.start()
+
+    # 从数据库同步调度任务（新增）
+    try:
+        sync_stats = await scheduler_service.sync_schedulers_from_database()
+        logger.info(f"调度任务同步结果: {sync_stats}")
+    except Exception as e:
+        logger.error(f"调度任务同步失败: {e}")
 
     # 注册财联社新闻采集任务（每小时执行一次）
     from services.fetch_service import fetch_service
@@ -121,6 +128,7 @@ app.include_router(ai.router, prefix="/api", tags=["ai"])
 app.include_router(search.router, prefix="", tags=["search"])
 app.include_router(cache.router, prefix="", tags=["cache"])
 app.include_router(datasources.router, prefix="/api", tags=["datasources"])
+app.include_router(schedulers.router, prefix="/schedulers", tags=["schedulers"])
 
 @app.get("/health")
 async def health_check():

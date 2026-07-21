@@ -67,13 +67,28 @@ class FetchService:
                 f"processed={processed_count}, failed={failed_count}"
             )
 
-            # 4. 持久化到本地数据库
+            # 4. 应用领域筛选（如果配置了）
+            original_count = len(processed_data)
+            domain_filter = source_config.get("domainFilter")
+            if domain_filter and domain_filter.get("enabled"):
+                processed_data = self.apply_domain_filter(processed_data, domain_filter)
+                filtered_count = len(processed_data)
+                logger.info(
+                    f"领域筛选完成: source_id={source_id}, "
+                    f"original={original_count}, filtered={filtered_count}, "
+                    f"mode={domain_filter.get('mode')}, "
+                    f"domains={domain_filter.get('domainIds')}"
+                )
+            else:
+                logger.debug(f"未启用领域筛选: source_id={source_id}")
+
+            # 5. 持久化到本地数据库
             stored_count = await self._store_to_database(processed_data, source_id)
 
-            # 5. 计算耗时
+            # 6. 计算耗时
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
-            # 6. 更新采集日志
+            # 7. 更新采集日志
             await self._update_fetch_log(
                 log_id=log_id,
                 status="success",
@@ -84,7 +99,7 @@ class FetchService:
                 message=f"成功采集并处理 {stored_count} 条数据"
             )
 
-            # 7. 更新数据源状态
+            # 8. 更新数据源状态
             await self._update_source_status(
                 source_id=source_id,
                 status="success",
@@ -165,6 +180,9 @@ class FetchService:
         if provider_name == "xueqiu":
             from providers.xueqiu_provider import XueqiuProvider
             return XueqiuProvider()
+        elif provider_name == "newsnow":
+            from providers.newsnow_provider import NewsNowProvider
+            return NewsNowProvider()
         elif provider_name == "akshare":
             # 直接使用AKShareProvider实例，而不是data_service
             from providers.akshare_provider import AKShareProvider
@@ -381,6 +399,66 @@ class FetchService:
                 sectors.append(sector)
 
         return sectors
+
+    def apply_domain_filter(
+        self,
+        articles: List[Dict[str, Any]],
+        domain_filter_config: Optional[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        应用领域筛选规则
+
+        Args:
+            articles: 文章列表
+            domain_filter_config: 领域筛选配置
+                格式: {"enabled": true, "domainIds": ["id1", "id2"], "mode": "include"}
+
+        Returns:
+            筛选后的文章列表
+        """
+        # 如果没有配置或未启用，返回原始列表
+        if not domain_filter_config or not domain_filter_config.get("enabled"):
+            return articles
+
+        domain_ids = domain_filter_config.get("domainIds", [])
+        mode = domain_filter_config.get("mode", "include")
+
+        # 如果没有指定领域ID，返回原始列表
+        if not domain_ids:
+            logger.warning("领域筛选已启用但未指定domainIds，跳过筛选")
+            return articles
+
+        filtered_articles = []
+
+        for article in articles:
+            # 获取文章的领域ID列表
+            article_domains = article.get("domainIds", [])
+
+            # 如果domainIds是字符串（JSON），先解析
+            if isinstance(article_domains, str):
+                try:
+                    article_domains = json.loads(article_domains)
+                except:
+                    article_domains = []
+
+            # 判断是否匹配
+            has_match = any(domain_id in domain_ids for domain_id in article_domains)
+
+            # 根据模式决定是否保留
+            if mode == "include":
+                # include模式：只保留匹配的
+                if has_match:
+                    filtered_articles.append(article)
+            elif mode == "exclude":
+                # exclude模式：过滤掉匹配的
+                if not has_match:
+                    filtered_articles.append(article)
+            else:
+                logger.warning(f"未知的筛选模式: {mode}，使用include模式")
+                if has_match:
+                    filtered_articles.append(article)
+
+        return filtered_articles
 
     async def _store_to_database(
         self,

@@ -5,7 +5,8 @@
 
 import asyncio
 import logging
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -371,6 +372,347 @@ class SchedulerService:
 
         except Exception as e:
             logger.error(f'禁用数据源任务失败: {e}')
+            return False
+
+    # ============ 数据库集成功能 ============
+
+    async def sync_schedulers_from_database(self) -> Dict[str, int]:
+        """
+        从数据库同步调度任务
+        启动时从数据库加载所有启用的SchedulerJob并注册到APScheduler
+
+        Returns:
+            同步结果统计
+        """
+        stats = {
+            'loaded': 0,
+            'failed': 0,
+            'skipped': 0
+        }
+
+        try:
+            logger.info('开始从数据库同步调度任务...')
+
+            # 获取所有启用的调度任务
+            schedulers = await self._get_enabled_schedulers()
+            logger.info(f'从数据库读取到 {len(schedulers)} 个启用的调度任务')
+
+            for scheduler in schedulers:
+                try:
+                    scheduler_id = scheduler.get('id')
+                    source_id = scheduler.get('sourceId')
+                    schedule_type = scheduler.get('scheduleType')
+                    schedule_config = scheduler.get('scheduleConfig')
+
+                    # 解析调度配置
+                    try:
+                        config = json.loads(schedule_config) if isinstance(schedule_config, str) else schedule_config
+                    except json.JSONDecodeError as e:
+                        logger.error(f'解析调度配置失败: scheduler_id={scheduler_id}, error={e}')
+                        stats['failed'] += 1
+                        continue
+
+                    # 获取数据源配置
+                    datasource = await self._get_datasource_by_id(source_id)
+                    if not datasource:
+                        logger.warning(f'数据源不存在: source_id={source_id}, 跳过调度任务')
+                        stats['skipped'] += 1
+                        continue
+
+                    # 检查数据源是否激活
+                    if not datasource.get('isActive', False):
+                        logger.info(f'数据源未激活: source_id={source_id}, 跳过调度任务')
+                        stats['skipped'] += 1
+                        continue
+
+                    # 根据调度类型注册任务
+                    if schedule_type == 'interval':
+                        interval_minutes = config.get('intervalMinutes', 60)
+                        success = await self._register_scheduler_job(
+                            scheduler_id=scheduler_id,
+                            source_id=source_id,
+                            datasource=datasource,
+                            interval_minutes=interval_minutes
+                        )
+                        if success:
+                            stats['loaded'] += 1
+                        else:
+                            stats['failed'] += 1
+                    elif schedule_type == 'cron':
+                        # 支持cron调度（未来扩展）
+                        logger.warning(f'暂不支持cron调度类型: scheduler_id={scheduler_id}')
+                        stats['skipped'] += 1
+                    else:
+                        logger.warning(f'未知调度类型: {schedule_type}, scheduler_id={scheduler_id}')
+                        stats['skipped'] += 1
+
+                except Exception as e:
+                    logger.error(f'注册调度任务失败: scheduler_id={scheduler.get("id")}, error={e}')
+                    stats['failed'] += 1
+
+            logger.info(f'调度任务同步完成: {stats}')
+            return stats
+
+        except Exception as e:
+            logger.error(f'从数据库同步调度任务失败: {e}')
+            raise e
+
+    async def execute_fetch_with_tracking(
+        self,
+        scheduler_id: str,
+        source_id: str,
+        source_config: Dict[str, Any]
+    ):
+        """
+        执行采集任务并追踪时间戳
+        包装器函数，负责更新lastRunAt和nextRunAt
+
+        Args:
+            scheduler_id: 调度任务ID
+            source_id: 数据源ID
+            source_config: 数据源配置
+        """
+        start_time = datetime.now()
+
+        try:
+            logger.info(f'开始执行调度任务: scheduler_id={scheduler_id}, source_id={source_id}')
+
+            # 更新任务开始时间
+            await self._update_scheduler_timestamps(
+                scheduler_id=scheduler_id,
+                last_run_at=start_time,
+                next_run_at=None  # nextRunAt稍后计算
+            )
+
+            # 执行实际的采集任务
+            from services.fetch_service import fetch_service
+            result = await fetch_service.execute_fetch_task(source_id, source_config)
+
+            # 计算下次运行时间（从APScheduler获取）
+            job_id = f'scheduler_{scheduler_id}'
+            job = self.scheduler.get_job(job_id)
+            next_run_at = job.next_run_time if job else None
+
+            # 更新下次运行时间
+            if next_run_at:
+                await self._update_scheduler_timestamps(
+                    scheduler_id=scheduler_id,
+                    last_run_at=None,  # lastRunAt已经更新过
+                    next_run_at=next_run_at
+                )
+
+            duration = (datetime.now() - start_time).total_seconds()
+            logger.info(
+                f'调度任务执行完成: scheduler_id={scheduler_id}, '
+                f'success={result.get("success")}, duration={duration:.2f}s'
+            )
+
+        except Exception as e:
+            duration = (datetime.now() - start_time).total_seconds()
+            logger.error(
+                f'调度任务执行失败: scheduler_id={scheduler_id}, '
+                f'source_id={source_id}, duration={duration:.2f}s, error={e}'
+            )
+            # 即使失败也更新下次运行时间
+            job_id = f'scheduler_{scheduler_id}'
+            job = self.scheduler.get_job(job_id)
+            if job and job.next_run_time:
+                await self._update_scheduler_timestamps(
+                    scheduler_id=scheduler_id,
+                    last_run_at=None,
+                    next_run_at=job.next_run_time
+                )
+
+    async def _register_scheduler_job(
+        self,
+        scheduler_id: str,
+        source_id: str,
+        datasource: Dict[str, Any],
+        interval_minutes: int
+    ) -> bool:
+        """
+        注册调度任务到APScheduler
+
+        Args:
+            scheduler_id: 调度任务ID
+            source_id: 数据源ID
+            datasource: 数据源完整配置
+            interval_minutes: 执行间隔（分钟）
+
+        Returns:
+            是否成功
+        """
+        try:
+            job_id = f'scheduler_{scheduler_id}'
+
+            # 解析数据源配置
+            try:
+                config = json.loads(datasource.get('config', '{}')) if isinstance(datasource.get('config'), str) else datasource.get('config', {})
+            except json.JSONDecodeError:
+                config = {}
+
+            # 准备采集任务配置
+            source_config = {
+                'driverType': datasource.get('driverType', 'api'),
+                'provider': datasource.get('provider', 'akshare'),
+                'keyword': config.get('keyword', ''),
+                'keywords': config.get('keywords', []),
+                'limit': config.get('limit', 50),
+                'api': config.get('api', 'stock_news_em')
+            }
+
+            # 创建异步包装函数
+            async def fetch_job_wrapper():
+                await self.execute_fetch_with_tracking(scheduler_id, source_id, source_config)
+
+            # 添加到APScheduler
+            success = await self.add_interval_job(
+                job_id=job_id,
+                func=fetch_job_wrapper,
+                minutes=interval_minutes,
+                replace_existing=True
+            )
+
+            if success:
+                logger.info(
+                    f'注册调度任务成功: scheduler_id={scheduler_id}, '
+                    f'source_id={source_id}, interval={interval_minutes}min'
+                )
+
+            return success
+
+        except Exception as e:
+            logger.error(f'注册调度任务失败: scheduler_id={scheduler_id}, error={e}')
+            return False
+
+    # ============ 数据库辅助函数 ============
+
+    async def _get_enabled_schedulers(self) -> List[Dict[str, Any]]:
+        """获取所有启用的调度任务"""
+        try:
+            from db import db
+            async with db.get_connection() as conn:
+                cursor = await conn.execute("""
+                    SELECT id, sourceId, scheduleType, scheduleConfig,
+                           isEnabled, lastRunAt, nextRunAt, createdAt, updatedAt
+                    FROM SchedulerJob
+                    WHERE isEnabled = 1
+                    ORDER BY createdAt ASC
+                """)
+                rows = await cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f'查询启用的调度任务失败: {e}')
+            return []
+
+    async def _get_datasource_by_id(self, source_id: str) -> Optional[Dict[str, Any]]:
+        """根据ID获取数据源配置"""
+        try:
+            from db import db
+            return await db.get_datasource(source_id)
+        except Exception as e:
+            logger.error(f'查询数据源失败: source_id={source_id}, error={e}')
+            return None
+
+    async def get_scheduler_by_source_id(self, source_id: str) -> Optional[Dict[str, Any]]:
+        """
+        根据数据源ID查询调度器配置
+
+        Args:
+            source_id: 数据源ID
+
+        Returns:
+            调度器配置字典，如果不存在返回None
+        """
+        try:
+            from db import db
+            async with db.get_connection() as conn:
+                cursor = await conn.execute("""
+                    SELECT id, sourceId, scheduleType, scheduleConfig,
+                           isEnabled, lastRunAt, nextRunAt, createdAt, updatedAt
+                    FROM SchedulerJob
+                    WHERE sourceId = ?
+                    LIMIT 1
+                """, (source_id,))
+                row = await cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+        except Exception as e:
+            logger.error(f'查询调度器配置失败: source_id={source_id}, error={e}')
+            return None
+
+    async def update_scheduler_timestamps(
+        self,
+        scheduler_id: str,
+        last_run_at: Optional[datetime] = None,
+        next_run_at: Optional[datetime] = None
+    ) -> bool:
+        """
+        更新调度器时间戳
+
+        Args:
+            scheduler_id: 调度任务ID
+            last_run_at: 最后运行时间
+            next_run_at: 下次运行时间
+
+        Returns:
+            是否成功
+        """
+        return await self._update_scheduler_timestamps(scheduler_id, last_run_at, next_run_at)
+
+    async def _update_scheduler_timestamps(
+        self,
+        scheduler_id: str,
+        last_run_at: Optional[datetime] = None,
+        next_run_at: Optional[datetime] = None
+    ) -> bool:
+        """
+        内部方法：更新调度器时间戳
+
+        Args:
+            scheduler_id: 调度任务ID
+            last_run_at: 最后运行时间
+            next_run_at: 下次运行时间
+
+        Returns:
+            是否成功
+        """
+        try:
+            from db import db
+
+            # 构建更新SQL
+            updates = []
+            params = []
+
+            if last_run_at is not None:
+                updates.append('lastRunAt = ?')
+                params.append(last_run_at.isoformat())
+
+            if next_run_at is not None:
+                updates.append('nextRunAt = ?')
+                params.append(next_run_at.isoformat())
+
+            if not updates:
+                logger.warning(f'没有需要更新的时间戳: scheduler_id={scheduler_id}')
+                return False
+
+            # 添加updatedAt
+            updates.append('updatedAt = ?')
+            params.append(datetime.now().isoformat())
+
+            # 添加WHERE条件
+            params.append(scheduler_id)
+
+            sql = f"UPDATE SchedulerJob SET {', '.join(updates)} WHERE id = ?"
+
+            async with db.get_connection() as conn:
+                await conn.execute(sql, params)
+                logger.debug(f'更新调度器时间戳成功: scheduler_id={scheduler_id}')
+                return True
+
+        except Exception as e:
+            logger.error(f'更新调度器时间戳失败: scheduler_id={scheduler_id}, error={e}')
             return False
 
 

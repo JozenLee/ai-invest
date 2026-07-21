@@ -596,6 +596,9 @@ class AKShareProvider(DataProvider):
                     df = df.rename(columns={"文章来源": "来源"})
                 elif "来源" not in df.columns:
                     df["来源"] = "东方财富"
+
+                # 确保发布时间字段存在且格式正确
+                df = self._ensure_publish_time(df)
                 return df.head(limit)
 
         elif api == "stock_news_main_cx":
@@ -608,8 +611,10 @@ class AKShareProvider(DataProvider):
                     "url": "新闻链接"
                 })
                 df["新闻内容"] = df["新闻标题"]  # 财新只有摘要
-                df["发布时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 df["来源"] = "财新网"
+
+                # 确保发布时间字段存在且格式正确
+                df = self._ensure_publish_time(df)
 
                 # 如果提供了关键词，进行过滤
                 if keyword:
@@ -629,13 +634,55 @@ class AKShareProvider(DataProvider):
                 df["新闻标题"] = df["新闻内容"].str[:50] + "..."
                 df["新闻链接"] = ""  # 上海金属网快讯没有链接
                 df["来源"] = "上海金属网"
-                # 处理发布时间格式
-                if "发布时间" in df.columns:
-                    df["发布时间"] = pd.to_datetime(df["发布时间"]).dt.strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    df["发布时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                # 确保发布时间字段存在且格式正确
+                df = self._ensure_publish_time(df)
                 return df.head(limit)
 
         else:
             print(f"[AKShare] 不支持的API: {api}")
             return pd.DataFrame()
+
+    def _ensure_publish_time(self, df: pd.DataFrame) -> pd.DataFrame:
+        """确保DataFrame有正确的发布时间字段
+
+        优先级：
+        1. 使用原始的"发布时间"字段
+        2. 尝试从其他时间字段推断（更新时间、创建时间等）
+        3. 最后使用当前时间（并记录警告）
+        """
+        if df.empty:
+            return df
+
+        # 可能的时间字段名称（按优先级）
+        time_field_candidates = [
+            "发布时间", "publishTime", "publish_time", "pubTime", "pub_time",
+            "时间", "time", "datetime", "date",
+            "更新时间", "updateTime", "update_time", "updated_at",
+            "创建时间", "createTime", "create_time", "created_at"
+        ]
+
+        found_time_field = None
+        for field in time_field_candidates:
+            if field in df.columns:
+                found_time_field = field
+                break
+
+        if found_time_field and found_time_field != "发布时间":
+            # 重命名为标准字段
+            print(f"[AKShare] 使用字段 '{found_time_field}' 作为发布时间")
+            df = df.rename(columns={found_time_field: "发布时间"})
+
+        if "发布时间" in df.columns:
+            # 标准化时间格式
+            try:
+                df["发布时间"] = pd.to_datetime(df["发布时间"]).dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                print(f"[AKShare] 解析发布时间失败: {e}，使用当前时间")
+                df["发布时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            # 没有找到任何时间字段，使用当前时间并记录警告
+            print(f"[AKShare] 警告：未找到发布时间字段，使用当前时间作为降级方案")
+            df["发布时间"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        return df

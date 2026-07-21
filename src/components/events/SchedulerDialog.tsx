@@ -12,19 +12,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Clock,
-  Calendar,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -33,6 +27,7 @@ import {
   Activity,
   Settings,
   History,
+  Filter,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -67,6 +62,13 @@ interface ExecutionLog {
   createdAt: string;
 }
 
+interface Domain {
+  id: string;
+  name: string;
+  code: string;
+  description?: string;
+}
+
 /**
  * 调度器设置对话框组件
  * 匹配网站整体设计风格，固定高度避免切换时跳动
@@ -77,35 +79,69 @@ export function SchedulerDialog({
   dataSource,
   onUpdate,
 }: SchedulerDialogProps) {
-  const [scheduleType, setScheduleType] = useState<string>('interval');
   const [updateFrequency, setUpdateFrequency] = useState<number>(60);
-  const [cronExpression, setCronExpression] = useState<string>('0 * * * *');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [executionLogs, setExecutionLogs] = useState<ExecutionLog[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
+  // 领域筛选状态
+  const [domains, setDomains] = useState<Domain[]>([]);
+  const [isLoadingDomains, setIsLoadingDomains] = useState(false);
+  const [domainFilterEnabled, setDomainFilterEnabled] = useState(false);
+  const [selectedDomainIds, setSelectedDomainIds] = useState<string[]>([]);
+  const [filterMode, setFilterMode] = useState<'include' | 'exclude'>('include');
+
+  // 加载领域列表
+  const loadDomains = async () => {
+    setIsLoadingDomains(true);
+    try {
+      const response = await fetch('/api/domains');
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data) {
+          setDomains(data.data);
+        }
+      }
+    } catch (err) {
+      console.error('加载领域列表失败:', err);
+    } finally {
+      setIsLoadingDomains(false);
+    }
+  };
+
   // 初始化表单数据
   useEffect(() => {
     if (open && dataSource) {
       if (dataSource.scheduler) {
-        setScheduleType(dataSource.scheduler.scheduleType);
+        const config = dataSource.scheduler.scheduleConfig;
 
-        if (dataSource.scheduler.scheduleType === 'cron' && dataSource.scheduler.scheduleConfig.cronExpression) {
-          setCronExpression(dataSource.scheduler.scheduleConfig.cronExpression);
-        } else if (dataSource.scheduler.scheduleType === 'interval' && dataSource.scheduler.scheduleConfig.intervalMinutes) {
-          setUpdateFrequency(dataSource.scheduler.scheduleConfig.intervalMinutes);
-        } else if (dataSource.scheduler.scheduleType === 'webhook') {
-          setUpdateFrequency(dataSource.updateFrequency);
+        // 设置更新频率
+        if (config.intervalMinutes) {
+          setUpdateFrequency(config.intervalMinutes);
         } else {
           setUpdateFrequency(dataSource.updateFrequency);
         }
+
+        // 设置领域筛选
+        if (config.domainFilter) {
+          setDomainFilterEnabled(config.domainFilter.enabled || false);
+          setSelectedDomainIds(config.domainFilter.domainIds || []);
+          setFilterMode(config.domainFilter.mode || 'include');
+        } else {
+          setDomainFilterEnabled(false);
+          setSelectedDomainIds([]);
+          setFilterMode('include');
+        }
       } else {
-        setScheduleType('interval');
         setUpdateFrequency(dataSource.updateFrequency);
+        setDomainFilterEnabled(false);
+        setSelectedDomainIds([]);
+        setFilterMode('include');
       }
 
       loadExecutionLogs();
+      loadDomains();
     }
   }, [open, dataSource]);
 
@@ -146,20 +182,24 @@ export function SchedulerDialog({
     setError(null);
 
     try {
-      const payload: any = {
-        updateFrequency,
-        scheduleType,
+      const scheduleConfig: any = {
+        intervalMinutes: updateFrequency,
       };
 
-      if (scheduleType === 'interval') {
-        payload.scheduleConfig = JSON.stringify({
-          intervalMinutes: updateFrequency,
-        });
-      } else if (scheduleType === 'cron') {
-        payload.scheduleConfig = JSON.stringify({
-          cronExpression,
-        });
+      // 添加领域筛选配置
+      if (domainFilterEnabled && selectedDomainIds.length > 0) {
+        scheduleConfig.domainFilter = {
+          enabled: true,
+          domainIds: selectedDomainIds,
+          mode: filterMode,
+        };
       }
+
+      const payload = {
+        updateFrequency,
+        scheduleType: 'interval',
+        scheduleConfig: JSON.stringify(scheduleConfig),
+      };
 
       const response = await fetch(`/api/datasources/${dataSource.id}/schedule`, {
         method: 'PATCH',
@@ -295,11 +335,7 @@ export function SchedulerDialog({
                       </div>
                       <div className="space-y-1">
                         <span className="text-xs text-muted-foreground">调度类型</span>
-                        <p className="text-sm">
-                          {scheduleType === 'interval' && '定时轮询'}
-                          {scheduleType === 'cron' && 'Cron表达式'}
-                          {scheduleType === 'webhook' && 'Webhook触发'}
-                        </p>
+                        <p className="text-sm">定时轮询</p>
                       </div>
                       {dataSource.scheduler.lastRunAt && (
                         <div className="space-y-1">
@@ -323,83 +359,128 @@ export function SchedulerDialog({
               {/* 调度配置 */}
               <div className="space-y-4">
                 <h3 className="text-sm font-semibold flex items-center gap-2">
-                  <Calendar className="h-4 w-4" />
+                  <Clock className="h-4 w-4" />
                   调度配置
                 </h3>
 
-                {/* 调度类型 */}
+                {/* 定时轮询配置 */}
                 <div className="space-y-2">
-                  <Label htmlFor="scheduleType">调度类型</Label>
-                  <Select value={scheduleType} onValueChange={(value) => setScheduleType(value || 'interval')}>
-                    <SelectTrigger id="scheduleType" className="w-full">
-                      <SelectValue>
-                        {scheduleType === 'interval' && '定时轮询'}
-                        {scheduleType === 'cron' && 'Cron表达式'}
-                        {scheduleType === 'webhook' && 'Webhook触发'}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="interval">定时轮询</SelectItem>
-                      <SelectItem value="cron">Cron表达式</SelectItem>
-                      <SelectItem value="webhook">Webhook触发</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="updateFrequency">更新频率（分钟）</Label>
+                  <Input
+                    id="updateFrequency"
+                    type="number"
+                    min="1"
+                    value={updateFrequency}
+                    onChange={(e) => setUpdateFrequency(parseInt(e.target.value) || 1)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    每 {updateFrequency} 分钟自动执行一次数据采集
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* 领域筛选配置 */}
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Filter className="h-4 w-4" />
+                  领域筛选
+                </h3>
+
+                {/* 启用领域筛选开关 */}
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="domain-filter-switch">启用领域筛选</Label>
+                    <p className="text-xs text-muted-foreground">
+                      仅采集指定领域的资讯内容
+                    </p>
+                  </div>
+                  <Switch
+                    id="domain-filter-switch"
+                    checked={domainFilterEnabled}
+                    onCheckedChange={setDomainFilterEnabled}
+                  />
                 </div>
 
-                {/* 定时轮询配置 */}
-                {scheduleType === 'interval' && (
-                  <div className="space-y-2">
-                    <Label htmlFor="updateFrequency">更新频率（分钟）</Label>
-                    <Input
-                      id="updateFrequency"
-                      type="number"
-                      min="1"
-                      value={updateFrequency}
-                      onChange={(e) => setUpdateFrequency(parseInt(e.target.value) || 1)}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      每 {updateFrequency} 分钟自动执行一次数据采集
-                    </p>
-                  </div>
-                )}
-
-                {/* Cron表达式配置 */}
-                {scheduleType === 'cron' && (
-                  <div className="space-y-2">
-                    <Label htmlFor="cronExpression">Cron表达式</Label>
-                    <Input
-                      id="cronExpression"
-                      type="text"
-                      value={cronExpression}
-                      onChange={(e) => setCronExpression(e.target.value)}
-                      placeholder="0 * * * *"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      支持标准Cron表达式格式（分 时 日 月 周）
-                    </p>
-                    <div className="p-3 rounded-lg bg-muted/50 space-y-1">
-                      <p className="text-xs font-medium">常用示例：</p>
-                      <ul className="text-xs text-muted-foreground space-y-0.5">
-                        <li>• <code>0 * * * *</code> - 每小时执行一次</li>
-                        <li>• <code>*/30 * * * *</code> - 每30分钟执行一次</li>
-                        <li>• <code>0 9 * * *</code> - 每天上午9点执行</li>
-                        <li>• <code>0 9,15 * * *</code> - 每天上午9点和下午3点执行</li>
-                      </ul>
+                {/* 筛选配置区域 */}
+                {domainFilterEnabled && (
+                  <div className="space-y-4 p-4 rounded-lg border bg-muted/20">
+                    {/* 筛选模式 */}
+                    <div className="space-y-2">
+                      <Label>筛选模式</Label>
+                      <div className="flex gap-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="filterMode"
+                            value="include"
+                            checked={filterMode === 'include'}
+                            onChange={(e) => setFilterMode(e.target.value as 'include' | 'exclude')}
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm">包含（仅采集选中领域）</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="filterMode"
+                            value="exclude"
+                            checked={filterMode === 'exclude'}
+                            onChange={(e) => setFilterMode(e.target.value as 'include' | 'exclude')}
+                            className="w-4 h-4"
+                          />
+                          <span className="text-sm">排除（不采集选中领域）</span>
+                        </label>
+                      </div>
                     </div>
-                  </div>
-                )}
 
-                {/* Webhook配置提示 */}
-                {scheduleType === 'webhook' && (
-                  <div className="p-4 rounded-lg bg-muted/50 space-y-2">
-                    <p className="text-sm text-muted-foreground">
-                      Webhook触发模式下，数据采集将通过外部系统触发。
-                    </p>
-                    <div className="flex items-start gap-2">
-                      <span className="text-sm font-medium">Webhook地址：</span>
-                      <code className="text-xs bg-background px-2 py-1 rounded border flex-1 break-all">
-                        /api/datasources/{dataSource.id}/trigger
-                      </code>
+                    {/* 领域选择 */}
+                    <div className="space-y-2">
+                      <Label>选择领域</Label>
+                      {isLoadingDomains ? (
+                        <div className="flex items-center justify-center py-4">
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : domains.length === 0 ? (
+                        <p className="text-sm text-muted-foreground py-4 text-center">
+                          暂无可用领域
+                        </p>
+                      ) : (
+                        <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                          {domains.map((domain) => (
+                            <div key={domain.id} className="flex items-center gap-2">
+                              <Checkbox
+                                id={`domain-${domain.id}`}
+                                checked={selectedDomainIds.includes(domain.id)}
+                                onCheckedChange={(checked) => {
+                                  if (checked) {
+                                    setSelectedDomainIds([...selectedDomainIds, domain.id]);
+                                  } else {
+                                    setSelectedDomainIds(selectedDomainIds.filter(id => id !== domain.id));
+                                  }
+                                }}
+                              />
+                              <Label
+                                htmlFor={`domain-${domain.id}`}
+                                className="text-sm font-normal cursor-pointer flex-1"
+                              >
+                                {domain.name}
+                                {domain.description && (
+                                  <span className="text-xs text-muted-foreground ml-2">
+                                    ({domain.description})
+                                  </span>
+                                )}
+                              </Label>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {selectedDomainIds.length > 0 && (
+                        <p className="text-xs text-muted-foreground">
+                          已选择 {selectedDomainIds.length} 个领域
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
