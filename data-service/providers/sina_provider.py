@@ -77,30 +77,52 @@ class SinaProvider(DataProvider):
     # ==================== 资金流向 ====================
 
     async def get_market_capital_flow(self) -> Dict:
-        """获取大盘资金流向（通过行业汇总估算）"""
+        """获取大盘资金流向（通过行业汇总估算）
+
+        新浪财经没有大盘资金流向直接API，通过行业板块数据汇总估算。
+
+        估算方法：
+        - 主力净流入：行业板块净额汇总值（方向准确）
+        - 散户资金：反向估算 = -主力净流入 * 0.8（保守系数）
+        - 中单/小单：按 6:4 比例拆分散户资金
+
+        置信度：0.75（估算值，仅供参考）
+
+        Returns:
+            Dict: 包含主力、中单、小单净流入数据，带 dataQuality 标识
+        """
         data = await self._call(self._fetch_sector_flow, ascending=False, num=100)
         if not data:
             raise Exception("新浪行业资金流向数据为空")
 
+        # 汇总所有行业板块资金流向
         total_net = sum(float(d.get("netamount", 0)) for d in data)
         total_in = sum(float(d.get("inamount", 0)) for d in data)
         total_out = sum(float(d.get("outamount", 0)) for d in data)
 
+        # 主力净流入：行业汇总值（单位：元）
         main_net = total_net
-        if total_in > 0:
-            retail_ratio = min(0.4, max(0.2, 1 - (total_net / total_in)))
-        else:
-            retail_ratio = 0.3
-        retail_net = -main_net * retail_ratio
+
+        # 主力净占比：基于行业汇总计算
+        main_pct = round(total_net / (total_in + total_out) * 100, 2) if (total_in + total_out) > 0 else 0
+
+        # 散户资金估算（改进算法）：
+        # 假设主力和散户资金零和博弈，散户占比 = -主力占比
+        # 但考虑到行业汇总可能不完整，使用固定保守系数 0.8
+        retail_net = -main_net * 0.8
+        retail_pct = -main_pct * 0.8
 
         return {
             "主力净流入-净额": main_net,
-            "主力净流入-净占比": round(total_net / (total_in + total_out) * 100, 2) if (total_in + total_out) > 0 else 0,
+            "主力净流入-净占比": main_pct,
             "中单净流入-净额": retail_net * 0.6,
             "小单净流入-净额": retail_net * 0.4,
             "日期": datetime.now().strftime("%Y-%m-%d"),
             "source": "sina_industry",
             "dataQuality": "estimated",
+            "confidence": 0.75,
+            # 添加估算说明
+            "_estimationNote": "基于行业资金流向汇总估算，主力方向准确但散户为反向估算",
         }
 
     async def get_sector_capital_flow(self, indicator: str = "今日") -> List[Dict]:

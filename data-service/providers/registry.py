@@ -71,8 +71,9 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(
-        sources=["akshare", "sina", "tushare"],
+        sources=["sina", "akshare"],  # 新浪优先：数据稳定性更好，AKShare接口频繁变动
         cache_ttl=600,
+        fallback_to_file=True,
     ),
     "sector_capital_flow": CategoryConfig(
         sources=["akshare", "sina", "tushare"],
@@ -97,6 +98,12 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     "market_fund_flow_rank": CategoryConfig(
         sources=["akshare", "tushare"],
         cache_ttl=600,
+    ),
+    # 新闻资讯
+    "news": CategoryConfig(
+        sources=["akshare", "xueqiu"],
+        cache_ttl=300,
+        fallback_to_file=False,
     ),
     "market_sentiment": CategoryConfig(
         sources=["akshare", "tushare"],
