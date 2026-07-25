@@ -1,14 +1,6 @@
 """
-数据源 Providers 模块
+Influencer Provider System
+Pluggable providers for different platforms
 """
-from .bilibili_provider import BilibiliProvider
-from .weibo_provider import WeiboProvider
-from .xiaohongshu_provider import XiaohongshuProvider
-from .loader import ProviderLoader
 
-__all__ = [
-    'BilibiliProvider',
-    'WeiboProvider',
-    'XiaohongshuProvider',
-    'ProviderLoader',
-]
+__version__ = "1.0.0"
