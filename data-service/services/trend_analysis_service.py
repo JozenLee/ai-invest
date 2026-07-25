@@ -143,12 +143,16 @@ class TrendAnalysisService:
 
             # 添加AI分析结果
             if ai_insight:
+                all_drivers = ai_insight.get("keyDrivers", [])
+                all_risks = ai_insight.get("keyRisks", [])
                 result.update({
                     "currentStatus": ai_insight.get("currentStatus"),
                     "shortTermOutlook": ai_insight.get("shortTermOutlook"),
                     "mediumTermOutlook": ai_insight.get("mediumTermOutlook"),
-                    "keyDrivers": ai_insight.get("keyDrivers", []),
-                    "keyRisks": ai_insight.get("keyRisks", []),
+                    "keyDrivers": all_drivers[:2],  # Top 2 for summary
+                    "keyRisks": all_risks[:2],      # Top 2 for summary
+                    "allKeyDrivers": all_drivers,   # Full list for detail page
+                    "allKeyRisks": all_risks,       # Full list for detail page
                     "aiConfidence": ai_insight.get("confidenceLevel", 0.5),
                 })
             else:
@@ -163,6 +167,8 @@ class TrendAnalysisService:
                     "mediumTermOutlook": "需持续关注后续发展",
                     "keyDrivers": positive_topics,
                     "keyRisks": negative_topics,
+                    "allKeyDrivers": positive_topics,  # Same as keyDrivers for non-AI
+                    "allKeyRisks": negative_topics,    # Same as keyRisks for non-AI
                     "aiConfidence": 0.3,
                 })
 
