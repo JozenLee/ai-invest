@@ -328,49 +328,118 @@ model StorageConfig {
 // ==================== 大V监控 ====================
 
 model Influencer {
-  id         String   @id @default(cuid())
-  name       String   // 大V名称
-  platform   String   // 平台：weibo/bilibili/xiaohongshu/zhihu
-  accountId  String   // 平台账号ID
-  profileUrl String?  // 主页链接
-  avatarUrl  String?  // 头像链接
-  category   String?  // 擅长领域：tech/finance/macro
-  tags       String?  // JSON: 标签（如：AI、半导体、宏观经济）
-  isActive   Boolean  @default(true)
-  createdAt  DateTime @default(now())
+  id           String   @id @default(cuid())
+  name         String
+  platform     String
+  accountId    String
+  profileUrl   String?
+  avatarUrl    String?
+  category     String?
+  tags         String?
+  priority     String   @default("medium")
+  fetchInterval Int     @default(60)
+  driverType   String   @default("api")
+  providerConfig String?
+  isActive     Boolean  @default(true)
+  lastFetchAt  DateTime?
+  lastFetchStatus String?
+  lastFetchError String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  posts      InfluencerPost[]
-  domains    DomainInfluencer[]
+  posts   InfluencerPost[]
+  domains DomainInfluencer[]
 
   @@unique([platform, accountId])
+  @@index([priority, isActive])
+  @@index([lastFetchAt])
 }
 
 model InfluencerPost {
-  id              String   @id @default(cuid())
+  id              String    @id @default(cuid())
   influencerId    String
-  content         String   // 内容/摘要
-  originalUrl     String?  // 原文链接
+  content         String
+  originalUrl     String?
   publishTime     DateTime
-  sentiment       Float?   // 情感分数
-  extractedTopics String?  // JSON: 提取的主题/观点
-  relatedDomains  String?  // JSON: 关联领域
-  createdAt       DateTime @default(now())
+  mediaType       String    @default("text")
+  mediaUrls       String?
+  engagement      String?
 
-  influencer Influencer @relation(fields: [influencerId], references: [id])
+  aiProcessed     Boolean   @default(false)
+  aiProcessedAt   DateTime?
+  aiError         String?
 
-  @@index([influencerId])
-  @@index([publishTime])
+  opinionSummary  String?
+  opinionStance   String?
+  opinionConfidence Float?  @default(0)
+  mainPoints      String?
+
+  arguments       String?
+  credibilityScore Float?   @default(0)
+
+  primaryDomain   String?
+  secondaryDomains String?
+  domainScores    String?
+
+  sentiment       Float?
+  sentimentAspects String?
+
+  risks           String?
+  investmentImplications String?
+
+  consistencyChecked Boolean @default(false)
+  consistencyData    String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  influencer Influencer @relation(fields: [influencerId], references: [id], onDelete: Cascade)
+
+  @@index([influencerId, publishTime])
+  @@index([aiProcessed])
+  @@index([primaryDomain, publishTime])
+  @@index([opinionStance])
 }
 
 model DomainInfluencer {
   domainId     String
   influencerId String
-  relevance    Float    @default(1.0) // 相关度
+  relevance    Float @default(1.0)
 
-  domain     Domain      @relation(fields: [domainId], references: [id])
-  influencer Influencer  @relation(fields: [influencerId], references: [id])
+  domain     Domain     @relation(fields: [domainId], references: [id])
+  influencer Influencer @relation(fields: [influencerId], references: [id])
 
   @@id([domainId, influencerId])
+}
+
+model InfluencerFetchLog {
+  id             String   @id @default(cuid())
+  influencerId   String
+  platform       String
+  status         String
+  postsFetched   Int      @default(0)
+  postsNew       Int      @default(0)
+  durationMs     Int
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  @@index([influencerId])
+  @@index([createdAt])
+  @@index([status])
+}
+
+model InfluencerAnalysisLog {
+  id             String   @id @default(cuid())
+  postId         String
+  influencerId   String
+  status         String
+  durationMs     Int
+  tokensUsed     Int      @default(0)
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  @@index([postId])
+  @@index([createdAt])
 }
 
 // ==================== 知识图谱 ====================
