@@ -1,105 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
 
+const FASTAPI_URL = process.env.FASTAPI_URL || process.env.DATA_SERVICE_URL || 'http://localhost:8000';
+
+/**
+ * GET /api/influencers/[id]
+ * 获取influencer详情（代理到FastAPI）
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
-    const influencer = await prisma.influencer.findUnique({
-      where: { id: id },
-      include: {
-        _count: { select: { posts: true } },
-      },
-    });
+    const response = await fetch(`${FASTAPI_URL}/api/influencers/${id}`);
 
-    if (!influencer) {
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Influencer not found' }));
       return NextResponse.json(
-        { success: false, error: 'Influencer not found' },
-        { status: 404 }
+        { error: error.error || 'Influencer not found', details: error },
+        { status: response.status }
       );
     }
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        id: influencer.id,
-        name: influencer.name,
-        platform: influencer.platform,
-        accountId: influencer.accountId,
-        profileUrl: influencer.profileUrl,
-        avatarUrl: influencer.avatarUrl,
-        category: influencer.category,
-        tags: influencer.tags ? JSON.parse(influencer.tags) : [],
-        isActive: influencer.isActive,
-        postCount: influencer._count.posts,
-        createdAt: influencer.createdAt.toISOString(),
-      },
-    });
+    const data = await response.json();
+    return NextResponse.json(data);
   } catch (error) {
     console.error('Error fetching influencer:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to fetch influencer' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function PUT(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const { name, category, tags, isActive } = body;
-
-    const updateData: any = {};
-    if (name !== undefined) updateData.name = name;
-    if (category !== undefined) updateData.category = category;
-    if (tags !== undefined) updateData.tags = JSON.stringify(tags);
-    if (isActive !== undefined) updateData.isActive = isActive;
-
-    const influencer = await prisma.influencer.update({
-      where: { id: id },
-      data: updateData,
-    });
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        id: influencer.id,
-        name: influencer.name,
-      },
-    });
-  } catch (error) {
-    console.error('Error updating influencer:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to update influencer' },
-      { status: 500 }
-    );
-  }
-}
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    await prisma.influencer.delete({
-      where: { id: id },
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: 'Influencer deleted successfully',
-    });
-  } catch (error) {
-    console.error('Error deleting influencer:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to delete influencer' },
+      { error: 'Failed to fetch influencer', details: error instanceof Error ? error.message : 'Unknown error' },
       { status: 500 }
     );
   }
