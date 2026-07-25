@@ -11,6 +11,8 @@ from typing import Dict, List, Optional, Callable, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
+from services.influencer_fetch_service import InfluencerFetchService
+from workers.influencer_ai_queue import get_queue as get_influencer_ai_queue
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +26,28 @@ class SchedulerService:
         self.is_running = False
         # 并发控制：最多2个采集任务同时执行
         self.fetch_semaphore = asyncio.Semaphore(2)
+
+        # Influencer services (initialized lazily)
+        self._influencer_fetch_service = None
+        self._influencer_ai_queue = None
+
         logger.info('初始化调度器服务：并发限制=2')
 
     async def start(self):
         """启动调度器"""
         if not self.is_running:
+            # Initialize influencer services
+            await self._init_influencer_services()
+
+            # Start influencer AI queue
+            if self._influencer_ai_queue:
+                await self._influencer_ai_queue.start()
+                logger.info('Influencer AI queue started')
+
+            # Schedule influencer tasks
+            self._schedule_influencer_tasks()
+
+            # Start scheduler
             self.scheduler.start()
             self.is_running = True
             logger.info('定时任务调度器已启动')
@@ -36,8 +55,15 @@ class SchedulerService:
     async def stop(self):
         """停止调度器"""
         if self.is_running:
+            # Stop scheduler
             self.scheduler.shutdown()
             self.is_running = False
+
+            # Stop influencer AI queue
+            if self._influencer_ai_queue:
+                await self._influencer_ai_queue.stop()
+                logger.info('Influencer AI queue stopped')
+
             logger.info('定时任务调度器已停止')
 
     async def add_interval_job(
@@ -742,6 +768,111 @@ class SchedulerService:
         except Exception as e:
             logger.error(f'更新调度器时间戳失败: scheduler_id={scheduler_id}, error={e}')
             return False
+
+    # ============ Influencer Tasks ============
+
+    async def _init_influencer_services(self):
+        """Initialize influencer-related services"""
+        try:
+            from db import db
+
+            # Initialize fetch service with database
+            self._influencer_fetch_service = InfluencerFetchService(db)
+
+            # Get global queue instance
+            self._influencer_ai_queue = get_influencer_ai_queue()
+
+            logger.info('Influencer services initialized')
+
+        except Exception as e:
+            logger.error(f'Failed to initialize influencer services: {e}')
+            # Set to None if initialization fails
+            self._influencer_fetch_service = None
+            self._influencer_ai_queue = None
+
+    def _schedule_influencer_tasks(self):
+        """Schedule influencer-related tasks"""
+        try:
+            if not self._influencer_fetch_service or not self._influencer_ai_queue:
+                logger.warning('Influencer services not initialized, skipping task scheduling')
+                return
+
+            # Task 1: Fetch influencer posts every hour
+            self.scheduler.add_job(
+                self._run_influencer_fetch,
+                trigger='cron',
+                hour='*',
+                minute='0',
+                id='influencer_fetch',
+                name='Influencer Fetch Task',
+                replace_existing=True
+            )
+
+            # Task 2: Process AI analysis every 10 minutes
+            self.scheduler.add_job(
+                self._run_influencer_ai_analysis,
+                trigger='interval',
+                minutes=10,
+                id='influencer_ai_analysis',
+                name='Influencer AI Analysis Task',
+                replace_existing=True
+            )
+
+            logger.info('Influencer tasks scheduled: fetch (hourly), AI analysis (every 10min)')
+
+        except Exception as e:
+            logger.error(f'Failed to schedule influencer tasks: {e}')
+
+    async def _run_influencer_fetch(self):
+        """Run influencer fetch task - fetches posts from all due influencers"""
+        try:
+            if not self._influencer_fetch_service:
+                logger.warning('Influencer fetch service not available')
+                return
+
+            logger.info('Running influencer fetch task...')
+            result = await self._influencer_fetch_service.fetch_all_due()
+
+            logger.info(
+                f'Influencer fetch completed: '
+                f'total={result.get("total_fetched", 0)}, '
+                f'success={result.get("success_count", 0)}, '
+                f'errors={result.get("error_count", 0)}'
+            )
+
+        except Exception as e:
+            logger.error(f'Influencer fetch task failed: {e}', exc_info=True)
+
+    async def _run_influencer_ai_analysis(self):
+        """Run influencer AI analysis task - publishes unprocessed posts to AI queue"""
+        try:
+            if not self._influencer_ai_queue:
+                logger.warning('Influencer AI queue not available')
+                return
+
+            logger.info('Running influencer AI analysis task...')
+
+            # Query unprocessed posts
+            from db import db
+            async with db.get_connection() as conn:
+                cursor = await conn.execute("""
+                    SELECT id FROM InfluencerPost
+                    WHERE aiProcessed = 0
+                    ORDER BY createdAt DESC
+                    LIMIT 50
+                """)
+                rows = await cursor.fetchall()
+                post_ids = [row['id'] for row in rows]
+
+            if post_ids:
+                # Publish to AI queue
+                await self._influencer_ai_queue.publish_batch(post_ids)
+                logger.info(f'Published {len(post_ids)} posts to AI queue')
+            else:
+                logger.debug('No unprocessed influencer posts found')
+
+        except Exception as e:
+            logger.error(f'Influencer AI analysis task failed: {e}', exc_info=True)
 
 
 # 全局调度器实例
