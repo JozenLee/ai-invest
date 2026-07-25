@@ -1,104 +1,98 @@
-"""
-微博 Provider（模拟版）
-当前使用模拟数据，预留实际爬虫接口
-"""
+import aiohttp
+import logging
 from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-import random
+from datetime import datetime
+from dateutil import parser
+from providers.base_influencer_provider import BaseInfluencerProvider
 
+logger = logging.getLogger(__name__)
 
-class WeiboProvider:
-    """微博数据提供者"""
-    
-    def __init__(self):
-        """初始化微博 Provider"""
-        pass
-    
-    async def fetch_user_posts(self, uid: str, limit: int = 20) -> List[Dict]:
-        """
-        获取用户的微博列表
-        
-        Args:
-            uid: 微博用户 UID
-            limit: 获取数量限制
-            
-        Returns:
-            微博列表
-        """
-        # TODO: 实现真实的微博爬虫
-        # 当前返回模拟数据
-        return self._generate_mock_posts(uid, limit)
-    
-    async def get_user_info(self, uid: str) -> Optional[Dict]:
-        """
-        获取用户基本信息
-        
-        Args:
-            uid: 微博用户 UID
-            
-        Returns:
-            用户信息字典
-        """
-        # TODO: 实现真实的用户信息获取
-        # 当前返回模拟数据
-        return self._generate_mock_user_info(uid)
-    
-    def _generate_mock_posts(self, uid: str, limit: int) -> List[Dict]:
-        """生成模拟微博数据"""
-        posts = []
-        topics = [
-            '科技行业观察',
-            'AI技术发展',
-            '芯片产业动态',
-            '新能源汽车',
-            '投资理财心得'
-        ]
-        
-        for i in range(min(limit, 10)):
-            publish_time = datetime.now() - timedelta(days=i, hours=random.randint(0, 23))
-            
-            posts.append({
-                'id': f'{uid}_{i}',
-                'content': f'[模拟] {random.choice(topics)}：这是一条模拟的微博内容 {i+1}。'
-                          f'分享一些行业洞察和个人观点。#科技# #投资#',
-                'url': f'https://weibo.com/{uid}/{uid}_{i}',
-                'publish_time': publish_time.isoformat(),
-                'like_count': random.randint(100, 5000),
-                'comment_count': random.randint(10, 500),
-                'repost_count': random.randint(5, 200),
-                'images': [f'https://placeholder.com/weibo_img_{i}_{j}.jpg' for j in range(random.randint(0, 3))],
-            })
-        
-        return posts
-    
-    def _generate_mock_user_info(self, uid: str) -> Dict:
-        """生成模拟用户信息"""
-        return {
-            'uid': uid,
-            'name': f'微博用户{uid}',
-            'avatar': f'https://placeholder.com/weibo_avatar_{uid}.jpg',
-            'signature': '专注科技与投资 | 分享行业洞察',
-            'followers': random.randint(50000, 500000),
-            'verified': True,
-            'verified_type': '科技博主',
+class WeiboAPIProvider(BaseInfluencerProvider):
+    """Weibo Open Platform API Provider"""
+
+    def __init__(self, config: Dict):
+        super().__init__(config)
+        self.api_key = config.get('api_key')
+        self.api_secret = config.get('api_secret')
+        self.access_token = config.get('access_token')
+        self.base_url = "https://api.weibo.com/2"
+
+    async def fetch_user_info(self, account_id: str) -> Dict:
+        """Fetch Weibo user information"""
+        url = f"{self.base_url}/users/show.json"
+        params = {
+            'uid': account_id,
+            'access_token': self.access_token
         }
 
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return {
+                            'name': data.get('screen_name'),
+                            'avatar_url': data.get('avatar_large'),
+                            'description': data.get('description'),
+                            'verified': data.get('verified', False),
+                            'followers_count': data.get('followers_count', 0)
+                        }
+                    else:
+                        logger.error(f"Weibo API error: {response.status}")
+                        return {}
+        except Exception as e:
+            logger.error(f"Failed to fetch Weibo user info: {e}")
+            return {}
 
-# 测试代码
-if __name__ == '__main__':
-    import asyncio
-    
-    async def test():
-        provider = WeiboProvider()
-        
-        # 测试用户信息
-        user_info = await provider.get_user_info('test_uid')
-        print("User Info:", user_info)
-        
-        # 测试微博列表
-        posts = await provider.fetch_user_posts('test_uid', limit=5)
-        print(f"Posts: {len(posts)} items")
-        for post in posts[:2]:
-            print(f"  - {post['content'][:50]}...")
-    
-    asyncio.run(test())
+    async def fetch_user_posts(
+        self,
+        account_id: str,
+        since: Optional[datetime] = None,
+        limit: int = 20
+    ) -> List[Dict]:
+        """Fetch Weibo user timeline"""
+        url = f"{self.base_url}/statuses/user_timeline.json"
+        params = {
+            'uid': account_id,
+            'count': min(limit, 100),
+            'access_token': self.access_token
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        statuses = data.get('statuses', [])
+                        return [self._parse_weibo(status) for status in statuses]
+                    else:
+                        logger.error(f"Weibo API error: {response.status}")
+                        return []
+        except Exception as e:
+            logger.error(f"Failed to fetch Weibo posts: {e}")
+            return []
+
+    async def validate_account(self, account_id: str) -> bool:
+        """Validate if Weibo account exists"""
+        user_info = await self.fetch_user_info(account_id)
+        return bool(user_info)
+
+    def _parse_weibo(self, raw: Dict) -> Dict:
+        """Parse Weibo status to standard format"""
+        return {
+            'content': raw.get('text', ''),
+            'url': f"https://weibo.com/{raw.get('user', {}).get('id')}/{raw.get('id')}",
+            'publish_time': self._parse_weibo_time(raw.get('created_at')),
+            'media_type': 'image' if raw.get('pic_urls') else 'text',
+            'media_urls': [pic['thumbnail_pic'] for pic in raw.get('pic_urls', [])],
+            'likes': raw.get('attitudes_count', 0),
+            'comments': raw.get('comments_count', 0),
+            'shares': raw.get('reposts_count', 0),
+        }
+
+    def _parse_weibo_time(self, time_str: str) -> datetime:
+        """Parse Weibo time format: 'Tue May 31 17:46:55 +0800 2011'"""
+        try:
+            return parser.parse(time_str)
+        except:
+            return datetime.now()
