@@ -1,338 +1,386 @@
 """
-大V监控路由
-提供大V管理、动态采集、内容分析等接口
+Influencer Management Router
+Provides influencer management, post fetching, and opinion aggregation endpoints
 """
 
 import json
 import logging
 from datetime import datetime
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Query, Depends
+from pydantic import BaseModel, Field
+
+from db import db
+from services.influencer_fetch_service import InfluencerFetchService
+from services.opinion_aggregation_service import OpinionAggregationService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/influencers", tags=["influencers"])
 
+# Initialize services
+fetch_service = InfluencerFetchService(db)
+# Note: OpinionAggregationService requires Prisma client, we'll handle this separately
 
-# ==================== 数据模型 ====================
+
+# ==================== Request/Response Models ====================
 
 class InfluencerCreate(BaseModel):
     name: str
-    platform: str  # weibo/bilibili/xiaohongshu/zhihu
-    account_id: str
-    profile_url: Optional[str] = None
-    avatar_url: Optional[str] = None
-    category: Optional[str] = None
-    tags: List[str] = []
-
-
-class InfluencerUpdate(BaseModel):
-    name: Optional[str] = None
-    profile_url: Optional[str] = None
-    avatar_url: Optional[str] = None
+    platform: str  # weibo, bilibili
+    accountId: str
+    driverType: str = "api"
+    providerConfig: Optional[str] = None
+    fetchInterval: int = Field(default=60, description="Fetch interval in minutes")
+    priority: str = Field(default="medium", description="Priority: high/medium/low")
+    isActive: bool = True
+    profileUrl: Optional[str] = None
+    avatarUrl: Optional[str] = None
     category: Optional[str] = None
     tags: Optional[List[str]] = None
-    is_active: Optional[bool] = None
 
 
 class InfluencerResponse(BaseModel):
     id: str
     name: str
     platform: str
-    account_id: str
-    profile_url: Optional[str]
-    avatar_url: Optional[str]
-    category: Optional[str]
-    tags: List[str]
-    is_active: bool
-    created_at: datetime
-    post_count: int = 0
-    latest_post_time: Optional[datetime] = None
+    accountId: str
+    isActive: bool
+    lastFetchAt: Optional[str]
+    lastFetchStatus: Optional[str]
+    createdAt: str
+    priority: str
+    fetchInterval: int
+    driverType: str
+    profileUrl: Optional[str] = None
+    category: Optional[str] = None
 
 
-class PostResponse(BaseModel):
-    id: str
-    influencer_id: str
-    content: str
-    original_url: Optional[str]
-    publish_time: datetime
-    sentiment: Optional[float]
-    extracted_topics: List[str]
-    related_domains: List[str]
-    created_at: datetime
+class InfluencerListResponse(BaseModel):
+    items: List[InfluencerResponse]
+    total: int
+    page: int
+    pageSize: int
 
 
-# ==================== 模拟数据库（实际应使用Prisma） ====================
+class FetchTriggerResponse(BaseModel):
+    success: bool
+    postsFetched: int
+    postsNew: int
+    error: Optional[str] = None
 
-# 这里使用内存存储，实际应该连接数据库
-influencers_db = {}
-posts_db = {}
 
+# ==================== API Endpoints ====================
 
-# ==================== API端点 ====================
+@router.post("/", response_model=InfluencerResponse)
+async def create_influencer(data: InfluencerCreate):
+    """
+    Create a new influencer
 
-@router.get("/", response_model=List[InfluencerResponse])
-async def list_influencers(
-    platform: Optional[str] = None,
-    category: Optional[str] = None,
-    is_active: Optional[bool] = None
-):
-    """获取大V列表"""
+    Validates platform support and saves to database.
+    """
     try:
-        # 实际应该从数据库查询
-        # 这里返回模拟数据
-        influencers = [
-            {
-                "id": "inf_001",
-                "name": "半导体行业观察",
-                "platform": "weibo",
-                "account_id": "1234567890",
-                "profile_url": "https://weibo.com/1234567890",
-                "avatar_url": None,
-                "category": "tech",
-                "tags": ["半导体", "芯片", "AI"],
-                "is_active": True,
-                "created_at": datetime.now(),
-                "post_count": 156,
-                "latest_post_time": datetime.now()
-            },
-            {
-                "id": "inf_002",
-                "name": "科技宅小明",
-                "platform": "bilibili",
-                "account_id": "9876543210",
-                "profile_url": "https://space.bilibili.com/9876543210",
-                "avatar_url": None,
-                "category": "tech",
-                "tags": ["AI", "消费电子", "科技"],
-                "is_active": True,
-                "created_at": datetime.now(),
-                "post_count": 89,
-                "latest_post_time": datetime.now()
-            }
-        ]
+        # Validate platform
+        supported_platforms = ["weibo", "bilibili"]
+        if data.platform not in supported_platforms:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported platform: {data.platform}. Supported: {supported_platforms}"
+            )
 
-        # 应用过滤
-        if platform:
-            influencers = [i for i in influencers if i["platform"] == platform]
-        if category:
-            influencers = [i for i in influencers if i["category"] == category]
-        if is_active is not None:
-            influencers = [i for i in influencers if i["is_active"] == is_active]
+        # Check if already exists
+        async with db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id FROM Influencer WHERE platform = ? AND accountId = ?",
+                (data.platform, data.accountId)
+            )
+            existing = await cursor.fetchone()
+            if existing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Influencer already exists: {data.platform}/{data.accountId}"
+                )
 
-        return influencers
+        # Generate ID
+        influencer_id = f"inf_{int(datetime.now().timestamp() * 1000000)}"
+        created_at = datetime.now().isoformat()
 
+        # Serialize tags
+        tags_str = json.dumps(data.tags) if data.tags else None
+
+        # Insert to database
+        async with db.get_connection() as conn:
+            await conn.execute("""
+                INSERT INTO Influencer (
+                    id, name, platform, accountId, driverType, providerConfig,
+                    fetchInterval, priority, isActive, profileUrl, avatarUrl,
+                    category, tags, createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                influencer_id,
+                data.name,
+                data.platform,
+                data.accountId,
+                data.driverType,
+                data.providerConfig,
+                data.fetchInterval,
+                data.priority,
+                1 if data.isActive else 0,
+                data.profileUrl,
+                data.avatarUrl,
+                data.category,
+                tags_str,
+                created_at,
+                created_at
+            ))
+
+        logger.info(f"Created influencer: {influencer_id} ({data.name})")
+
+        return InfluencerResponse(
+            id=influencer_id,
+            name=data.name,
+            platform=data.platform,
+            accountId=data.accountId,
+            isActive=data.isActive,
+            lastFetchAt=None,
+            lastFetchStatus=None,
+            createdAt=created_at,
+            priority=data.priority,
+            fetchInterval=data.fetchInterval,
+            driverType=data.driverType,
+            profileUrl=data.profileUrl,
+            category=data.category
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f'获取大V列表失败: {e}')
+        logger.error(f"Failed to create influencer: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/", response_model=InfluencerResponse)
-async def create_influencer(influencer: InfluencerCreate):
-    """添加大V"""
+@router.get("/", response_model=InfluencerListResponse)
+async def list_influencers(
+    platform: Optional[str] = Query(None, description="Filter by platform"),
+    page: int = Query(1, ge=1, description="Page number"),
+    pageSize: int = Query(20, ge=1, le=100, description="Page size")
+):
+    """
+    List influencers with optional filtering and pagination
+
+    Supports filtering by platform and pagination.
+    """
     try:
-        # 检查是否已存在
-        # 实际应该查询数据库
+        offset = (page - 1) * pageSize
 
-        new_influencer = {
-            "id": f"inf_{datetime.now().timestamp()}",
-            "name": influencer.name,
-            "platform": influencer.platform,
-            "account_id": influencer.account_id,
-            "profile_url": influencer.profile_url,
-            "avatar_url": influencer.avatar_url,
-            "category": influencer.category,
-            "tags": influencer.tags,
-            "is_active": True,
-            "created_at": datetime.now(),
-            "post_count": 0,
-            "latest_post_time": None
-        }
+        # Build query
+        where_clause = ""
+        params = []
 
-        # 实际应该保存到数据库
-        # await prisma.influencer.create(data=new_influencer)
+        if platform:
+            where_clause = "WHERE platform = ?"
+            params.append(platform)
 
-        return new_influencer
+        # Get total count
+        async with db.get_connection() as conn:
+            count_query = f"SELECT COUNT(*) as total FROM Influencer {where_clause}"
+            cursor = await conn.execute(count_query, params)
+            row = await cursor.fetchone()
+            total = row['total'] if row else 0
+
+            # Get paginated results
+            query = f"""
+                SELECT * FROM Influencer
+                {where_clause}
+                ORDER BY createdAt DESC
+                LIMIT ? OFFSET ?
+            """
+            cursor = await conn.execute(query, params + [pageSize, offset])
+            rows = await cursor.fetchall()
+
+        # Convert to response models
+        items = []
+        for row in rows:
+            items.append(InfluencerResponse(
+                id=row['id'],
+                name=row['name'],
+                platform=row['platform'],
+                accountId=row['accountId'],
+                isActive=bool(row['isActive']),
+                lastFetchAt=row['lastFetchAt'],
+                lastFetchStatus=row['lastFetchStatus'],
+                createdAt=row['createdAt'],
+                priority=row['priority'],
+                fetchInterval=row['fetchInterval'],
+                driverType=row['driverType'],
+                profileUrl=row['profileUrl'],
+                category=row['category']
+            ))
+
+        return InfluencerListResponse(
+            items=items,
+            total=total,
+            page=page,
+            pageSize=pageSize
+        )
 
     except Exception as e:
-        logger.error(f'添加大V失败: {e}')
+        logger.error(f"Failed to list influencers: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{influencer_id}", response_model=InfluencerResponse)
 async def get_influencer(influencer_id: str):
-    """获取大V详情"""
-    try:
-        # 实际应该从数据库查询
-        # 这里返回模拟数据
-        return {
-            "id": influencer_id,
-            "name": "示例大V",
-            "platform": "weibo",
-            "account_id": "1234567890",
-            "profile_url": "https://weibo.com/1234567890",
-            "avatar_url": None,
-            "category": "tech",
-            "tags": ["AI", "芯片"],
-            "is_active": True,
-            "created_at": datetime.now(),
-            "post_count": 100,
-            "latest_post_time": datetime.now()
-        }
+    """
+    Get a single influencer by ID
 
+    Returns 404 if not found.
+    """
+    try:
+        async with db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM Influencer WHERE id = ?",
+                (influencer_id,)
+            )
+            row = await cursor.fetchone()
+
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
+
+        return InfluencerResponse(
+            id=row['id'],
+            name=row['name'],
+            platform=row['platform'],
+            accountId=row['accountId'],
+            isActive=bool(row['isActive']),
+            lastFetchAt=row['lastFetchAt'],
+            lastFetchStatus=row['lastFetchStatus'],
+            createdAt=row['createdAt'],
+            priority=row['priority'],
+            fetchInterval=row['fetchInterval'],
+            driverType=row['driverType'],
+            profileUrl=row['profileUrl'],
+            category=row['category']
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f'获取大V详情失败: {e}')
+        logger.error(f"Failed to get influencer: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{influencer_id}", response_model=InfluencerResponse)
-async def update_influencer(influencer_id: str, update: InfluencerUpdate):
-    """更新大V信息"""
+@router.post("/{influencer_id}/fetch", response_model=FetchTriggerResponse)
+async def trigger_fetch(influencer_id: str):
+    """
+    Manually trigger fetch for an influencer
+
+    Calls InfluencerFetchService to fetch posts from the platform.
+    """
     try:
-        # 实际应该更新数据库
-        # await prisma.influencer.update(where={"id": influencer_id}, data=update.dict(exclude_unset=True))
+        # Check if influencer exists
+        async with db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT id FROM Influencer WHERE id = ?",
+                (influencer_id,)
+            )
+            row = await cursor.fetchone()
 
-        return {
-            "id": influencer_id,
-            "name": update.name or "示例大V",
-            "platform": "weibo",
-            "account_id": "1234567890",
-            "profile_url": update.profile_url,
-            "avatar_url": update.avatar_url,
-            "category": update.category,
-            "tags": update.tags or [],
-            "is_active": update.is_active if update.is_active is not None else True,
-            "created_at": datetime.now(),
-            "post_count": 100,
-            "latest_post_time": datetime.now()
-        }
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
 
+        logger.info(f"Triggering fetch for influencer: {influencer_id}")
+
+        # Call fetch service
+        result = await fetch_service.fetch_influencer_posts(influencer_id)
+
+        return FetchTriggerResponse(
+            success=result['success'],
+            postsFetched=result['posts_fetched'],
+            postsNew=result['posts_new'],
+            error=result.get('error')
+        )
+
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f'更新大V失败: {e}')
+        logger.error(f"Failed to trigger fetch: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/{influencer_id}")
-async def delete_influencer(influencer_id: str):
-    """删除大V"""
-    try:
-        # 实际应该删除数据库记录
-        # await prisma.influencer.delete(where={"id": influencer_id})
-
-        return {"message": f"大V {influencer_id} 已删除"}
-
-    except Exception as e:
-        logger.error(f'删除大V失败: {e}')
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{influencer_id}/posts", response_model=List[PostResponse])
-async def get_influencer_posts(
-    influencer_id: str,
-    limit: int = Query(default=20, le=100)
+@router.get("/opinions/domain/{domain_code}")
+async def get_domain_opinions(
+    domain_code: str,
+    time_window: str = Query("7d", pattern="^(3d|7d|30d)$", description="Time window: 3d, 7d, or 30d")
 ):
-    """获取大V动态"""
+    """
+    Get aggregated opinions by domain
+
+    Calls OpinionAggregationService to aggregate and analyze opinions.
+    Requires Prisma client for complex queries.
+    """
     try:
-        # 实际应该从数据库查询
-        # 这里返回模拟数据
-        posts = [
-            {
-                "id": f"post_{i}",
-                "influencer_id": influencer_id,
-                "content": f"这是第{i}条动态内容，关于AI芯片行业的发展趋势...",
-                "original_url": f"https://example.com/post/{i}",
-                "publish_time": datetime.now(),
-                "sentiment": 0.7,
-                "extracted_topics": ["AI芯片", "行业趋势"],
-                "related_domains": ["ai", "semiconductor"],
-                "created_at": datetime.now()
-            }
-            for i in range(min(limit, 5))
-        ]
+        # For now, return mock data since OpinionAggregationService requires Prisma
+        # In production, this would use: opinion_service.aggregate_domain_opinions(domain_code, time_window)
+        logger.warning("OpinionAggregationService requires Prisma client - returning mock data")
 
-        return posts
+        # Query posts directly from database
+        async with db.get_connection() as conn:
+            # Parse time window
+            days = int(time_window.rstrip('d'))
 
-    except Exception as e:
-        logger.error(f'获取大V动态失败: {e}')
-        raise HTTPException(status_code=500, detail=str(e))
+            cursor = await conn.execute("""
+                SELECT ip.*, i.name as influencer_name, i.platform
+                FROM InfluencerPost ip
+                JOIN Influencer i ON ip.influencerId = i.id
+                WHERE ip.primaryDomain = ?
+                AND ip.publishTime >= datetime('now', '-' || ? || ' days')
+                AND ip.aiProcessed = 1
+                ORDER BY ip.publishTime DESC
+            """, (domain_code, days))
 
+            rows = await cursor.fetchall()
 
-@router.post("/{influencer_id}/fetch")
-async def fetch_influencer_posts(influencer_id: str):
-    """手动触发采集大V动态"""
-    try:
-        # 获取大V信息
-        # influencer = await prisma.influencer.find_unique(where={"id": influencer_id})
+        # Calculate statistics
+        total = len(rows)
+        bullish = sum(1 for r in rows if r.get('opinionStance') == 'bullish')
+        neutral = sum(1 for r in rows if r.get('opinionStance') == 'neutral')
+        bearish = sum(1 for r in rows if r.get('opinionStance') == 'bearish')
 
-        # 调用对应的Provider采集动态
-        # from providers.social_provider import get_social_provider
-        # provider = get_social_provider(influencer.platform)
-        # posts = await provider.fetch_user_posts(influencer.account_id)
+        confidences = [r['opinionConfidence'] for r in rows if r.get('opinionConfidence')]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
 
-        # 分析内容并保存
-        # from services.content_analyzer import content_analyzer
-        # for post in posts:
-        #     sentiment = await content_analyzer.analyze_sentiment(post['content'])
-        #     topics = await content_analyzer.extract_topics(post['content'])
-        #     domains = await content_analyzer.match_domains(post['content'], influencer.tags)
-        #
-        #     await prisma.influencerpost.create(data={...})
+        sentiments = [r['sentiment'] for r in rows if r.get('sentiment') is not None]
+        avg_sentiment = sum(sentiments) / len(sentiments) if sentiments else 0
+
+        # Format top opinions
+        top_opinions = []
+        for row in rows[:10]:
+            top_opinions.append({
+                "post_id": row['id'],
+                "influencer_name": row.get('influencer_name', 'Unknown'),
+                "opinion_summary": row.get('opinionSummary', ''),
+                "stance": row.get('opinionStance', 'neutral'),
+                "confidence": row.get('opinionConfidence', 0),
+                "publish_time": row['publishTime']
+            })
 
         return {
-            "message": f"开始采集大V {influencer_id} 的动态",
-            "status": "processing"
-        }
-
-    except Exception as e:
-        logger.error(f'采集大V动态失败: {e}')
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/{influencer_id}/investment-ideas")
-async def get_investment_ideas(influencer_id: str):
-    """获取大V的投资理念"""
-    try:
-        # 实际应该从数据库查询该大V的最近动态，然后分析投资理念
-        # posts = await prisma.influencerpost.find_many(...)
-        # combined_content = "\n".join([p.content for p in posts])
-        # ideas = await content_analyzer.extract_investment_ideas(combined_content)
-
-        # 返回模拟数据
-        return {
-            "influencer_id": influencer_id,
-            "ideas": {
-                "观点": "看好AI芯片产业链，认为算力需求将持续增长",
-                "逻辑": "大模型训练和推理需求爆发，带动上游芯片和服务器需求",
-                "建议": "关注GPU、HBM、服务器散热等细分领域",
-                "风险": "技术迭代风险、政策风险、估值过高风险"
+            "domain": domain_code,
+            "time_window": time_window,
+            "statistics": {
+                "total_opinions": total,
+                "stance_distribution": {
+                    "bullish": bullish,
+                    "neutral": neutral,
+                    "bearish": bearish
+                },
+                "avg_confidence": round(avg_confidence, 2),
+                "avg_sentiment": round(avg_sentiment, 2)
             },
-            "updated_at": datetime.now()
+            "top_opinions": top_opinions
         }
 
     except Exception as e:
-        logger.error(f'获取投资理念失败: {e}')
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== 批量操作 ====================
-
-@router.post("/batch/fetch")
-async def batch_fetch_posts():
-    """批量采集所有活跃大V的动态"""
-    try:
-        # 实际应该从数据库获取所有活跃大V
-        # influencers = await prisma.influencer.find_many(where={"is_active": True})
-
-        # 为每个大V创建采集任务
-        # for influencer in influencers:
-        #     await fetch_influencer_posts(influencer.id)
-
-        return {
-            "message": "开始批量采集",
-            "status": "processing"
-        }
-
-    except Exception as e:
-        logger.error(f'批量采集失败: {e}')
+        logger.error(f"Failed to get domain opinions: {e}")
         raise HTTPException(status_code=500, detail=str(e))

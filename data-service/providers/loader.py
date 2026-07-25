@@ -3,8 +3,8 @@ Provider 加载器
 动态加载和管理不同的数据源 Provider
 """
 from typing import Optional, Dict, Any
-from .bilibili_provider import BilibiliProvider
-from .weibo_provider import WeiboProvider
+from .bilibili_provider import BilibiliAPIProvider
+from .weibo_provider import WeiboAPIProvider
 from .xiaohongshu_provider import XiaohongshuProvider
 from .schemas import get_provider_schema, validate_provider_config, list_provider_schemas
 
@@ -14,8 +14,8 @@ class ProviderLoader:
 
     # 注册的 Provider 类型
     PROVIDERS = {
-        'bilibili': BilibiliProvider,
-        'weibo': WeiboProvider,
+        'bilibili': BilibiliAPIProvider,
+        'weibo': WeiboAPIProvider,
         'xiaohongshu': XiaohongshuProvider,
     }
 
