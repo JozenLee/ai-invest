@@ -296,7 +296,10 @@ async def test_fetch_logs_creation(mock_provider):
 
         # Verify log was created
         assert len(log_created) > 0
-        log_data = log_created[0][0] if log_created[0] else ()  # Extract tuple from args
+        # log_created contains args from execute call
+        # First element is the tuple of values passed to INSERT
+        log_data = log_created[0][0] if len(log_created[0]) > 0 else log_created[0]
+        # log_data is the tuple: (log_id, influencerId, platform, status, ...)
         assert log_data[1] == 'inf_123'  # influencerId
         assert log_data[2] == 'weibo'    # platform
         assert log_data[3] == 'success'  # status
