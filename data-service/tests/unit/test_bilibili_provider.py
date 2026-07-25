@@ -67,6 +67,9 @@ async def test_fetch_user_posts_success(provider):
                             'like': {'count': 200},
                             'comment': {'count': 80},
                             'forward': {'count': 40}
+                        },
+                        'module_author': {
+                            'pub_ts': 1640000000  # 2021-12-20
                         }
                     },
                     'type': 'DYNAMIC_TYPE_AV',  # video type
@@ -99,6 +102,7 @@ async def test_fetch_user_posts_success(provider):
         assert result[0]['comments'] == 80
         assert result[0]['shares'] == 40
         assert result[0]['media_type'] == 'video'
+        assert result[0]['publish_time'] == datetime.fromtimestamp(1640000000)
 
 @pytest.mark.asyncio
 async def test_validate_account_exists(provider):
@@ -113,3 +117,55 @@ async def test_validate_account_not_exists(provider):
     with patch.object(provider, 'fetch_user_info', return_value={}):
         result = await provider.validate_account('invalid')
         assert result == False
+
+@pytest.mark.asyncio
+async def test_fetch_user_posts_with_since_filter(provider):
+    """Test posts fetch with since parameter filtering"""
+    mock_response_data = {
+        'code': 0,
+        'data': {
+            'items': [
+                {
+                    'id_str': '1',
+                    'modules': {
+                        'module_dynamic': {'desc': {'text': 'Old post'}},
+                        'module_stat': {'like': {'count': 10}, 'comment': {'count': 5}, 'forward': {'count': 2}},
+                        'module_author': {'pub_ts': 1640000000}  # 2021-12-20
+                    },
+                    'type': 'DYNAMIC_TYPE_WORD',
+                    'basic': {'comment_id_str': '1'}
+                },
+                {
+                    'id_str': '2',
+                    'modules': {
+                        'module_dynamic': {'desc': {'text': 'New post'}},
+                        'module_stat': {'like': {'count': 50}, 'comment': {'count': 20}, 'forward': {'count': 10}},
+                        'module_author': {'pub_ts': 1700000000}  # 2023-11-14
+                    },
+                    'type': 'DYNAMIC_TYPE_WORD',
+                    'basic': {'comment_id_str': '2'}
+                }
+            ]
+        }
+    }
+
+    mock_response = Mock()
+    mock_response.status = 200
+    mock_response.json = AsyncMock(return_value=mock_response_data)
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=None)
+
+    mock_session = Mock()
+    mock_session.get = Mock(return_value=mock_response)
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+
+    with patch('aiohttp.ClientSession', return_value=mock_session):
+        # Filter posts after 2023-01-01
+        since = datetime(2023, 1, 1)
+        result = await provider.fetch_user_posts('123456', since=since, limit=20)
+
+        # Should only return the new post
+        assert len(result) == 1
+        assert result[0]['content'] == 'New post'
+        assert result[0]['publish_time'] > since

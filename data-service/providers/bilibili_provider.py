@@ -67,7 +67,19 @@ class BilibiliAPIProvider(BaseInfluencerProvider):
                         if result.get('code') == 0:
                             data = result.get('data', {})
                             items = data.get('items', [])
-                            return [self._parse_dynamic(item) for item in items[:limit]]
+
+                            # Parse all items first
+                            parsed_posts = [self._parse_dynamic(item) for item in items]
+
+                            # Filter by since parameter if provided
+                            if since:
+                                parsed_posts = [
+                                    post for post in parsed_posts
+                                    if post.get('publish_time') and post['publish_time'] > since
+                                ]
+
+                            # Apply limit after filtering
+                            return parsed_posts[:limit]
                         else:
                             logger.error(f"Bilibili API error code: {result.get('code')}")
                             return []
@@ -108,10 +120,20 @@ class BilibiliAPIProvider(BaseInfluencerProvider):
         comment_id = basic.get('comment_id_str', dynamic_id)
         url = f"https://www.bilibili.com/opus/{comment_id}"
 
+        # Extract timestamp (Bilibili uses Unix timestamp in module_author)
+        publish_time = None
+        module_author = modules.get('module_author', {})
+        pub_ts = module_author.get('pub_ts')
+        if pub_ts:
+            try:
+                publish_time = datetime.fromtimestamp(pub_ts)
+            except (ValueError, TypeError, OSError):
+                logger.warning(f"Invalid timestamp for dynamic {dynamic_id}: {pub_ts}")
+
         return {
             'content': content,
             'url': url,
-            'publish_time': datetime.now(),  # Bilibili API doesn't always provide timestamp in list
+            'publish_time': publish_time,
             'media_type': media_type,
             'media_urls': [],
             'likes': likes,
