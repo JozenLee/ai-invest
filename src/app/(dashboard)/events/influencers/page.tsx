@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Plus, Search, Users } from 'lucide-react';
+import { Plus, Search, Users, Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface Influencer {
   id: string;
@@ -18,21 +18,33 @@ interface Influencer {
   profileUrl: string | null;
   avatarUrl: string | null;
   category: string | null;
-  tags: string[];
   isActive: boolean;
-  postCount: number;
+  lastFetchAt: string | null;
+  lastFetchStatus: string | null;
   createdAt: string;
+}
+
+interface InfluencerListResponse {
+  items: Influencer[];
+  total: number;
+  page: number;
+  pageSize: number;
 }
 
 export default function InfluencersPage() {
   const router = useRouter();
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
-  const { data, isLoading, error } = useQuery<{ success: boolean; data: Influencer[] }>({
-    queryKey: ['influencers', platformFilter],
+  const { data, isLoading, error, refetch } = useQuery<InfluencerListResponse>({
+    queryKey: ['influencers', platformFilter, page],
     queryFn: async () => {
-      const params = new URLSearchParams();
+      const params = new URLSearchParams({
+        page: page.toString(),
+        pageSize: pageSize.toString(),
+      });
       if (platformFilter !== 'all') {
         params.set('platform', platformFilter);
       }
@@ -42,6 +54,21 @@ export default function InfluencersPage() {
       return response.json();
     },
   });
+
+  const getPlatformIcon = (platform: string) => {
+    // Using simple colored circles as platform icons
+    const config: Record<string, { color: string; label: string }> = {
+      bilibili: { color: 'bg-pink-500', label: 'B站' },
+      weibo: { color: 'bg-orange-500', label: '微博' },
+      xiaohongshu: { color: 'bg-red-500', label: '小红书' },
+    };
+    const cfg = config[platform] || { color: 'bg-gray-500', label: platform };
+    return (
+      <div className={`w-12 h-12 rounded-full ${cfg.color} flex items-center justify-center text-white font-bold text-xs`}>
+        {cfg.label}
+      </div>
+    );
+  };
 
   const getPlatformBadge = (platform: string) => {
     const config: Record<string, { label: string; variant: 'default' | 'secondary' | 'outline' }> = {
@@ -53,11 +80,48 @@ export default function InfluencersPage() {
     return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
   };
 
-  const filteredInfluencers = data?.data.filter(inf => {
+  const getStatusBadge = (status: string | null) => {
+    if (!status) return <Badge variant="outline" className="text-xs">待抓取</Badge>;
+
+    const config: Record<string, { label: string; variant: 'default' | 'secondary' | 'outline' | 'destructive' }> = {
+      success: { label: '成功', variant: 'default' },
+      pending: { label: '进行中', variant: 'secondary' },
+      error: { label: '失败', variant: 'destructive' },
+      failed: { label: '失败', variant: 'destructive' },
+    };
+    const cfg = config[status] || { label: status, variant: 'outline' };
+    return <Badge variant={cfg.variant} className="text-xs">{cfg.label}</Badge>;
+  };
+
+  const formatTime = (dateStr: string | null) => {
+    if (!dateStr) return '未抓取';
+    try {
+      const date = new Date(dateStr);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+      const diffMins = Math.floor(diffMs / 60000);
+      const diffHours = Math.floor(diffMs / 3600000);
+      const diffDays = Math.floor(diffMs / 86400000);
+
+      if (diffMins < 1) return '刚刚';
+      if (diffMins < 60) return `${diffMins}分钟前`;
+      if (diffHours < 24) return `${diffHours}小时前`;
+      if (diffDays < 7) return `${diffDays}天前`;
+      return date.toLocaleDateString('zh-CN');
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const filteredInfluencers = data?.items.filter(inf => {
     if (!searchQuery) return true;
     return inf.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
            inf.accountId.includes(searchQuery);
   }) || [];
+
+  const totalPages = data ? Math.ceil(data.total / data.pageSize) : 0;
+  const hasNextPage = page < totalPages;
+  const hasPrevPage = page > 1;
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -91,7 +155,10 @@ export default function InfluencersPage() {
                 />
               </div>
             </div>
-            <Select value={platformFilter} onValueChange={(value) => setPlatformFilter(value || 'all')}>
+            <Select value={platformFilter} onValueChange={(value) => {
+              setPlatformFilter(value || 'all');
+              setPage(1); // Reset to first page when filter changes
+            }}>
               <SelectTrigger className="w-[140px]">
                 <SelectValue />
               </SelectTrigger>
@@ -107,7 +174,8 @@ export default function InfluencersPage() {
       </Card>
 
       {isLoading && (
-        <div className="text-center py-12">
+        <div className="flex flex-col items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-2" />
           <p className="text-muted-foreground">加载中...</p>
         </div>
       )}
@@ -115,9 +183,20 @@ export default function InfluencersPage() {
       {error && (
         <Card>
           <CardContent className="pt-6">
-            <p className="text-center text-red-500">
-              加载失败: {error instanceof Error ? error.message : '未知错误'}
-            </p>
+            <div className="flex flex-col items-center gap-4 py-4">
+              <AlertCircle className="h-12 w-12 text-red-500" />
+              <div className="text-center">
+                <p className="text-red-500 font-medium mb-1">
+                  加载失败
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {error instanceof Error ? error.message : '未知错误'}
+                </p>
+              </div>
+              <Button onClick={() => refetch()} variant="outline">
+                重试
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -132,66 +211,95 @@ export default function InfluencersPage() {
         </Card>
       )}
 
-      {!isLoading && filteredInfluencers.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredInfluencers.map(influencer => (
-            <Card
-              key={influencer.id}
-              className="hover:shadow-lg transition-shadow cursor-pointer"
-              onClick={() => router.push(`/events/influencers/${influencer.id}`)}
-            >
-              <CardHeader>
-                <div className="flex items-start gap-3">
-                  {influencer.avatarUrl ? (
-                    <img
-                      src={influencer.avatarUrl}
-                      alt={influencer.name}
-                      className="w-12 h-12 rounded-full"
-                    />
-                  ) : (
-                    <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                      <Users className="h-6 w-6 text-muted-foreground" />
+      {!isLoading && !error && filteredInfluencers.length > 0 && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-sm text-muted-foreground">
+              共 {data?.total || 0} 个大V
+              {searchQuery && ` (筛选后: ${filteredInfluencers.length})`}
+            </p>
+            {!searchQuery && totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={!hasPrevPage}
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" />
+                  上一页
+                </Button>
+                <span className="text-sm text-muted-foreground px-2">
+                  {page} / {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={!hasNextPage}
+                >
+                  下一页
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredInfluencers.map(influencer => (
+              <Card
+                key={influencer.id}
+                className="hover:shadow-lg transition-shadow cursor-pointer"
+                onClick={() => router.push(`/events/influencers/${influencer.id}`)}
+              >
+                <CardHeader>
+                  <div className="flex items-start gap-3">
+                    {influencer.avatarUrl ? (
+                      <img
+                        src={influencer.avatarUrl}
+                        alt={influencer.name}
+                        className="w-12 h-12 rounded-full"
+                      />
+                    ) : (
+                      getPlatformIcon(influencer.platform)
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <CardTitle className="text-lg truncate">{influencer.name}</CardTitle>
+                      <CardDescription className="flex items-center gap-2 mt-1">
+                        {getPlatformBadge(influencer.platform)}
+                        {!influencer.isActive && (
+                          <Badge variant="outline" className="text-xs">已停用</Badge>
+                        )}
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">账号: </span>
+                    <span className="font-mono text-xs">{influencer.accountId}</span>
+                  </div>
+                  {influencer.category && (
+                    <div className="text-sm">
+                      <span className="text-muted-foreground">领域: </span>
+                      <span>{influencer.category}</span>
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <CardTitle className="text-lg truncate">{influencer.name}</CardTitle>
-                    <CardDescription className="flex items-center gap-2 mt-1">
-                      {getPlatformBadge(influencer.platform)}
-                      {!influencer.isActive && (
-                        <Badge variant="outline" className="text-xs">已停用</Badge>
-                      )}
-                    </CardDescription>
+                  <div className="flex items-center justify-between text-sm pt-2 border-t">
+                    <div>
+                      <span className="text-muted-foreground">最后抓取: </span>
+                      <span>{formatTime(influencer.lastFetchAt)}</span>
+                    </div>
                   </div>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {influencer.category && (
-                  <div className="text-sm">
-                    <span className="text-muted-foreground">领域: </span>
-                    <span>{influencer.category}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">状态:</span>
+                    {getStatusBadge(influencer.lastFetchStatus)}
                   </div>
-                )}
-                {influencer.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {influencer.tags.slice(0, 3).map((tag, idx) => (
-                      <Badge key={idx} variant="secondary" className="text-xs">
-                        {tag}
-                      </Badge>
-                    ))}
-                    {influencer.tags.length > 3 && (
-                      <Badge variant="secondary" className="text-xs">
-                        +{influencer.tags.length - 3}
-                      </Badge>
-                    )}
-                  </div>
-                )}
-                <div className="flex items-center justify-between text-sm text-muted-foreground pt-2 border-t">
-                  <span>动态: {influencer.postCount}</span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
