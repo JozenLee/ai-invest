@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,7 @@ import {
   Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatRelativeTime, formatFutureTime } from '@/lib/time-utils';
 
 interface DataSourceScheduler {
   id: string;
@@ -71,65 +73,28 @@ export function DataSourceCard({
     scheduler
   } = dataSource;
 
-  // 格式化时间显示
-  const formatTime = (dateString?: string) => {
-    if (!dateString) return '从未运行';
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
+  // 使用状态来存储格式化后的时间，以便定时更新
+  const [formattedTime, setFormattedTime] = useState<string>('');
+  const [formattedNextRun, setFormattedNextRun] = useState<string>('');
 
-    // 小于1分钟
-    if (diff < 60 * 1000) {
-      return '刚刚';
+  // 初始化和定时更新时间显示
+  useEffect(() => {
+    // 立即计算一次
+    setFormattedTime(formatRelativeTime(lastFetchAt));
+    if (scheduler?.nextRunAt) {
+      setFormattedNextRun(formatFutureTime(scheduler.nextRunAt));
     }
-    // 小于1小时
-    if (diff < 60 * 60 * 1000) {
-      return `${Math.floor(diff / (60 * 1000))}分钟前`;
-    }
-    // 小于24小时
-    if (diff < 24 * 60 * 60 * 1000) {
-      return `${Math.floor(diff / (60 * 60 * 1000))}小时前`;
-    }
-    // 超过24小时，显示日期
-    return date.toLocaleDateString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
 
-  // 格式化下次运行时间
-  const formatNextRun = (dateString?: string) => {
-    if (!dateString) return '未设置';
-    const date = new Date(dateString);
-    const now = new Date();
-    const diff = date.getTime() - now.getTime();
+    // 每30秒更新一次时间显示
+    const timer = setInterval(() => {
+      setFormattedTime(formatRelativeTime(lastFetchAt));
+      if (scheduler?.nextRunAt) {
+        setFormattedNextRun(formatFutureTime(scheduler.nextRunAt));
+      }
+    }, 30000);
 
-    // 已过期
-    if (diff < 0) {
-      return '待执行';
-    }
-    // 小于1分钟
-    if (diff < 60 * 1000) {
-      return '即将执行';
-    }
-    // 小于1小时
-    if (diff < 60 * 60 * 1000) {
-      return `${Math.floor(diff / (60 * 1000))}分钟后`;
-    }
-    // 小于24小时
-    if (diff < 24 * 60 * 60 * 1000) {
-      return `${Math.floor(diff / (60 * 60 * 1000))}小时后`;
-    }
-    // 超过24小时，显示日期
-    return date.toLocaleDateString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
+    return () => clearInterval(timer);
+  }, [lastFetchAt, scheduler?.nextRunAt]);
 
   // 获取采集状态图标和样式
   const getFetchStatusIcon = () => {
@@ -229,7 +194,7 @@ export function DataSourceCard({
               <div>
                 <div className="text-xs text-muted-foreground">下次运行</div>
                 <div className="font-medium">
-                  {scheduler.isEnabled ? formatNextRun(scheduler.nextRunAt) : '已暂停'}
+                  {scheduler.isEnabled ? formattedNextRun : '已暂停'}
                 </div>
               </div>
             </div>
@@ -249,7 +214,7 @@ export function DataSourceCard({
           </div>
 
           <div className="text-sm text-muted-foreground">
-            {formatTime(lastFetchAt)}
+            {formattedTime}
           </div>
         </div>
 

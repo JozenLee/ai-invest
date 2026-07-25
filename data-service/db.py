@@ -88,7 +88,7 @@ class Database:
                     article.get('aiProcessedAt'),
                     article.get('aiError'),
                     article.get('expiresAt'),
-                    article.get('createdAt', datetime.now().isoformat())
+                    article.get('createdAt', datetime.utcnow().isoformat())
                 ))
                 logger.debug(f"插入文章成功: {article.get('title')[:50]}")
                 return article.get('id')
@@ -140,7 +140,7 @@ class Database:
         """创建采集日志"""
         try:
             async with self.get_connection() as conn:
-                log_id = log.get('id', f"log_{int(datetime.now().timestamp() * 1000)}")
+                log_id = log.get('id', f"log_{int(datetime.utcnow().timestamp() * 1000)}")
                 await conn.execute("""
                     INSERT INTO DataSourceLog (
                         id, sourceId, jobId, status, message,
@@ -158,13 +158,13 @@ class Database:
                     log.get('failedCount', 0),
                     log.get('duration'),
                     log.get('errorDetail'),
-                    datetime.now().isoformat()
+                    datetime.utcnow().isoformat()
                 ))
                 logger.debug(f"创建采集日志: {log_id}")
                 return log_id
         except Exception as e:
             logger.error(f"创建采集日志失败: {e}")
-            return f"log_{int(datetime.now().timestamp() * 1000)}"
+            return f"log_{int(datetime.utcnow().timestamp() * 1000)}"
 
     async def update_datasource_log(self, log_id: str, updates: Dict[str, Any]):
         """更新采集日志"""
@@ -235,7 +235,7 @@ class Database:
                         errorMessage = ?,
                         updatedAt = ?
                     WHERE id = ?
-                """, (status, last_fetch_at, error_message, datetime.now().isoformat(), source_id))
+                """, (status, last_fetch_at, error_message, datetime.utcnow().isoformat(), source_id))
                 logger.debug(f"更新数据源状态: {source_id} -> {status}")
         except Exception as e:
             logger.error(f"更新数据源状态失败: {e}")

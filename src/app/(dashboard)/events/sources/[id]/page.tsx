@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import { formatBeijingTime } from '@/lib/time-utils';
 
 interface DataSource {
   id: string;
@@ -156,7 +157,7 @@ export default function DataSourceDetailPage() {
             </div>
             <p className="text-muted-foreground mt-1">
               Provider: {source.provider} | 创建于{' '}
-              {new Date(source.createdAt).toLocaleString('zh-CN')}
+              {formatBeijingTime(source.createdAt, 'full')}
             </p>
           </div>
         </div>

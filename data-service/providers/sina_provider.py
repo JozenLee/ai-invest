@@ -91,6 +91,8 @@ class SinaProvider(DataProvider):
         Returns:
             Dict: 包含主力、中单、小单净流入数据，带 dataQuality 标识
         """
+        from utils.trading_hours import get_last_trading_date
+
         data = await self._call(self._fetch_sector_flow, ascending=False, num=100)
         if not data:
             raise Exception("新浪行业资金流向数据为空")
@@ -117,7 +119,7 @@ class SinaProvider(DataProvider):
             "主力净流入-净占比": main_pct,
             "中单净流入-净额": retail_net * 0.6,
             "小单净流入-净额": retail_net * 0.4,
-            "日期": datetime.now().strftime("%Y-%m-%d"),
+            "日期": get_last_trading_date(),
             "source": "sina_industry",
             "dataQuality": "estimated",
             "confidence": 0.75,

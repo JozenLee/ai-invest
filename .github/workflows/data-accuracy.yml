@@ -1,0 +1,106 @@
+name: 数据准确性测试
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'data-service/**'
+      - '.github/workflows/data-accuracy.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'data-service/**'
+
+jobs:
+  unit-tests:
+    name: 单元测试
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        cd data-service
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio
+
+    - name: 运行数据准确性单元测试
+      run: |
+        cd data-service
+        python3 -m pytest tests/test_data_accuracy.py -v --tb=short
+
+    - name: 测试报告
+      if: always()
+      run: |
+        echo "单元测试完成"
+
+  integration-tests:
+    name: 集成测试
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: 设置Python环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: 安装依赖
+      run: |
+        cd data-service
+        pip install -r requirements.txt
+
+    - name: 启动数据服务
+      run: |
+        cd data-service
+        python3 main.py &
+        sleep 10
+
+    - name: 运行集成测试
+      run: |
+        cd data-service
+        bash tests/test_data_accuracy_integration.sh
+
+    - name: 测试报告
+      if: always()
+      run: |
+        echo "集成测试完成"
+
+  code-review:
+    name: 代码审查
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: 检查关键代码模式
+      run: |
+        echo "=== 检查cache_key命名规范 ==="
+
+        # 检查是否有错误的cache_key使用
+        if grep -r 'cache_key="index_spot"' data-service/services/; then
+          echo "❌ 错误: 发现 cache_key='index_spot'，应使用 'market_overview'"
+          exit 1
+        fi
+
+        echo "=== 检查日期处理 ==="
+
+        # 检查资金流向日期是否使用了正确的函数
+        if grep -A 5 "get_market_capital_flow" data-service/providers/akshare_provider.py | grep "datetime.now().strftime" | grep "日期"; then
+          echo "❌ 错误: AKShare Provider使用了datetime.now()作为日期"
+          exit 1
+        fi
+
+        if grep -A 5 "get_market_capital_flow" data-service/providers/sina_provider.py | grep "datetime.now().strftime" | grep "日期"; then
+          echo "❌ 错误: Sina Provider使用了datetime.now()作为日期"
+          exit 1
+        fi
+
+        echo "✓ 所有代码检查通过"

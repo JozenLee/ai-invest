@@ -6,7 +6,7 @@
 import asyncio
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Callable, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -22,6 +22,9 @@ class SchedulerService:
         self.scheduler = AsyncIOScheduler()
         self.jobs: Dict[str, Any] = {}
         self.is_running = False
+        # 并发控制：最多2个采集任务同时执行
+        self.fetch_semaphore = asyncio.Semaphore(2)
+        logger.info('初始化调度器服务：并发限制=2')
 
     async def start(self):
         """启动调度器"""
@@ -55,7 +58,7 @@ class SchedulerService:
                 args=args or (),
                 kwargs=kwargs or {},
                 replace_existing=replace_existing,
-                next_run_time=datetime.now()  # 立即执行一次
+                next_run_time=datetime.now(timezone.utc)  # 立即执行一次
             )
             self.jobs[job_id] = {
                 'id': job_id,
@@ -145,7 +148,7 @@ class SchedulerService:
         try:
             job = self.scheduler.get_job(job_id)
             if job:
-                job.modify(next_run_time=datetime.now())
+                job.modify(next_run_time=datetime.now(timezone.utc))
                 logger.info(f'立即执行任务: {job_id}')
                 return True
             return False
@@ -472,56 +475,61 @@ class SchedulerService:
             source_id: 数据源ID
             source_config: 数据源配置
         """
-        start_time = datetime.now()
+        # 🔴 并发控制：获取信号量
+        async with self.fetch_semaphore:
+            logger.info(f'🔒 获取并发锁: scheduler_id={scheduler_id}, source_id={source_id}')
+            start_time = datetime.now(timezone.utc)
 
-        try:
-            logger.info(f'开始执行调度任务: scheduler_id={scheduler_id}, source_id={source_id}')
+            try:
+                logger.info(f'开始执行调度任务: scheduler_id={scheduler_id}, source_id={source_id}')
 
-            # 更新任务开始时间
-            await self._update_scheduler_timestamps(
-                scheduler_id=scheduler_id,
-                last_run_at=start_time,
-                next_run_at=None  # nextRunAt稍后计算
-            )
-
-            # 执行实际的采集任务
-            from services.fetch_service import fetch_service
-            result = await fetch_service.execute_fetch_task(source_id, source_config)
-
-            # 计算下次运行时间（从APScheduler获取）
-            job_id = f'scheduler_{scheduler_id}'
-            job = self.scheduler.get_job(job_id)
-            next_run_at = job.next_run_time if job else None
-
-            # 更新下次运行时间
-            if next_run_at:
+                # 更新任务开始时间
                 await self._update_scheduler_timestamps(
                     scheduler_id=scheduler_id,
-                    last_run_at=None,  # lastRunAt已经更新过
-                    next_run_at=next_run_at
+                    last_run_at=start_time,
+                    next_run_at=None  # nextRunAt稍后计算
                 )
 
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.info(
-                f'调度任务执行完成: scheduler_id={scheduler_id}, '
-                f'success={result.get("success")}, duration={duration:.2f}s'
-            )
+                # 执行实际的采集任务
+                from services.fetch_service import fetch_service
+                result = await fetch_service.execute_fetch_task(source_id, source_config)
 
-        except Exception as e:
-            duration = (datetime.now() - start_time).total_seconds()
-            logger.error(
-                f'调度任务执行失败: scheduler_id={scheduler_id}, '
-                f'source_id={source_id}, duration={duration:.2f}s, error={e}'
-            )
-            # 即使失败也更新下次运行时间
-            job_id = f'scheduler_{scheduler_id}'
-            job = self.scheduler.get_job(job_id)
-            if job and job.next_run_time:
-                await self._update_scheduler_timestamps(
-                    scheduler_id=scheduler_id,
-                    last_run_at=None,
-                    next_run_at=job.next_run_time
+                # 计算下次运行时间（从APScheduler获取）
+                job_id = f'scheduler_{scheduler_id}'
+                job = self.scheduler.get_job(job_id)
+                next_run_at = job.next_run_time if job else None
+
+                # 更新下次运行时间
+                if next_run_at:
+                    await self._update_scheduler_timestamps(
+                        scheduler_id=scheduler_id,
+                        last_run_at=None,  # lastRunAt已经更新过
+                        next_run_at=next_run_at
+                    )
+
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                logger.info(
+                    f'调度任务执行完成: scheduler_id={scheduler_id}, '
+                    f'duration={duration:.2f}s, result={result}'
                 )
+
+            except Exception as e:
+                duration = (datetime.now(timezone.utc) - start_time).total_seconds()
+                logger.error(
+                    f'调度任务执行失败: scheduler_id={scheduler_id}, '
+                    f'duration={duration:.2f}s, error={e}'
+                )
+                # 即使失败也更新下次运行时间
+                job_id = f'scheduler_{scheduler_id}'
+                job = self.scheduler.get_job(job_id)
+                if job and job.next_run_time:
+                    await self._update_scheduler_timestamps(
+                        scheduler_id=scheduler_id,
+                        last_run_at=None,
+                        next_run_at=job.next_run_time
+                    )
+            finally:
+                logger.info(f'🔓 释放并发锁: scheduler_id={scheduler_id}, source_id={source_id}')
 
     async def _register_scheduler_job(
         self,
@@ -558,28 +566,48 @@ class SchedulerService:
                 'keyword': config.get('keyword', ''),
                 'keywords': config.get('keywords', []),
                 'limit': config.get('limit', 50),
-                'api': config.get('api', 'stock_news_em')
+                'api': config.get('api', 'stock_news_em'),
+                'domainFilter': config.get('domainFilter')  # 添加领域过滤配置
             }
 
             # 创建异步包装函数
             async def fetch_job_wrapper():
                 await self.execute_fetch_with_tracking(scheduler_id, source_id, source_config)
 
-            # 添加到APScheduler
-            success = await self.add_interval_job(
-                job_id=job_id,
-                func=fetch_job_wrapper,
-                minutes=interval_minutes,
-                replace_existing=True
+            # 🔴 计算首次执行延迟：随机0-5分钟，避免启动时全部并发
+            import random
+            delay_seconds = random.randint(0, 300)  # 0-5分钟
+            first_run_time = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+
+            logger.info(f'调度任务延迟启动: scheduler_id={scheduler_id}, 延迟={delay_seconds}秒')
+
+            # 添加到APScheduler（使用自定义首次执行时间）
+            trigger = IntervalTrigger(minutes=interval_minutes)
+            job = self.scheduler.add_job(
+                fetch_job_wrapper,
+                trigger=trigger,
+                id=job_id,
+                replace_existing=True,
+                next_run_time=first_run_time  # 🔴 设置首次执行时间
             )
 
-            if success:
-                logger.info(
-                    f'注册调度任务成功: scheduler_id={scheduler_id}, '
-                    f'source_id={source_id}, interval={interval_minutes}min'
-                )
+            logger.info(f'添加定时任务: {job_id}, 间隔: {interval_minutes}分钟')
 
-            return success
+            # 记录任务信息
+            self.jobs[job_id] = {
+                'id': job_id,
+                'scheduler_id': scheduler_id,
+                'source_id': source_id,
+                'interval': interval_minutes,
+                'next_run': job.next_run_time
+            }
+
+            logger.info(
+                f'注册调度任务成功: scheduler_id={scheduler_id}, '
+                f'source_id={source_id}, interval={interval_minutes}min'
+            )
+
+            return True
 
         except Exception as e:
             logger.error(f'注册调度任务失败: scheduler_id={scheduler_id}, error={e}')
@@ -699,7 +727,7 @@ class SchedulerService:
 
             # 添加updatedAt
             updates.append('updatedAt = ?')
-            params.append(datetime.now().isoformat())
+            params.append(datetime.now(timezone.utc).isoformat())
 
             # 添加WHERE条件
             params.append(scheduler_id)

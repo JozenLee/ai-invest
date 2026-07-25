@@ -131,6 +131,10 @@ class NewsNowProvider(DataProvider):
                 records.append(record)
 
             df = pd.DataFrame(records)
+
+            # 尝试从页面提取真实发布时间（异步批量处理）
+            df = await self._enrich_publish_times(df)
+
             logger.info(f"[NewsNow] 成功获取 {len(df)} 条新闻")
             return df
 
@@ -211,6 +215,51 @@ class NewsNowProvider(DataProvider):
         except Exception as e:
             logger.error(f"[NewsNow] 未知错误: {str(e)}")
             return [], None
+
+    async def _enrich_publish_times(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        批量从新闻页面提取真实发布时间
+
+        Args:
+            df: 包含新闻链接和初始发布时间的DataFrame
+
+        Returns:
+            更新了发布时间的DataFrame
+        """
+        try:
+            from utils.time_extractor import time_extractor
+
+            # 批量提取真实时间
+            urls = df['新闻链接'].tolist()
+            tasks = [time_extractor.extract_publish_time(url) for url in urls]
+
+            # 限制总提取时间（避免采集任务超时）
+            try:
+                extracted_times = await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=30.0  # 30秒超时
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[NewsNow] 批量提取发布时间超时，使用原始时间")
+                return df
+
+            # 更新成功提取的时间
+            updated_count = 0
+            for idx, extracted_time in enumerate(extracted_times):
+                if isinstance(extracted_time, str) and extracted_time:
+                    df.at[idx, '发布时间'] = extracted_time
+                    updated_count += 1
+
+            if updated_count > 0:
+                logger.info(f"[NewsNow] 成功提取 {updated_count}/{len(df)} 条新闻的真实发布时间")
+            else:
+                logger.warning(f"[NewsNow] 未能提取任何真实发布时间，使用API时间")
+
+            return df
+
+        except Exception as e:
+            logger.warning(f"[NewsNow] 提取真实发布时间失败，使用原始时间: {e}")
+            return df
 
     def _extract_publish_time(self, item: Dict[str, Any], api_updated_time: Optional[str] = None) -> str:
         """

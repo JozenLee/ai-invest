@@ -27,6 +27,7 @@ import { PageHeader } from '@/components/events/PageHeader'
 import { StatCard } from '@/components/events/StatCard'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { MultiSelect } from '@/components/events/MultiSelect'
+import { formatRelativeTime } from '@/lib/time-utils'
 
 interface NewsArticle {
   id: string
@@ -255,25 +256,8 @@ export default function EventsFeedPage() {
   }
 
   const formatTime = (timeStr: string) => {
-    try {
-      const date = new Date(timeStr)
-      const now = new Date()
-      const diff = now.getTime() - date.getTime()
-      const hours = Math.floor(diff / (1000 * 60 * 60))
-      const minutes = Math.floor(diff / (1000 * 60))
-
-      if (hours > 24) {
-        return `${Math.floor(hours / 24)}${EVENTS_TEXT.time.daysAgo}`
-      } else if (hours > 0) {
-        return `${hours}${EVENTS_TEXT.time.hoursAgo}`
-      } else if (minutes > 0) {
-        return `${minutes}${EVENTS_TEXT.time.minutesAgo}`
-      } else {
-        return EVENTS_TEXT.time.justNow
-      }
-    } catch {
-      return timeStr
-    }
+    // 使用统一的时间格式化工具
+    return formatRelativeTime(timeStr)
   }
 
   // 查找分类名称

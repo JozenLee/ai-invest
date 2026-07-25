@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Database, TrendingUp, CheckCircle, Activity } from 'lucide-react'
+import { formatBeijingTime } from '@/lib/time-utils'
 
 interface DashboardStats {
   articles: {
@@ -125,12 +126,7 @@ export function StatsOverview() {
             </div>
             <p className="text-xs text-muted-foreground mt-1">
               {stats.dataSources.lastFetch
-                ? `最后采集: ${new Date(stats.dataSources.lastFetch).toLocaleString('zh-CN', {
-                    month: 'numeric',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}`
+                ? `最后采集: ${formatBeijingTime(stats.dataSources.lastFetch, 'short')}`
                 : '暂无采集记录'}
             </p>
           </CardContent>

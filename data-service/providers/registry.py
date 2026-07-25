@@ -71,7 +71,7 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(
-        sources=["sina", "akshare"],  # 新浪优先：数据稳定性更好，AKShare接口频繁变动
+        sources=["eastmoney_direct", "akshare", "sina"],  # 东财直连优先，绕过代理问题
         cache_ttl=600,
         fallback_to_file=True,
     ),
@@ -80,7 +80,7 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
         cache_ttl=600,
     ),
     "northbound_flow": CategoryConfig(
-        sources=["akshare", "sina", "tushare"],
+        sources=["eastmoney_direct", "akshare", "sina", "tushare"],  # 东财直连优先
         cache_ttl=600,
     ),
     "northbound_history": CategoryConfig(

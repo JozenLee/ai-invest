@@ -21,7 +21,7 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -41,40 +41,93 @@ async def lifespan(app: FastAPI):
     # 启动定时任务调度器
     await scheduler_service.start()
 
-    # 从数据库同步调度任务（新增）
+    # 从数据库同步调度任务（启用 + 错误容错）
     try:
         sync_stats = await scheduler_service.sync_schedulers_from_database()
-        logger.info(f"调度任务同步结果: {sync_stats}")
+        logger.info(f"✅ 调度任务同步成功: {sync_stats}")
     except Exception as e:
-        logger.error(f"调度任务同步失败: {e}")
+        # 记录错误但不阻塞服务启动，确保服务可用性
+        logger.error(f"⚠️ 调度任务同步失败，服务继续运行: {e}")
+        logger.error(f"可以稍后通过API手动触发采集任务")
 
     # 注册财联社新闻采集任务（每小时执行一次）
-    from services.fetch_service import fetch_service
+    # DISABLED: 暂时禁用自动采集任务，避免AI API故障阻塞服务启动
+    # from services.fetch_service import fetch_service
+    #
+    # async def fetch_cailian_news():
+    #     """采集财联社新闻的任务函数"""
+    #     try:
+    #         logger.info("执行财联社新闻采集任务...")
+    #         result = await fetch_service.execute_fetch_task(
+    #             source_id="cailian_default",
+    #             source_config={
+    #                 "driverType": "api",
+    #                 "provider": "akshare",
+    #                 "keyword": "财联社",
+    #                 "limit": 50
+    #             }
+    #         )
+    #         logger.info(f"采集任务完成: {result}")
+    #     except Exception as e:
+    #         logger.error(f"采集任务失败: {e}")
+    #
+    # # 注册定时任务：每60分钟执行一次
+    # await scheduler_service.add_interval_job(
+    #     job_id="fetch_cailian_news",
+    #     func=fetch_cailian_news,
+    #     minutes=60
+    # )
+    # logger.info("已注册财联社新闻采集任务 (每60分钟)")
+    logger.info("新闻采集任务已禁用（避免AI API故障阻塞服务）")
 
-    async def fetch_cailian_news():
-        """采集财联社新闻的任务函数"""
+    # 注册每日缓存清理任务（在交易日收盘后15:30执行）
+    async def daily_cache_refresh():
+        """每日缓存刷新任务：清理Python服务缓存并通知Next.js清理缓存"""
         try:
-            logger.info("执行财联社新闻采集任务...")
-            result = await fetch_service.execute_fetch_task(
-                source_id="cailian_default",
-                source_config={
-                    "driverType": "api",
-                    "provider": "akshare",
-                    "keyword": "财联社",
-                    "limit": 50
-                }
-            )
-            logger.info(f"采集任务完成: {result}")
-        except Exception as e:
-            logger.error(f"采集任务失败: {e}")
+            import aiohttp
+            from services.cache_service import cache_service
 
-    # 注册定时任务：每60分钟执行一次
-    await scheduler_service.add_interval_job(
-        job_id="fetch_cailian_news",
-        func=fetch_cailian_news,
-        minutes=60
+            logger.info("执行每日缓存刷新任务...")
+
+            # 1. 清理Python服务的内存缓存
+            deleted_count = cache_service.clear()
+            logger.info(f"Python缓存已清理: {deleted_count} 个键")
+
+            # 2. 通知Next.js服务清理缓存
+            next_js_url = os.getenv('NEXT_JS_URL', 'http://localhost:3000')
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{next_js_url}/api/cache/clear",
+                        timeout=aiohttp.ClientTimeout(total=5)
+                    ) as response:
+                        if response.status == 200:
+                            logger.info("Next.js缓存已清理")
+                        else:
+                            logger.warning(f"Next.js缓存清理失败: HTTP {response.status}")
+            except Exception as e:
+                logger.warning(f"无法连接到Next.js服务: {e}")
+
+            # 3. 预热常用数据
+            await asyncio.gather(
+                data_service.get_index_spot(),
+                data_service.get_market_capital_flow(),
+                data_service.get_sector_capital_flow("今日"),
+                return_exceptions=True,
+            )
+            logger.info("缓存预热完成，每日刷新任务执行完毕")
+
+        except Exception as e:
+            logger.error(f"每日缓存刷新任务失败: {e}")
+
+    # 添加定时任务：每天15:30执行（交易日收盘后）
+    await scheduler_service.add_cron_job(
+        job_id="daily_cache_refresh",
+        func=daily_cache_refresh,
+        hour=15,
+        minute=30
     )
-    logger.info("已注册财联社新闻采集任务 (每60分钟)")
+    logger.info("已注册每日缓存刷新任务 (每天15:30执行)")
 
     async def warmup():
         """后台预热：提前加载常用数据到内存缓存"""
@@ -129,6 +182,7 @@ app.include_router(search.router, prefix="", tags=["search"])
 app.include_router(cache.router, prefix="", tags=["cache"])
 app.include_router(datasources.router, prefix="/api", tags=["datasources"])
 app.include_router(schedulers.router, prefix="/schedulers", tags=["schedulers"])
+app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
 
 @app.get("/health")
 async def health_check():

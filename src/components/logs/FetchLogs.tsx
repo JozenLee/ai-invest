@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react'
+import { formatRelativeTime } from '@/lib/time-utils'
 
 interface FetchLog {
   id: string
@@ -109,21 +110,7 @@ export function FetchLogs({ sourceId, autoRefresh = false, refreshInterval = 300
   }
 
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString)
-    const now = new Date()
-    const diffMs = now.getTime() - date.getTime()
-    const diffMins = Math.floor(diffMs / 60000)
-
-    if (diffMins < 1) return '刚刚'
-    if (diffMins < 60) return `${diffMins}分钟前`
-    if (diffMins < 1440) return `${Math.floor(diffMins / 60)}小时前`
-
-    return date.toLocaleString('zh-CN', {
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    })
+    return formatRelativeTime(dateString)
   }
 
   if (loading) {

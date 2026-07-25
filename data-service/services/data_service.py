@@ -32,6 +32,10 @@ class DataService:
         if self._initialized:
             return
 
+        # 注册东方财富直连API（最高优先级，绕过代理问题）
+        from providers.eastmoney_direct_provider import EastmoneyDirectProvider
+        self.registry.register(EastmoneyDirectProvider())
+
         # 注册 NewsNow（财经新闻聚合）
         from providers.newsnow_provider import NewsNowProvider
         self.registry.register(NewsNowProvider())
@@ -66,7 +70,7 @@ class DataService:
         result = await self.registry.fetch(
             category="index_spot",
             method="get_index_spot",
-            cache_key="index_spot",
+            cache_key="market_overview",  # 修改为与文件缓存名称一致
             cache_ttl=30,
         )
         return self._ensure_dataframe(result)

@@ -38,9 +38,9 @@ export function MarketProvider({ children }: MarketProviderProps) {
   const [source, setSource] = useState<string>('loading')
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (forceRefresh = false) => {
     if (process.env.NODE_ENV === 'development') {
-      console.log('[MarketContext] 开始获取数据...')
+      console.log('[MarketContext] 开始获取数据...', { forceRefresh })
     }
     setIsLoading(true)
     setError(null)
@@ -51,10 +51,13 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
       const startTime = Date.now()
 
+      // Add refresh query parameter if force refresh requested
+      const refreshParam = forceRefresh ? '?refresh=true' : ''
+
       // Parallel requests for index data and capital flow data
       const [overviewRes, capitalRes] = await Promise.all([
-        fetch('/api/market/overview', { signal: clientTimeout }),
-        fetch('/api/market/capital-flow', { signal: clientTimeout }),
+        fetch(`/api/market/overview${refreshParam}`, { signal: clientTimeout }),
+        fetch(`/api/market/capital-flow${refreshParam}`, { signal: clientTimeout }),
       ])
 
       const fetchDuration = Date.now() - startTime
@@ -164,6 +167,11 @@ export function MarketProvider({ children }: MarketProviderProps) {
     }
   }, [])
 
+  // Manual refresh function that bypasses cache
+  const refetch = useCallback(() => {
+    return fetchData(true) // Force refresh bypasses cache
+  }, [fetchData])
+
   // 初始加载
   useEffect(() => {
     fetchData()
@@ -174,7 +182,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
     // 交易时段每30秒刷新，非交易时段每5分钟刷新
     const refreshInterval = marketMeta?.isOpen ? 30 * 1000 : 5 * 60 * 1000
     const interval = setInterval(() => {
-      fetchData()
+      fetchData() // Automatic refresh uses cache
     }, refreshInterval)
 
     return () => clearInterval(interval)
@@ -232,7 +240,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
     error,
     source,
     lastUpdate,
-    refetch: fetchData,
+    refetch,
     format,
   }
 

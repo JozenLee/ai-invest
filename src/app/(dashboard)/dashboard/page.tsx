@@ -319,6 +319,13 @@ export default function DashboardPage() {
                   <p className="text-xs text-muted-foreground">
                     占比 {capitalFlow.market.retailPct >= 0 ? '+' : ''}{formatNumber(capitalFlow.market.retailPct)}%
                   </p>
+                  {/* 估算数据警告 */}
+                  {capitalFlow.dataQuality === 'estimated' && (
+                    <div className="mt-2 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>估算值</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -395,6 +402,31 @@ export default function DashboardPage() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* 数据说明和风险提示 */}
+            {capitalFlow.dataQuality === 'estimated' && (
+              <Card className="mt-4 border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20">
+                <CardContent className="pt-4">
+                  <div className="flex gap-3">
+                    <AlertCircle className="h-5 w-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-2 text-sm">
+                      <p className="font-semibold text-amber-900 dark:text-amber-100">
+                        数据说明
+                      </p>
+                      <ul className="space-y-1 text-amber-800 dark:text-amber-200">
+                        <li>• <strong>主力资金</strong> = 超大单(≥50万) + 大单(10-50万)，数据来源于行业汇总</li>
+                        <li>• <strong>散户资金</strong> = 中单(2-10万) + 小单(&lt;2万)，<span className="text-amber-600 dark:text-amber-400 font-semibold">为零和博弈估算值</span></li>
+                        <li>• <strong>北向资金</strong> = 沪股通 + 深股通，来自东方财富直连API</li>
+                      </ul>
+                      <p className="text-xs text-amber-700 dark:text-amber-300 pt-2 border-t border-amber-200 dark:border-amber-800">
+                        ⚠️ <strong>风险提示</strong>：资金流向数据基于成交订单大小分类，不等同于真实机构/散户持仓变化。
+                        散户数据为估算值（-主力 × 0.8），仅作为辅助参考指标，不应作为投资决策的唯一依据。
+                      </p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </section>
         )}
 

@@ -6,19 +6,26 @@ const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 const CACHE_KEY = 'capital_flow_macro'
 const CACHE_TTL = 30 // 秒
 
-export async function GET() {
+export async function GET(request: Request) {
   console.log('[capital-flow API] 收到请求')
+
+  // Check for force-refresh parameter
+  const url = new URL(request.url)
+  const forceRefresh = url.searchParams.get('refresh') === 'true'
 
   // 1. 获取用户配置
   const preferences = await prisma.userPreferences.findFirst()
   const showEstimatedData = preferences?.showEstimatedData ?? true
   console.log('[capital-flow API] 用户配置 - showEstimatedData:', showEstimatedData)
 
-  // 检查缓存
-  const cached = apiCache.get<any>(CACHE_KEY)
-  if (cached) {
-    console.log('[capital-flow API] 返回缓存数据')
-    return NextResponse.json(cached)
+  // Skip cache if force refresh requested
+  if (!forceRefresh) {
+    // 检查缓存
+    const cached = apiCache.get<any>(CACHE_KEY)
+    if (cached) {
+      console.log('[capital-flow API] 返回缓存数据')
+      return NextResponse.json(cached)
+    }
   }
 
   console.log('[capital-flow API] 缓存未命中，请求 Python 服务')

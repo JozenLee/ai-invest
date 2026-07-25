@@ -25,11 +25,21 @@ class ContentAnalyzer:
 
     def __init__(self):
         self.client = None
+        self.model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
         if HAS_ANTHROPIC:
             api_key = os.getenv('ANTHROPIC_API_KEY')
+            base_url = os.getenv('ANTHROPIC_BASE_URL')
             if api_key:
-                self.client = anthropic.Anthropic(api_key=api_key)
-                logger.info('Claude API客户端初始化成功')
+                # 支持自定义API基础URL（用于第三方代理）
+                if base_url:
+                    self.client = anthropic.Anthropic(
+                        api_key=api_key,
+                        base_url=base_url
+                    )
+                    logger.info(f'Claude API客户端初始化成功 (base_url: {base_url}, model: {self.model})')
+                else:
+                    self.client = anthropic.Anthropic(api_key=api_key)
+                    logger.info(f'Claude API客户端初始化成功 (官方API, model: {self.model})')
             else:
                 logger.warning('ANTHROPIC_API_KEY未设置，AI分析功能不可用')
 
@@ -54,7 +64,7 @@ class ContentAnalyzer:
 {content[:1000]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=10,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -85,7 +95,7 @@ class ContentAnalyzer:
 {content[:1000]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -167,7 +177,7 @@ class ContentAnalyzer:
 {content[:1500]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=200,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -194,7 +204,7 @@ class ContentAnalyzer:
 {content[:2000]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=max_length,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -376,7 +386,7 @@ class ContentAnalyzer:
 {content[:800]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=30,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -414,7 +424,7 @@ class ContentAnalyzer:
 {content[:1000]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=100,
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -452,7 +462,7 @@ class ContentAnalyzer:
 {content[:1000]}"""
 
             response = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=self.model,
                 max_tokens=150,
                 messages=[{"role": "user", "content": prompt}]
             )

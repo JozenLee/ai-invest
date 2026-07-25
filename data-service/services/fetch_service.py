@@ -7,7 +7,7 @@ import logging
 import asyncio
 import json
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
@@ -70,7 +70,9 @@ class FetchService:
             # 4. 应用领域筛选（如果配置了）
             original_count = len(processed_data)
             domain_filter = source_config.get("domainFilter")
+            logger.info(f"🔍 检查领域筛选配置: source_id={source_id}, domain_filter={domain_filter}")
             if domain_filter and domain_filter.get("enabled"):
+                logger.info(f"🔍 开始应用领域筛选: original_count={original_count}")
                 processed_data = self.apply_domain_filter(processed_data, domain_filter)
                 filtered_count = len(processed_data)
                 logger.info(
@@ -80,10 +82,12 @@ class FetchService:
                     f"domains={domain_filter.get('domainIds')}"
                 )
             else:
-                logger.debug(f"未启用领域筛选: source_id={source_id}")
+                logger.info(f"未启用领域筛选: source_id={source_id}, 数据量={len(processed_data)}")
 
             # 5. 持久化到本地数据库
+            logger.info(f"🔍 准备持久化数据: source_id={source_id}, count={len(processed_data)}")
             stored_count = await self._store_to_database(processed_data, source_id)
+            logger.info(f"🔍 持久化完成: source_id={source_id}, stored_count={stored_count}")
 
             # 6. 计算耗时
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -103,7 +107,7 @@ class FetchService:
             await self._update_source_status(
                 source_id=source_id,
                 status="success",
-                last_fetch_at=datetime.now()
+                last_fetch_at=datetime.now(timezone.utc)
             )
 
             return {
@@ -137,7 +141,7 @@ class FetchService:
             await self._update_source_status(
                 source_id=source_id,
                 status="failed",
-                last_fetch_at=datetime.now(),
+                last_fetch_at=datetime.now(timezone.utc),
                 error_message=str(e)
             )
 
@@ -249,6 +253,29 @@ class FetchService:
             return []
 
         try:
+            # 检查是否启用AI分析（环境变量控制）
+            import os
+            enable_ai_analysis = os.getenv('ENABLE_AI_ANALYSIS', 'false').lower() == 'true'
+
+            if not enable_ai_analysis:
+                logger.info(f"AI分析已禁用（ENABLE_AI_ANALYSIS=false），跳过AI批量分析")
+                # 返回基础数据，不进行AI分析
+                processed_data = []
+                for item in raw_data:
+                    processed_item = {
+                        **item,
+                        "category": "market",
+                        "categoryConfidence": 0.0,
+                        "sentiment": 0.0,
+                        "sentimentLabel": "neutral",
+                        "sentimentConfidence": 0.0,
+                        "keywords": [],
+                        "entities": [],
+                        "sectors": self._extract_sectors(item.get("title", "")),
+                    }
+                    processed_data.append(processed_item)
+                return processed_data
+
             # 尝试使用增强的 AI 分析器
             from services.content_analyzer import content_analyzer
 
@@ -285,7 +312,7 @@ class FetchService:
                         "sectors": self._extract_sectors(item.get("title", "")),
                         "domainIds": analysis.get("domains", []),
                         "aiProcessed": True,
-                        "aiProcessedAt": datetime.now().isoformat(),
+                        "aiProcessedAt": datetime.now(timezone.utc).isoformat(),
                         "aiError": None
                     }
 
@@ -334,7 +361,7 @@ class FetchService:
                     "keywords": [],
                     "entities": [],
                     "aiProcessed": True,
-                    "aiProcessedAt": datetime.now().isoformat(),
+                    "aiProcessedAt": datetime.now(timezone.utc).isoformat(),
                     "aiError": None
                 }
 
@@ -469,15 +496,17 @@ class FetchService:
         持久化数据到本地数据库
         """
         stored_count = 0
+        logger.info(f"🔍 [存储] 开始持久化: source_id={source_id}, count={len(data)}")
 
         try:
-            for item in data:
+            for idx, item in enumerate(data):
                 try:
+                    logger.info(f"🔍 [存储] 处理第 {idx+1}/{len(data)} 条: {item.get('title', '')[:30]}")
                     # 解析发布时间
                     publish_time = self._parse_publish_time(item.get("publishTime", ""))
 
                     # 计算过期时间（默认7天后）
-                    expires_at = (datetime.now() + timedelta(days=7)).isoformat()
+                    expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
                     # 生成文章 ID
                     import hashlib
@@ -514,31 +543,39 @@ class FetchService:
 
                     # 检查是否已存在（根据URL去重）
                     if article_data["url"]:
+                        logger.info(f"🔍 [存储] 检查URL是否存在: {article_data['url'][:50]}")
                         exists = await db.check_article_exists(article_data["url"])
                         if exists:
-                            logger.debug(f"文章已存在，跳过: {article_data['url']}")
+                            logger.info(f"🔍 [存储] 文章已存在，跳过: {article_data['title'][:30]}")
                             continue
+                        logger.info(f"🔍 [存储] URL不存在，准备插入")
 
                     # 插入数据库
+                    logger.info(f"🔍 [存储] 开始插入数据库: id={article_data['id'][:20]}...")
                     result = await db.insert_news_article(article_data)
                     if result:
                         stored_count += 1
+                        logger.info(f"🔍 [存储] 插入成功: stored_count={stored_count}")
 
                 except Exception as e:
-                    logger.error(f"插入单条数据失败: {e}, title={item.get('title', '')[:50]}")
+                    logger.error(f"🔍 [存储] 插入单条数据失败: {e}, title={item.get('title', '')[:50]}")
+                    import traceback
+                    logger.error(f"🔍 [存储] 错误堆栈: {traceback.format_exc()}")
                     continue
 
-            logger.info(f"数据持久化完成: source_id={source_id}, stored={stored_count}/{len(data)}")
+            logger.info(f"🔍 [存储] 数据持久化完成: source_id={source_id}, stored={stored_count}/{len(data)}")
             return stored_count
 
         except Exception as e:
-            logger.error(f"数据持久化失败: {e}")
+            logger.error(f"🔍 [存储] 数据持久化失败: {e}")
+            import traceback
+            logger.error(f"🔍 [存储] 错误堆栈: {traceback.format_exc()}")
             return stored_count
 
     def _parse_publish_time(self, time_str: str) -> datetime:
         """解析发布时间"""
         if not time_str:
-            return datetime.now()
+            return datetime.now(timezone.utc)
 
         try:
             # 尝试标准格式
@@ -550,7 +587,7 @@ class FetchService:
 
             # 相对时间处理
             import re
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
 
             if "天前" in time_str:
                 match = re.search(r"(\d+)\s*天前", time_str)
@@ -569,7 +606,7 @@ class FetchService:
 
         except Exception as e:
             logger.warning(f"时间解析失败: {time_str}, error={e}")
-            return datetime.now()
+            return datetime.now(timezone.utc)
 
     async def _create_fetch_log(
         self,

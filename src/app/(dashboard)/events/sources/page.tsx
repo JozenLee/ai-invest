@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,6 +22,7 @@ import { StatCard } from '@/components/events/StatCard'
 import { DataSourceCard } from '@/components/events/DataSourceCard'
 import { SchedulerDialog } from '@/components/events/SchedulerDialog'
 import { EVENTS_TEXT } from '@/constants/events-text'
+import { formatRelativeTime } from '@/lib/time-utils'
 
 interface DataSource {
   id: string
@@ -56,6 +57,7 @@ export default function DataSourcesPage() {
   const [statusFilter, setStatusFilter] = useState<string>('all') // 新增：状态筛选
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [latestFetchTime, setLatestFetchTime] = useState<string>('从未运行')
 
   // 获取数据源列表
   const fetchDataSources = async () => {
@@ -159,29 +161,35 @@ export default function DataSourcesPage() {
   const activeSources = dataSources.filter((s) => s.isActive).length
   const inactiveSources = dataSources.filter((s) => !s.isActive).length
 
-  // 获取最近采集时间
-  const getLatestFetchTime = () => {
+  // 计算最近采集时间（使用 useCallback 避免依赖问题）
+  const calculateLatestFetchTime = useCallback(() => {
     const times = dataSources
       .map(ds => ds.lastFetchAt)
       .filter(Boolean) as string[]
 
     if (times.length === 0) return '从未运行'
 
-    const latest = new Date(Math.max(...times.map(t => new Date(t).getTime())))
-    const now = new Date()
-    const diff = now.getTime() - latest.getTime()
-
-    if (diff < 60 * 1000) return '刚刚'
-    if (diff < 60 * 60 * 1000) return `${Math.floor(diff / (60 * 1000))}分钟前`
-    if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / (60 * 60 * 1000))}小时前`
-
-    return latest.toLocaleDateString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
+    // 找到最新的时间戳
+    const latestTimeStr = times.reduce((latest, current) => {
+      return new Date(current) > new Date(latest) ? current : latest
     })
-  }
+
+    // 使用统一的时间格式化函数
+    return formatRelativeTime(latestTimeStr)
+  }, [dataSources])
+
+  // 定时更新最近采集时间显示
+  useEffect(() => {
+    // 立即计算一次
+    setLatestFetchTime(calculateLatestFetchTime())
+
+    // 每30秒更新一次时间显示
+    const timer = setInterval(() => {
+      setLatestFetchTime(calculateLatestFetchTime())
+    }, 30000)
+
+    return () => clearInterval(timer)
+  }, [calculateLatestFetchTime])
 
   return (
     <div className="space-y-6">
@@ -219,7 +227,7 @@ export default function DataSourcesPage() {
         <StatCard
           icon={RefreshCw}
           label={EVENTS_TEXT.sources.stats.lastFetch}
-          value={getLatestFetchTime()}
+          value={latestFetchTime}
         />
       </StatCardGrid>
 

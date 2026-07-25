@@ -102,26 +102,17 @@ class AKShareProvider(DataProvider):
 
         注意：在非交易时间，spot接口返回的是盘中快照而非收盘价，
         因此需要用日线数据的收盘价来覆盖
+
+        优先级：新浪财经 > 东方财富 > 日K数据
         """
         from utils.trading_hours import is_trading_hours
 
         is_trading = is_trading_hours()
 
-        # 主接口：东方财富EM版
+        # 主接口：新浪财经版（更稳定，无代理问题）
         try:
-            df = await self._call(ak.stock_zh_index_spot_em)
-            if self._validate_index_data(df):
-                # 如果不是交易时间，用日线数据覆盖价格
-                if not is_trading:
-                    df = await self._patch_with_daily_close(df)
-                return df
-            print("[AKShare] stock_zh_index_spot_em 返回数据未通过验证，尝试备用接口")
-        except Exception as e:
-            print(f"[AKShare] stock_zh_index_spot_em 失败: {e}")
-
-        # 备用接口：新浪版
-        try:
-            df = await self._call(ak.stock_zh_index_spot_sina)
+            print("[AKShare] 尝试使用新浪财经接口获取指数数据...")
+            df = await self._call(ak.stock_zh_index_spot_sina, timeout=10.0)
             if not df.empty:
                 # 统一列名到EM格式
                 rename_map = {}
@@ -139,11 +130,28 @@ class AKShareProvider(DataProvider):
                 if rename_map:
                     df = df.rename(columns=rename_map)
                 if self._validate_index_data(df):
+                    print(f"[AKShare] 新浪财经接口成功，返回 {len(df)} 条指数数据")
                     if not is_trading:
                         df = await self._patch_with_daily_close(df)
                     return df
+                else:
+                    print("[AKShare] 新浪财经数据未通过验证")
         except Exception as e:
-            print(f"[AKShare] stock_zh_index_spot_sina 备用接口也失败: {e}")
+            print(f"[AKShare] stock_zh_index_spot_sina 失败: {e}")
+
+        # 备用接口：东方财富EM版
+        try:
+            print("[AKShare] 降级到东方财富接口...")
+            df = await self._call(ak.stock_zh_index_spot_em)
+            if self._validate_index_data(df):
+                print(f"[AKShare] 东方财富接口成功，返回 {len(df)} 条指数数据")
+                # 如果不是交易时间，用日线数据覆盖价格
+                if not is_trading:
+                    df = await self._patch_with_daily_close(df)
+                return df
+            print("[AKShare] stock_zh_index_spot_em 返回数据未通过验证")
+        except Exception as e:
+            print(f"[AKShare] stock_zh_index_spot_em 失败: {e}")
 
         # 最后降级：通过日K数据获取最新收盘价
         try:
@@ -181,15 +189,28 @@ class AKShareProvider(DataProvider):
         return pd.DataFrame()
 
     async def _patch_with_daily_close(self, spot_df: pd.DataFrame) -> pd.DataFrame:
-        """用日线收盘价修正spot数据（在非交易时间使用）"""
+        """用日线收盘价修正spot数据（在非交易时间使用）
+
+        优化：只修正主要指数，避免修正数百个指数导致启动超时
+        """
         if spot_df.empty or "代码" not in spot_df.columns:
             return spot_df
 
-        print("[AKShare] 非交易时间，使用日线收盘价修正spot数据")
+        print("[AKShare] 非交易时间，使用日线收盘价修正主要指数")
 
-        # 为每个指数获取日线数据
+        # 只修正主要指数（5个核心指数）
+        TARGET_CODES = {"000001", "000300", "000688", "399001", "399006"}
+
+        # 为主要指数获取日线数据
         for idx, row in spot_df.iterrows():
             code = str(row.get("代码", ""))
+            # 提取纯数字代码
+            pure_code = code.replace("sh", "").replace("sz", "")
+
+            # 只处理目标指数
+            if pure_code not in TARGET_CODES:
+                continue
+
             # 统一代码格式
             if not code.startswith("sh") and not code.startswith("sz"):
                 if code.startswith("0") or code.startswith("3"):
@@ -221,12 +242,14 @@ class AKShareProvider(DataProvider):
                         if "amount" in latest:
                             spot_df.at[idx, "成交额"] = float(latest["amount"])
 
-                        print(f"[AKShare] 修正 {code}: spot={row.get('最新价')} -> daily_close={close_price}")
+                        print(f"[AKShare] 修正 {code}: {row.get('最新价')} -> {close_price}")
             except Exception as e:
                 print(f"[AKShare] 修正 {code} 失败: {e}")
                 continue
 
+        print(f"[AKShare] 主要指数修正完成")
         return spot_df
+
 
     async def get_index_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
         """获取指数日K数据"""
@@ -289,6 +312,8 @@ class AKShareProvider(DataProvider):
 
     async def get_market_capital_flow(self) -> Dict:
         """获取大盘资金流向（含内部降级：大盘接口 → 行业估算）"""
+        from utils.trading_hours import get_last_trading_date
+
         # 优先：大盘资金流向接口
         try:
             df = await self._call(ak.stock_market_fund_flow)
@@ -299,7 +324,7 @@ class AKShareProvider(DataProvider):
                     "主力净流入-净占比": float(latest.get("主力净流入-净占比", 0)),
                     "中单净流入-净额": float(latest.get("中单净流入-净额", 0)),
                     "小单净流入-净额": float(latest.get("小单净流入-净额", 0)),
-                    "日期": str(latest.get("日期", datetime.now().strftime("%Y-%m-%d"))),
+                    "日期": str(latest.get("日期", get_last_trading_date())),
                     "source": "market_fund_flow",
                     "dataQuality": "realtime",
                 }
@@ -331,7 +356,7 @@ class AKShareProvider(DataProvider):
                 "主力净流入-净占比": main_pct,
                 "中单净流入-净额": retail_net * 0.6,
                 "小单净流入-净额": retail_net * 0.4,
-                "日期": datetime.now().strftime("%Y-%m-%d"),
+                "日期": get_last_trading_date(),
                 "source": "fund_flow_industry",
                 "dataQuality": "estimated",
                 # 添加估算说明

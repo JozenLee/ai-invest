@@ -6,6 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { TrendingUp, TrendingDown, Minus, Activity, AlertCircle } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { formatBeijingTime } from '@/lib/time-utils';
 
 interface HealthMonitorProps {
   sourceId: string;
@@ -272,7 +273,7 @@ export function HealthMonitor({ sourceId, sourceName }: HealthMonitorProps) {
               </p>
               {data.lastFailed && (
                 <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
-                  最后失败时间: {new Date(data.lastFailed).toLocaleString('zh-CN')}
+                  最后失败时间: {formatBeijingTime(data.lastFailed, 'full')}
                 </p>
               )}
             </div>

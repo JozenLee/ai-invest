@@ -52,11 +52,18 @@ function ensureCompleteIndices(result: any): any {
   }
 }
 
-export async function GET() {
-  // 检查缓存
-  const cached = apiCache.get<any>(CACHE_KEY)
-  if (cached) {
-    return NextResponse.json(cached)
+export async function GET(request: Request) {
+  // Check for force-refresh header
+  const url = new URL(request.url)
+  const forceRefresh = url.searchParams.get('refresh') === 'true'
+
+  // Skip cache if force refresh requested
+  if (!forceRefresh) {
+    // 检查缓存
+    const cached = apiCache.get<any>(CACHE_KEY)
+    if (cached) {
+      return NextResponse.json(cached)
+    }
   }
 
   try {

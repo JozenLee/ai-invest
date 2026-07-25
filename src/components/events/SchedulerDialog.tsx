@@ -30,6 +30,7 @@ import {
   Filter,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { formatBeijingTime } from '@/lib/time-utils';
 
 interface SchedulerDialogProps {
   open: boolean;
@@ -224,16 +225,9 @@ export function SchedulerDialog({
     }
   };
 
-  // 格式化时间
+  // 格式化时间 - 使用北京时间
   const formatTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
+    return formatBeijingTime(dateString, 'full');
   };
 
   // 格式化持续时间

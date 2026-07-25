@@ -227,8 +227,13 @@ async def get_macro_capital_flow():
             market_total = main_net + retail_net
             data_date = str(market_data.get("日期", datetime.now().strftime("%Y-%m-%d")))
 
-            # 散户净占比 = -主力净占比（资金零和博弈）
-            retail_pct = round(-main_pct, 2)
+            # 散户净占比：根据实际散户净额计算
+            # 如果数据源提供了散户占比，使用它；否则基于零和博弈估算
+            if "散户净流入-净占比" in market_data:
+                retail_pct = round(float(market_data.get("散户净流入-净占比", 0)), 2)
+            else:
+                # 零和博弈估算：散户占比 ≈ -主力占比
+                retail_pct = round(-main_pct, 2)
         else:
             main_net = retail_net = market_total = 0
             main_pct = retail_pct = 0

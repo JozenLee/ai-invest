@@ -29,6 +29,14 @@ class MemoryCache {
   has(key: string): boolean {
     return this.get(key) !== null
   }
+
+  delete(key: string): boolean {
+    return this.store.delete(key)
+  }
+
+  clear(): void {
+    this.store.clear()
+  }
 }
 
 export const apiCache = new MemoryCache()
