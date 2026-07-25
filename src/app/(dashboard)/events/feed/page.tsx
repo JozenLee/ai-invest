@@ -20,6 +20,7 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  Radio,
 } from 'lucide-react'
 import { NewsCategory, Domain } from '@/types/event'
 import { EVENTS_TEXT } from '@/constants/events-text'
@@ -28,6 +29,7 @@ import { StatCard } from '@/components/events/StatCard'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { MultiSelect } from '@/components/events/MultiSelect'
 import { formatRelativeTime } from '@/lib/time-utils'
+import { useNewsStream } from '@/hooks/useNewsStream'
 
 interface NewsArticle {
   id: string
@@ -98,6 +100,19 @@ export default function EventsFeedPage() {
   const [sortBy, setSortBy] = useState<string>('publishTime')
   const [keyword, setKeyword] = useState('')
   const [searchInput, setSearchInput] = useState('')
+  const [updateCount, setUpdateCount] = useState(0)
+
+  // SSE实时更新
+  const { isConnected, lastEvent } = useNewsStream({
+    onUpdate: (data) => {
+      console.log('收到SSE更新:', data)
+      setUpdateCount(prev => prev + 1)
+      // 自动刷新新闻列表
+      if (data.type === 'batch_completed' || data.type === 'news_updated') {
+        fetchNews()
+      }
+    }
+  })
 
   // 分类分组配置（排除分组名本身）
   const categoryGroups = [
@@ -299,10 +314,22 @@ export default function EventsFeedPage() {
         title={EVENTS_TEXT.feed.title}
         description={EVENTS_TEXT.feed.description}
         actions={
-          <Button variant="outline" size="sm" onClick={fetchNews} disabled={isLoading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            {EVENTS_TEXT.common.refresh}
-          </Button>
+          <div className="flex items-center gap-3">
+            {/* SSE连接状态 */}
+            <div className={`flex items-center gap-2 text-sm ${isConnected ? 'text-green-600' : 'text-gray-400'}`}>
+              <Radio className={`h-4 w-4 ${isConnected ? 'animate-pulse' : ''}`} />
+              <span>{isConnected ? '实时连接' : '未连接'}</span>
+              {updateCount > 0 && (
+                <Badge variant="secondary" className="ml-1">
+                  {updateCount}次更新
+                </Badge>
+              )}
+            </div>
+            <Button variant="outline" size="sm" onClick={fetchNews} disabled={isLoading}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              {EVENTS_TEXT.common.refresh}
+            </Button>
+          </div>
         }
       />
 
