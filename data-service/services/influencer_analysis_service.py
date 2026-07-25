@@ -8,6 +8,7 @@ import logging
 import json
 import os
 import re
+import time
 from typing import Dict, Optional, Any
 from datetime import datetime
 from anthropic import AsyncAnthropic
@@ -63,6 +64,8 @@ class InfluencerAnalysisService:
             logger.error("Claude API未配置，无法进行分析")
             return None
 
+        start_time = time.time()
+
         try:
             # 1. 从数据库获取帖子和大V信息
             post = await self._get_post(post_id)
@@ -75,34 +78,59 @@ class InfluencerAnalysisService:
                 logger.error(f"大V不存在: {post['influencerId']}")
                 return None
 
+            logger.info(
+                f"Starting analysis for post: {post_id}, "
+                f"influencer: {influencer.get('name', 'unknown')}, "
+                f"platform: {influencer.get('platform', 'unknown')}"
+            )
+
             # 2. 解析互动数据
             engagement = self._parse_engagement(post.get('engagement'))
 
             # 3. 构建prompt
+            prompt_start = time.time()
             prompt = self._build_prompt(post, influencer, engagement)
+            prompt_elapsed = time.time() - prompt_start
+            logger.debug(f"Prompt built in {prompt_elapsed:.3f}s, length: {len(prompt)} chars")
 
             # 4. 调用Claude API（15秒超时）
-            logger.info(f"开始分析帖子: {post_id}")
+            api_start = time.time()
+            logger.info(f"Calling Claude API for post: {post_id}")
             analysis = await asyncio.wait_for(
                 self._call_claude_api(prompt),
                 timeout=15.0
             )
+            api_elapsed = time.time() - api_start
+            logger.info(f"Claude API call completed in {api_elapsed:.2f}s for post: {post_id}")
 
             # 5. 保存分析结果到数据库
+            save_start = time.time()
             await self._save_analysis(post_id, analysis)
+            save_elapsed = time.time() - save_start
 
-            logger.info(f"帖子分析完成: {post_id}")
+            total_elapsed = time.time() - start_time
+            logger.info(
+                f"Analysis completed for post {post_id}: "
+                f"total {total_elapsed:.2f}s (API: {api_elapsed:.2f}s, save: {save_elapsed:.2f}s), "
+                f"stance: {analysis.get('opinion_stance', 'unknown')}, "
+                f"domain: {analysis.get('primary_domain', 'unknown')}"
+            )
             return analysis
 
         except asyncio.TimeoutError:
+            elapsed = time.time() - start_time
             error_msg = "Claude API调用超时"
-            logger.warning(f"{error_msg}: {post_id}")
+            logger.warning(f"{error_msg} after {elapsed:.2f}s: {post_id}")
             await self._save_error(post_id, error_msg)
             return None
 
         except Exception as e:
+            elapsed = time.time() - start_time
             error_msg = f"分析失败: {str(e)}"
-            logger.error(f"{error_msg}, 帖子: {post_id}")
+            logger.error(
+                f"{error_msg} after {elapsed:.2f}s, 帖子: {post_id}",
+                exc_info=True
+            )
             await self._save_error(post_id, error_msg)
             return None
 

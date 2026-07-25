@@ -5,6 +5,7 @@ Fetches posts from influencers using configured providers
 import hashlib
 import logging
 import json
+import time
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from providers.provider_registry import InfluencerProviderRegistry
@@ -37,8 +38,9 @@ class InfluencerFetchService:
                 - posts_fetched: int
                 - posts_new: int
                 - error: Optional[str]
+                - elapsed_seconds: float
         """
-        start_time = datetime.now()
+        start_time = time.time()
         posts_fetched = 0
         posts_new = 0
         error_message = None
@@ -55,7 +57,7 @@ class InfluencerFetchService:
             driver_type = influencer.get('driverType', 'api')
             provider_config = json.loads(influencer.get('providerConfig') or '{}')
 
-            logger.info(f"Fetching posts for influencer {influencer_id} ({platform}/{account_id})")
+            logger.info(f"Starting fetch for influencer: {influencer_id} (platform={platform}, account={account_id}, driver={driver_type})")
 
             # 2. Get provider instance
             provider_class = InfluencerProviderRegistry.get_provider(platform, driver_type)
@@ -70,19 +72,25 @@ class InfluencerFetchService:
             if influencer.get('lastFetchAt'):
                 since = datetime.fromisoformat(influencer['lastFetchAt'])
 
+            fetch_start = time.time()
             posts = await provider.fetch_user_posts(
                 account_id=account_id,
                 since=since,
                 limit=20
             )
             posts_fetched = len(posts)
+            fetch_elapsed = time.time() - fetch_start
 
-            logger.info(f"Fetched {posts_fetched} posts from {platform}")
+            logger.info(f"Provider fetch completed: {posts_fetched} posts from {platform} in {fetch_elapsed:.2f}s")
 
             # 4. Get existing posts for deduplication
+            dedup_start = time.time()
             existing_hashes = await self._get_existing_content_hashes(influencer_id)
+            dedup_elapsed = time.time() - dedup_start
+            logger.debug(f"Deduplication check: {len(existing_hashes)} existing hashes loaded in {dedup_elapsed:.2f}s")
 
             # 5. Save new posts
+            duplicates_skipped = 0
             for post in posts:
                 # Calculate content hash for deduplication
                 content_hash = self._calculate_content_hash(
@@ -93,6 +101,7 @@ class InfluencerFetchService:
 
                 # Skip if already exists
                 if content_hash in existing_hashes:
+                    duplicates_skipped += 1
                     logger.debug(f"Skipping duplicate post: {content_hash[:8]}")
                     continue
 
@@ -102,6 +111,9 @@ class InfluencerFetchService:
                     posts_new += 1
                     existing_hashes.add(content_hash)
 
+            if duplicates_skipped > 0:
+                logger.info(f"Skipped {duplicates_skipped} duplicate posts for {influencer_id}")
+
             # 6. Update influencer status
             await self._update_influencer_status(
                 influencer_id=influencer_id,
@@ -110,12 +122,21 @@ class InfluencerFetchService:
             )
 
             status = 'success'
-            logger.info(f"Successfully fetched {posts_new} new posts for {influencer_id}")
+            elapsed = time.time() - start_time
+            logger.info(
+                f"Fetch completed for {influencer_id}: "
+                f"{posts_new} new posts (out of {posts_fetched} fetched), "
+                f"took {elapsed:.2f}s"
+            )
 
         except Exception as e:
             status = 'error'
             error_message = str(e)
-            logger.error(f"Failed to fetch posts for {influencer_id}: {e}")
+            elapsed = time.time() - start_time
+            logger.error(
+                f"Fetch failed for {influencer_id} after {elapsed:.2f}s: {e}",
+                exc_info=True
+            )
 
             # Update influencer with error
             try:
@@ -130,7 +151,7 @@ class InfluencerFetchService:
 
         finally:
             # 7. Create fetch log
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            duration_ms = int((time.time() - start_time) * 1000)
             try:
                 await self._create_fetch_log(
                     influencer_id=influencer_id,
@@ -148,7 +169,8 @@ class InfluencerFetchService:
             'success': status == 'success',
             'posts_fetched': posts_fetched,
             'posts_new': posts_new,
-            'error': error_message
+            'error': error_message,
+            'elapsed_seconds': duration_ms / 1000.0
         }
 
     async def fetch_all_due(self) -> Dict[str, int]:
@@ -160,7 +182,9 @@ class InfluencerFetchService:
                 - total_fetched: Total number of influencers processed
                 - success_count: Number of successful fetches
                 - error_count: Number of failed fetches
+                - elapsed_seconds: Total time taken
         """
+        batch_start = time.time()
         logger.info("Starting batch fetch for due influencers")
 
         total_fetched = 0
@@ -183,17 +207,23 @@ class InfluencerFetchService:
                     error_count += 1
 
         except Exception as e:
-            logger.error(f"Batch fetch failed: {e}")
+            logger.error(f"Batch fetch failed: {e}", exc_info=True)
+
+        batch_elapsed = time.time() - batch_start
+        success_rate = (success_count / total_fetched * 100) if total_fetched > 0 else 0
 
         logger.info(
             f"Batch fetch complete: {total_fetched} total, "
-            f"{success_count} success, {error_count} errors"
+            f"{success_count} success ({success_rate:.1f}%), "
+            f"{error_count} errors, "
+            f"took {batch_elapsed:.2f}s"
         )
 
         return {
             'total_fetched': total_fetched,
             'success_count': success_count,
-            'error_count': error_count
+            'error_count': error_count,
+            'elapsed_seconds': batch_elapsed
         }
 
     # ========== Private Helper Methods ==========

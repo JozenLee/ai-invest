@@ -6,6 +6,7 @@ Uses worker pool pattern with asyncio.Queue
 
 import asyncio
 import logging
+import time
 from typing import List, Optional
 from datetime import datetime
 
@@ -116,7 +117,8 @@ class InfluencerAIQueue:
             post_id: The post ID to analyze
         """
         await self._queue.put(post_id)
-        logger.debug(f"Published post to queue: {post_id}")
+        queue_size = self._queue.qsize()
+        logger.debug(f"Published post to queue: {post_id}, queue size: {queue_size}")
 
     async def publish_batch(self, post_ids: List[str]):
         """
@@ -128,7 +130,8 @@ class InfluencerAIQueue:
         for post_id in post_ids:
             await self._queue.put(post_id)
 
-        logger.info(f"Published {len(post_ids)} posts to queue")
+        queue_size = self._queue.qsize()
+        logger.info(f"Published {len(post_ids)} posts to queue, queue size: {queue_size}")
 
     async def _worker(self, worker_id: int):
         """
@@ -138,6 +141,8 @@ class InfluencerAIQueue:
             worker_id: Unique identifier for this worker
         """
         logger.info(f"Worker {worker_id} started")
+        processed_count = 0
+        error_count = 0
 
         while self._running:
             try:
@@ -152,15 +157,25 @@ class InfluencerAIQueue:
                     continue
 
                 # Process the post
+                process_start = time.time()
                 try:
-                    logger.info(f"Worker {worker_id} processing: {post_id}")
+                    logger.info(f"Worker {worker_id} processing: {post_id}, queue size: {self._queue.qsize()}")
                     result = await analyze_influencer_post(post_id)
-                    logger.debug(f"Worker {worker_id} completed: {post_id} - {result}")
+                    process_elapsed = time.time() - process_start
+                    processed_count += 1
+
+                    logger.info(
+                        f"Worker {worker_id} completed: {post_id} in {process_elapsed:.2f}s, "
+                        f"total processed: {processed_count}"
+                    )
 
                 except Exception as e:
                     # Log error but don't crash the worker
+                    process_elapsed = time.time() - process_start
+                    error_count += 1
                     logger.error(
-                        f"Worker {worker_id} error processing {post_id}: {e}",
+                        f"Worker {worker_id} error processing {post_id} after {process_elapsed:.2f}s: {e}, "
+                        f"total errors: {error_count}",
                         exc_info=True
                     )
 
@@ -170,7 +185,10 @@ class InfluencerAIQueue:
 
             except asyncio.CancelledError:
                 # Worker is being cancelled, exit gracefully
-                logger.info(f"Worker {worker_id} cancelled")
+                logger.info(
+                    f"Worker {worker_id} cancelled, "
+                    f"processed: {processed_count}, errors: {error_count}"
+                )
                 break
             except Exception as e:
                 # Catch-all for unexpected errors
@@ -181,7 +199,10 @@ class InfluencerAIQueue:
                 # Continue running despite the error
                 await asyncio.sleep(0.1)
 
-        logger.info(f"Worker {worker_id} stopped")
+        logger.info(
+            f"Worker {worker_id} stopped, "
+            f"final stats - processed: {processed_count}, errors: {error_count}"
+        )
 
 
 # Singleton instance for global access
