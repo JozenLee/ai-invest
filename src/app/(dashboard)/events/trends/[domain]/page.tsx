@@ -2,17 +2,20 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
-import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react'
+import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity, Users } from 'lucide-react'
 import { TrendHeader } from '@/components/trends/TrendHeader'
 import { AIInsightSection } from '@/components/trends/AIInsightSection'
 import { RelatedDomainsSection } from '@/components/trends/RelatedDomainsSection'
 import { RelatedNewsSection } from '@/components/trends/RelatedNewsSection'
+import { KOLOpinionsSection } from '@/components/trends/KOLOpinionsSection'
 import { ContentSection } from '@/components/events/ContentSection'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { StatCard } from '@/components/events/StatCard'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { DomainTrendDetail, TrendAnalysisResponse } from '@/types/trend'
+import { getDomainByCode } from '@/config/etf-domains'
 
 const trendConfig = {
   bullish: {
@@ -43,10 +46,12 @@ export default function TrendDetailPage() {
   const [trend, setTrend] = useState<DomainTrendDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [activeTab, setActiveTab] = useState('news')
 
   // Fetch trend detail
-  const fetchTrendDetail = useCallback(async (showLoader = true) => {
+  const fetchTrendDetail = useCallback(async (showLoader = true, includeAI = false) => {
     if (showLoader) {
       setIsLoading(true)
     } else {
@@ -56,7 +61,7 @@ export default function TrendDetailPage() {
 
     try {
       const response = await fetch(
-        `/api/events/trends/analysis?domain=${encodeURIComponent(domain)}&newsCount=${newsCount}`
+        `/api/events/trends/analysis?domain=${encodeURIComponent(domain)}&newsCount=${newsCount}&includeAI=${includeAI}`
       )
       const data: TrendAnalysisResponse = await response.json()
 
@@ -75,7 +80,7 @@ export default function TrendDetailPage() {
   }, [domain, newsCount])
 
   useEffect(() => {
-    fetchTrendDetail(true)
+    fetchTrendDetail(true, false) // 初始加载不包含AI分析
   }, [fetchTrendDetail])
 
   const handleRefresh = async () => {
@@ -90,7 +95,28 @@ export default function TrendDetailPage() {
       console.error('清除缓存失败:', err)
     }
 
-    fetchTrendDetail(false)
+    fetchTrendDetail(false, false)
+  }
+
+  const handleGenerateAI = async () => {
+    setIsGeneratingAI(true)
+    try {
+      const response = await fetch(
+        `/api/events/trends/analysis?domain=${encodeURIComponent(domain)}&newsCount=${newsCount}&includeAI=true`
+      )
+      const data: TrendAnalysisResponse = await response.json()
+
+      if (data.success && data.data) {
+        setTrend(data.data)
+      } else {
+        setError(data.error || '生成AI分析失败')
+      }
+    } catch (err) {
+      console.error('生成AI分析失败:', err)
+      setError('生成AI分析时发生错误，请稍后重试')
+    } finally {
+      setIsGeneratingAI(false)
+    }
   }
 
   if (isLoading) {
@@ -108,10 +134,14 @@ export default function TrendDetailPage() {
   }
 
   if (error || !trend) {
+    // 尝试从配置中获取领域中文名称
+    const domainConfig = getDomainByCode(domain)
+    const displayName = domainConfig?.name || domain
+
     return (
       <div className="space-y-6">
         <TrendHeader
-          domainName={domain}
+          domainName={displayName}
           newsCount={newsCount}
         />
         <div className="flex flex-col items-center justify-center py-12 border rounded-lg">
@@ -218,14 +248,42 @@ export default function TrendDetailPage() {
         </div>
       </ContentSection>
 
-      {/* AI Insight Section */}
-      <AIInsightSection trend={trend} />
+      {/* Tabbed Content Section */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <TabsList variant="line">
+          <TabsTrigger value="news">实时新闻</TabsTrigger>
+          <TabsTrigger value="analysis">趋势分析</TabsTrigger>
+          <TabsTrigger value="ai">AI解读</TabsTrigger>
+          <TabsTrigger value="kol">
+            <Users className="h-4 w-4 mr-1" />
+            大V观点
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Related Domains Section */}
-      <RelatedDomainsSection relatedDomains={trend.relatedDomains} />
+        {/* News Tab */}
+        <TabsContent value="news" className="mt-6">
+          <RelatedNewsSection news={trend.relatedNews} />
+        </TabsContent>
 
-      {/* Related News Section */}
-      <RelatedNewsSection news={trend.relatedNews} />
+        {/* Analysis Tab */}
+        <TabsContent value="analysis" className="mt-6">
+          <RelatedDomainsSection relatedDomains={trend.relatedDomains} />
+        </TabsContent>
+
+        {/* AI Insight Tab */}
+        <TabsContent value="ai" className="mt-6">
+          <AIInsightSection
+            trend={trend}
+            onGenerateAI={handleGenerateAI}
+            isGenerating={isGeneratingAI}
+          />
+        </TabsContent>
+
+        {/* KOL Opinions Tab */}
+        <TabsContent value="kol" className="mt-6">
+          <KOLOpinionsSection domain={domain} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
