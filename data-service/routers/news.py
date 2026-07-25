@@ -4,18 +4,26 @@
 
 import logging
 import re
-from fastapi import APIRouter, HTTPException, Query
+import json
+import asyncio
+from fastapi import APIRouter, HTTPException, Query, Request
 from datetime import datetime, timedelta
 from typing import List, Optional
 from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
 
 import pandas as pd
 
 from services.data_service import data_service
+from services.news_pipeline import NewsPipeline
+from services.sse_manager import sse_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 全局管道实例
+pipeline_instance = None
 
 
 def parse_relative_time(time_str: str) -> datetime:
@@ -345,4 +353,130 @@ async def get_sector_trends(
             },
         }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/refresh")
+async def refresh_news_feed(
+    platform_id: str = Query(default="cls-hot", description="平台ID"),
+    limit: int = Query(default=50, ge=1, le=100, description="采集数量")
+):
+    """
+    触发新闻采集与AI分析
+    
+    执行完整的管道流程：采集 -> AI分析 -> 存储 -> SSE推送
+    """
+    global pipeline_instance
+    
+    try:
+        # 初始化管道（如果尚未初始化）
+        if pipeline_instance is None:
+            pipeline_instance = NewsPipeline()
+        
+        # 执行管道
+        result = await pipeline_instance.run(platform_id=platform_id, limit=limit)
+        
+        return {
+            "success": True,
+            "data": {
+                "fetched": result.fetched,
+                "analyzed": result.analyzed,
+                "saved": result.saved,
+                "failed": result.failed,
+                "timestamp": result.timestamp.isoformat()
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"刷新新闻失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stream")
+async def stream_updates(request: Request):
+    """
+    SSE流端点
+    
+    客户端连接后接收实时新闻更新事件
+    """
+    async def event_generator():
+        # 创建客户端队列
+        client_queue = asyncio.Queue()
+        sse_manager.add_client(client_queue)
+        
+        try:
+            # 发送初始连接事件
+            yield {
+                "event": "connected",
+                "data": json.dumps({
+                    "type": "connected",
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "SSE连接已建立"
+                })
+            }
+            
+            # 持续监听事件
+            while True:
+                # 检查客户端是否断开
+                if await request.is_disconnected():
+                    logger.info("客户端断开连接")
+                    break
+                
+                try:
+                    # 等待事件（带超时）
+                    event = await asyncio.wait_for(
+                        client_queue.get(),
+                        timeout=30.0
+                    )
+                    
+                    # 发送事件
+                    yield {
+                        "event": event.get("type", "message"),
+                        "data": json.dumps(event)
+                    }
+                    
+                except asyncio.TimeoutError:
+                    # 发送心跳
+                    yield {
+                        "event": "heartbeat",
+                        "data": json.dumps({
+                            "type": "heartbeat",
+                            "timestamp": datetime.now().isoformat()
+                        })
+                    }
+                    
+        finally:
+            # 移除客户端
+            sse_manager.remove_client(client_queue)
+    
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/pipeline/stats")
+async def get_pipeline_stats():
+    """获取管道统计信息"""
+    global pipeline_instance
+    
+    if pipeline_instance is None:
+        return {
+            "success": True,
+            "data": {
+                "initialized": False,
+                "message": "管道尚未初始化"
+            }
+        }
+    
+    try:
+        stats = await pipeline_instance.get_stats()
+        
+        return {
+            "success": True,
+            "data": {
+                "initialized": True,
+                **stats
+            }
+        }
+    
+    except Exception as e:
+        logger.error(f"获取统计信息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
