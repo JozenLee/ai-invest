@@ -402,6 +402,109 @@ async def trigger_fetch(influencer_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.put("/{influencer_id}", response_model=InfluencerResponse)
+async def update_influencer(influencer_id: str, data: InfluencerCreate):
+    """
+    Update an existing influencer
+
+    Only editable fields can be modified. Platform-bound fields (name, platform, accountId,
+    profileUrl, avatarUrl, category) are readonly and cannot be changed manually.
+    """
+    try:
+        # Check if influencer exists
+        async with db.get_connection() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM Influencer WHERE id = ?",
+                (influencer_id,)
+            )
+            existing = await cursor.fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
+
+        # Validate readonly fields are not changed
+        readonly_changes = []
+        if data.name != existing['name']:
+            readonly_changes.append('name')
+        if data.avatarUrl and data.avatarUrl != existing['avatarUrl']:
+            readonly_changes.append('avatarUrl')
+        if data.profileUrl and data.profileUrl != existing['profileUrl']:
+            readonly_changes.append('profileUrl')
+        if data.category and data.category != existing['category']:
+            readonly_changes.append('category')
+        if data.platform != existing['platform']:
+            readonly_changes.append('platform')
+        if data.accountId != existing['accountId']:
+            readonly_changes.append('accountId')
+
+        if readonly_changes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"以下字段不允许手动修改（平台绑定字段）: {', '.join(readonly_changes)}"
+            )
+
+        # Serialize tags and dailyFetchTimes
+        tags_str = json.dumps(data.tags) if data.tags else None
+        daily_times_str = json.dumps(data.dailyFetchTimes) if data.dailyFetchTimes else None
+        updated_at = datetime.now().isoformat()
+
+        # Update only editable fields
+        async with db.get_connection() as conn:
+            await conn.execute("""
+                UPDATE Influencer SET
+                    tags = ?,
+                    priority = ?,
+                    isActive = ?,
+                    fetchInterval = ?,
+                    scheduleType = ?,
+                    dailyFetchTimes = ?,
+                    dataRetentionDays = ?,
+                    updatedAt = ?
+                WHERE id = ?
+            """, (
+                tags_str, data.priority, 1 if data.isActive else 0,
+                data.fetchInterval, data.scheduleType, daily_times_str,
+                data.dataRetentionDays, updated_at, influencer_id
+            ))
+
+            # Fetch updated record
+            cursor = await conn.execute(
+                "SELECT * FROM Influencer WHERE id = ?",
+                (influencer_id,)
+            )
+            row = await cursor.fetchone()
+
+        # Parse dailyFetchTimes back
+        daily_times = json.loads(row['dailyFetchTimes']) if row['dailyFetchTimes'] else None
+
+        logger.info(f"Updated influencer: {influencer_id}")
+
+        return InfluencerResponse(
+            id=row['id'],
+            name=row['name'],
+            platform=row['platform'],
+            accountId=row['accountId'],
+            isActive=bool(row['isActive']),
+            lastFetchAt=row['lastFetchAt'],
+            lastFetchStatus=row['lastFetchStatus'],
+            createdAt=row['createdAt'],
+            priority=row['priority'],
+            fetchInterval=row['fetchInterval'],
+            driverType=row['driverType'],
+            profileUrl=row['profileUrl'],
+            category=row['category'],
+            scheduleType=row['scheduleType'],
+            dailyFetchTimes=daily_times,
+            dataRetentionDays=row['dataRetentionDays']
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update influencer: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/opinions/domain/{domain_code}")
 async def get_domain_opinions(
     domain_code: str,
