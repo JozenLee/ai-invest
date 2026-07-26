@@ -25,7 +25,7 @@ interface Influencer {
   profileUrl: string | null;
   avatarUrl: string | null;
   category: string | null;
-  tags: string[];
+  tags: string[] | null;
   isActive: boolean;
   postCount: number;
   createdAt: string;
@@ -38,8 +38,8 @@ interface Post {
   url: string;
   publishTime: string;
   sentiment: number | null;
-  extractedTopics: string[];
-  relatedDomains: string[];
+  extractedTopics: string[] | null;
+  relatedDomains: string[] | null;
   createdAt: string;
 }
 
@@ -48,27 +48,39 @@ export default function InfluencerDetailPage() {
   const router = useRouter();
   const influencerId = params.id as string;
 
-  const { data: influencerData, isLoading: loadingInfluencer, error: influencerError } = useQuery<{
-    success: boolean;
-    data: Influencer;
-  }>({
+  const { data: influencerData, isLoading: loadingInfluencer, error: influencerError } = useQuery<Influencer>({
     queryKey: ['influencer', influencerId],
     queryFn: async () => {
       const response = await fetch(`/api/influencers/${influencerId}`);
-      if (!response.ok) throw new Error('Failed to fetch influencer');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`加载失败 (${response.status}): ${errorText}`);
+      }
       return response.json();
     },
   });
 
   const { data: postsData, isLoading: loadingPosts } = useQuery<{
-    success: boolean;
-    data: { total: number; items: Post[] };
+    items: Post[];
+    total: number;
   }>({
     queryKey: ['influencer-posts', influencerId],
     queryFn: async () => {
       const response = await fetch(`/api/influencers/${influencerId}/posts?limit=20`);
-      if (!response.ok) throw new Error('Failed to fetch posts');
-      return response.json();
+      if (!response.ok) {
+        console.warn('Failed to fetch posts, returning empty array');
+        return { items: [], total: 0 };
+      }
+      const data = await response.json();
+
+      // 适配不同的返回格式
+      if (data.success && data.data) {
+        return data.data;
+      }
+      if (data.items) {
+        return data;
+      }
+      return { items: [], total: 0 };
     },
   });
 
@@ -92,6 +104,10 @@ export default function InfluencerDetailPage() {
       console.error('Error triggering fetch:', error);
       alert('触发采集失败');
     }
+  };
+
+  const handleEdit = () => {
+    router.push(`/events/influencers/${influencerId}/edit`);
   };
 
   const handleDelete = async () => {
@@ -139,7 +155,7 @@ export default function InfluencerDetailPage() {
     );
   }
 
-  if (influencerError || !influencerData?.success) {
+  if (influencerError || !influencerData) {
     return (
       <div className="container mx-auto p-6">
         <div className="text-center py-12">
@@ -152,7 +168,7 @@ export default function InfluencerDetailPage() {
     );
   }
 
-  const influencer = influencerData.data;
+  const influencer = influencerData;
 
   return (
     <div className="container mx-auto p-6 space-y-6">
@@ -188,7 +204,7 @@ export default function InfluencerDetailPage() {
             <RefreshCw className="h-4 w-4 mr-2" />
             手动采集
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleEdit}>
             <Edit className="h-4 w-4 mr-2" />
             编辑
           </Button>
@@ -275,7 +291,7 @@ export default function InfluencerDetailPage() {
               </div>
             )}
           </div>
-          {influencer.tags.length > 0 && (
+          {influencer.tags && influencer.tags.length > 0 && (
             <div>
               <span className="text-sm font-medium text-muted-foreground">标签:</span>
               <div className="flex flex-wrap gap-2 mt-2">
@@ -294,19 +310,19 @@ export default function InfluencerDetailPage() {
         <CardHeader>
           <CardTitle>最近动态</CardTitle>
           <p className="text-sm text-muted-foreground">
-            共 {postsData?.data.total || 0} 条动态
+            共 {postsData?.total || 0} 条动态
           </p>
         </CardHeader>
         <CardContent>
           {loadingPosts && <p className="text-center py-4">加载中...</p>}
           
-          {!loadingPosts && postsData?.data.items.length === 0 && (
+          {!loadingPosts && postsData?.items.length === 0 && (
             <p className="text-center py-8 text-muted-foreground">暂无动态</p>
           )}
 
-          {!loadingPosts && postsData && postsData.data.items.length > 0 && (
+          {!loadingPosts && postsData && postsData.items.length > 0 && (
             <div className="space-y-4">
-              {postsData.data.items.map(post => (
+              {postsData.items.map(post => (
                 <div key={post.id} className="border rounded-lg p-4 hover:bg-accent/50 transition-colors">
                   <div className="flex items-start justify-between gap-4 mb-2">
                     <div className="flex-1">
@@ -339,7 +355,7 @@ export default function InfluencerDetailPage() {
                     )}
                   </div>
 
-                  {post.extractedTopics.length > 0 && (
+                  {post.extractedTopics && post.extractedTopics.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
                       {post.extractedTopics.map((topic, idx) => (
                         <Badge key={idx} variant="outline" className="text-xs">

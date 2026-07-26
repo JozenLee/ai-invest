@@ -50,8 +50,29 @@ export default function InfluencersPage() {
       }
 
       const response = await fetch(`/api/influencers?${params}`);
-      if (!response.ok) throw new Error('Failed to fetch influencers');
-      return response.json();
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`加载失败 (${response.status}): ${errorText}`);
+      }
+      const data = await response.json();
+
+      // 验证响应格式
+      if (!data || typeof data !== 'object') {
+        throw new Error('API响应格式错误');
+      }
+
+      // 如果没有items字段，可能是旧格式，需要适配
+      if (!data.items) {
+        console.warn('API返回旧格式，正在适配...');
+        return {
+          items: Array.isArray(data) ? data : [],
+          total: Array.isArray(data) ? data.length : 0,
+          page: 1,
+          pageSize: 20
+        };
+      }
+
+      return data;
     },
   });
 
@@ -61,6 +82,9 @@ export default function InfluencersPage() {
       bilibili: { color: 'bg-pink-500', label: 'B站' },
       weibo: { color: 'bg-orange-500', label: '微博' },
       xiaohongshu: { color: 'bg-red-500', label: '小红书' },
+      zhihu: { color: 'bg-blue-500', label: '知乎' },
+      douyin: { color: 'bg-black', label: '抖音' },
+      alipay: { color: 'bg-blue-600', label: '支付宝' },
     };
     const cfg = config[platform] || { color: 'bg-gray-500', label: platform };
     return (
@@ -70,11 +94,27 @@ export default function InfluencersPage() {
     );
   };
 
+  const getPlatformLabel = (platform: string) => {
+    const labels: Record<string, string> = {
+      all: '全部平台',
+      bilibili: 'B站',
+      weibo: '微博',
+      xiaohongshu: '小红书',
+      zhihu: '知乎',
+      douyin: '抖音',
+      alipay: '支付宝',
+    };
+    return labels[platform] || platform;
+  };
+
   const getPlatformBadge = (platform: string) => {
     const config: Record<string, { label: string; variant: 'default' | 'secondary' | 'outline' }> = {
       bilibili: { label: 'B站', variant: 'default' },
       weibo: { label: '微博', variant: 'secondary' },
       xiaohongshu: { label: '小红书', variant: 'outline' },
+      zhihu: { label: '知乎', variant: 'default' },
+      douyin: { label: '抖音', variant: 'secondary' },
+      alipay: { label: '支付宝', variant: 'outline' },
     };
     const cfg = config[platform] || { label: platform, variant: 'outline' };
     return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
@@ -113,14 +153,14 @@ export default function InfluencersPage() {
     }
   };
 
-  const filteredInfluencers = data?.items.filter(inf => {
+  const filteredInfluencers = (data?.items || []).filter(inf => {
     if (!searchQuery) return true;
     return inf.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
            inf.accountId.includes(searchQuery);
-  }) || [];
+  });
 
   const totalPages = data ? Math.ceil(data.total / data.pageSize) : 0;
-  const hasNextPage = page < totalPages;
+  const hasNextPage = data ? page < totalPages : false;
   const hasPrevPage = page > 1;
 
   return (
@@ -160,13 +200,16 @@ export default function InfluencersPage() {
               setPage(1); // Reset to first page when filter changes
             }}>
               <SelectTrigger className="w-[140px]">
-                <SelectValue />
+                <SelectValue>{getPlatformLabel(platformFilter)}</SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">全部平台</SelectItem>
-                <SelectItem value="bilibili">B站</SelectItem>
                 <SelectItem value="weibo">微博</SelectItem>
+                <SelectItem value="bilibili">B站</SelectItem>
                 <SelectItem value="xiaohongshu">小红书</SelectItem>
+                <SelectItem value="zhihu">知乎</SelectItem>
+                <SelectItem value="douyin">抖音</SelectItem>
+                <SelectItem value="alipay">支付宝</SelectItem>
               </SelectContent>
             </Select>
           </div>

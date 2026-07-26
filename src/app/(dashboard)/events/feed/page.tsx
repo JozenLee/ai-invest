@@ -28,8 +28,9 @@ import { PageHeader } from '@/components/events/PageHeader'
 import { StatCard } from '@/components/events/StatCard'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { MultiSelect } from '@/components/events/MultiSelect'
-import { formatRelativeTime } from '@/lib/time-utils'
+import { formatLocalTimeString } from '@/lib/time-utils'
 import { useNewsStream } from '@/hooks/useNewsStream'
+import { ETF_DOMAINS, getDomainByCode } from '@/config/etf-domains'
 
 interface NewsArticle {
   id: string
@@ -43,9 +44,11 @@ interface NewsArticle {
   categoryId?: string
   categoryName?: string
   domainId?: string
+  domainIds?: string[]
   domainName?: string
   sourceId?: string
-  sentiment?: number
+  sentiment?: number | null
+  sentimentLabel?: string | null
   impact?: number
   sectors?: string[]
 }
@@ -94,7 +97,7 @@ export default function EventsFeedPage() {
   const [domains, setDomains] = useState<Domain[]>([])
   const [dataSources, setDataSources] = useState<DataSource[]>([])
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([])
-  const [selectedDomainIds, setSelectedDomainIds] = useState<string[]>([])
+  const [selectedDomainCodes, setSelectedDomainCodes] = useState<string[]>([]) // 改用code而非id
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([])
   const [selectedSentiments, setSelectedSentiments] = useState<string[]>([])
   const [sortBy, setSortBy] = useState<string>('publishTime')
@@ -104,14 +107,17 @@ export default function EventsFeedPage() {
 
   // SSE实时更新
   const { isConnected, lastEvent } = useNewsStream({
-    onUpdate: (data) => {
+    onUpdate: useCallback((data: any) => {
       console.log('收到SSE更新:', data)
       setUpdateCount(prev => prev + 1)
       // 自动刷新新闻列表
       if (data.type === 'batch_completed' || data.type === 'news_updated') {
-        fetchNews()
+        // 延迟刷新，避免频繁请求
+        setTimeout(() => {
+          fetchNews()
+        }, 500)
       }
-    }
+    }, [])
   })
 
   // 分类分组配置（排除分组名本身）
@@ -169,17 +175,8 @@ export default function EventsFeedPage() {
 
   // 获取领域数据
   const fetchDomains = async () => {
-    try {
-      const response = await fetch('/api/events/domains')
-      if (response.ok) {
-        const data = await response.json()
-        if (data.success) {
-          setDomains(data.data)
-        }
-      }
-    } catch (error) {
-      console.error('获取领域失败:', error)
-    }
+    // 使用新的ETF领域配置，不再从API获取
+    // API的Domain表可能还没有同步更新
   }
 
   // 获取数据源列表
@@ -206,8 +203,9 @@ export default function EventsFeedPage() {
         // 多个分类用逗号分隔，后端需要支持OR查询
         url += `&categoryIds=${selectedCategoryIds.join(',')}`
       }
-      if (selectedDomainIds.length > 0) {
-        url += `&domainIds=${selectedDomainIds.join(',')}`
+      if (selectedDomainCodes.length > 0) {
+        // 使用领域code而非id
+        url += `&domainIds=${selectedDomainCodes.join(',')}`
       }
       if (selectedSourceIds.length > 0) {
         url += `&sourceIds=${selectedSourceIds.join(',')}`
@@ -231,7 +229,7 @@ export default function EventsFeedPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedCategoryIds, selectedDomainIds, selectedSourceIds, selectedSentiments, sortBy, keyword])
+  }, [selectedCategoryIds, selectedDomainCodes, selectedSourceIds, selectedSentiments, sortBy, keyword])
 
   useEffect(() => {
     fetchCategories()
@@ -255,7 +253,7 @@ export default function EventsFeedPage() {
 
   const clearFilters = () => {
     setSelectedCategoryIds([])
-    setSelectedDomainIds([])
+    setSelectedDomainCodes([])
     setSelectedSourceIds([])
     setSelectedSentiments([])
     setSortBy('publishTime')
@@ -263,16 +261,17 @@ export default function EventsFeedPage() {
     setSearchInput('')
   }
 
-  const getSentimentInfo = (sentiment?: number) => {
-    if (!sentiment || Math.abs(sentiment) <= 0.2) {
+  const getSentimentInfo = (sentiment?: number | null) => {
+    if (sentiment === null || sentiment === undefined || Math.abs(sentiment) <= 0.2) {
       return sentimentConfig.neutral
     }
     return sentiment > 0 ? sentimentConfig.bullish : sentimentConfig.bearish
   }
 
   const formatTime = (timeStr: string) => {
-    // 使用统一的时间格式化工具
-    return formatRelativeTime(timeStr)
+    // 直接格式化时间字符串，避免时区转换
+    // 数据库存储的时间已经是北京时间
+    return formatLocalTimeString(timeStr, 'full')
   }
 
   // 查找分类名称
@@ -318,10 +317,10 @@ export default function EventsFeedPage() {
             {/* SSE连接状态 */}
             <div className={`flex items-center gap-2 text-sm ${isConnected ? 'text-green-600' : 'text-gray-400'}`}>
               <Radio className={`h-4 w-4 ${isConnected ? 'animate-pulse' : ''}`} />
-              <span>{isConnected ? '实时连接' : '未连接'}</span>
+              <span>{isConnected ? '实时连接' : '离线模式'}</span>
               {updateCount > 0 && (
                 <Badge variant="secondary" className="ml-1">
-                  {updateCount}次更新
+                  {updateCount}
                 </Badge>
               )}
             </div>
@@ -462,16 +461,18 @@ export default function EventsFeedPage() {
               className="w-full"
             />
 
-            {/* 领域筛选 */}
+            {/* 领域筛选 - 使用ETF领域配置 */}
             <MultiSelect
-              value={selectedDomainIds}
-              onChange={setSelectedDomainIds}
-              options={domains.map(domain => ({
-                value: domain.id,
-                label: domain.name,
-              }))}
-              placeholder="领域筛选"
-              title="选择领域"
+              value={selectedDomainCodes}
+              onChange={setSelectedDomainCodes}
+              options={ETF_DOMAINS
+                .filter(d => d.code !== 'irrelevant') // 排除irrelevant
+                .map(domain => ({
+                  value: domain.code,
+                  label: domain.name,
+                }))}
+              placeholder="ETF领域筛选"
+              title="选择ETF领域"
               className="w-full"
             />
 
@@ -506,7 +507,7 @@ export default function EventsFeedPage() {
           {/* 分类筛选 - 移除旧的树形选择器 */}
 
           {/* 当前筛选条件 */}
-          {(selectedCategoryIds.length > 0 || selectedDomainIds.length > 0 || selectedSourceIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
+          {(selectedCategoryIds.length > 0 || selectedDomainCodes.length > 0 || selectedSourceIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
             <div className="flex flex-wrap items-center gap-2 text-sm pt-2 border-t">
               <span className="text-muted-foreground">当前筛选：</span>
               {selectedCategoryIds.length > 0 && (
@@ -523,18 +524,18 @@ export default function EventsFeedPage() {
                   ))}
                 </>
               )}
-              {selectedDomainIds.length > 0 && (
+              {selectedDomainCodes.length > 0 && (
                 <>
-                  {selectedDomainIds.map((domainId) => {
-                    const domain = domains.find(d => d.id === domainId)
+                  {selectedDomainCodes.map((domainCode) => {
+                    const domain = getDomainByCode(domainCode)
                     return (
                       <Badge
-                        key={domainId}
+                        key={domainCode}
                         variant="secondary"
                         className="cursor-pointer"
-                        onClick={() => setSelectedDomainIds(prev => prev.filter(id => id !== domainId))}
+                        onClick={() => setSelectedDomainCodes(prev => prev.filter(code => code !== domainCode))}
                       >
-                        {domain?.name || domainId} ×
+                        {domain?.name || domainCode} ×
                       </Badge>
                     )
                   })}
@@ -638,19 +639,43 @@ export default function EventsFeedPage() {
                       )}
 
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="outline">{article.source}</Badge>
-                        <Badge variant={sentimentInfo.color as any}>{sentimentInfo.label}</Badge>
+                        <Badge variant="outline" className="text-xs">
+                          {article.source}
+                        </Badge>
+
+                        {/* 检查是否为无影响新闻 */}
+                        {article.domainIds?.includes('irrelevant') ? (
+                          <Badge variant="secondary" className="bg-gray-100 text-gray-600">
+                            无影响
+                          </Badge>
+                        ) : (
+                          <>
+                            {/* 情感标签 - 仅当不是irrelevant时显示 */}
+                            {article.sentimentLabel && (
+                              <Badge variant={sentimentInfo.color as any}>{sentimentInfo.label}</Badge>
+                            )}
+                          </>
+                        )}
 
                         {/* 分类标签 */}
                         {article.categoryName && (
                           <Badge variant="secondary">{article.categoryName}</Badge>
                         )}
 
-                        {/* 领域标签 */}
-                        {article.domainName && (
-                          <Badge variant="default" className="bg-blue-100 text-blue-800">
-                            {article.domainName}
-                          </Badge>
+                        {/* 多领域标签 - 显示所有领域（排除irrelevant） */}
+                        {article.domainIds && article.domainIds.length > 0 && (
+                          <>
+                            {article.domainIds
+                              .filter(code => code !== 'irrelevant')
+                              .map((domainCode) => {
+                                const domain = getDomainByCode(domainCode)
+                                return domain ? (
+                                  <Badge key={domainCode} variant="default" className="bg-blue-100 text-blue-800">
+                                    {domain.name}
+                                  </Badge>
+                                ) : null
+                              })}
+                          </>
                         )}
 
                         {article.sectors?.map((sector) => (
@@ -664,11 +689,9 @@ export default function EventsFeedPage() {
                         )}
                       </div>
 
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        <span>{formatTime(article.publishTime)}</span>
-                        {article.sentiment !== undefined && (
-                          <span>情感: {(article.sentiment * 100).toFixed(0)}%</span>
-                        )}
+                      {/* 发布时间 - 单独一行 */}
+                      <div className="text-xs text-muted-foreground">
+                        {formatTime(article.publishTime)}
                       </div>
                     </div>
                   </div>

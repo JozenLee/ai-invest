@@ -319,8 +319,8 @@ class InfluencerFetchService:
                 await conn.execute("""
                     INSERT INTO InfluencerPost (
                         id, influencerId, content, originalUrl, publishTime,
-                        mediaType, mediaUrls, engagement, aiProcessed, createdAt
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        mediaType, mediaUrls, engagement, aiProcessed, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     post_id,
                     influencer_id,
@@ -331,6 +331,7 @@ class InfluencerFetchService:
                     media_urls,
                     engagement,
                     0,  # aiProcessed
+                    datetime.now().isoformat(),
                     datetime.now().isoformat()
                 ))
 

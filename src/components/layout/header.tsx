@@ -11,10 +11,13 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { getDomainByCode } from '@/config/etf-domains'
+import { useEffect, useState } from 'react'
 
 export function Header() {
   const pathname = usePathname()
   const { setTheme } = useTheme()
+  const [dynamicNames, setDynamicNames] = useState<Record<string, string>>({})
 
   // 生成面包屑
   const breadcrumbs = pathname
@@ -22,9 +25,30 @@ export function Header() {
     .filter(Boolean)
     .map((segment, index, array) => {
       const href = '/' + array.slice(0, index + 1).join('/')
-      const name = getBreadcrumbName(segment)
+      const name = getBreadcrumbName(segment, dynamicNames)
       return { href, name }
     })
+
+  // 检测动态路由并加载名称
+  useEffect(() => {
+    const segments = pathname.split('/').filter(Boolean)
+
+    // 检查是否是大V详情页 /events/influencers/[id]
+    if (segments.length === 3 && segments[0] === 'events' && segments[1] === 'influencers') {
+      const influencerId = segments[2]
+      // 检查是否为 ID 格式 (inf_ 开头或纯数字)
+      if (influencerId.startsWith('inf_') || /^\d+$/.test(influencerId)) {
+        fetch(`/api/influencers/${influencerId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data?.name) {
+              setDynamicNames(prev => ({ ...prev, [influencerId]: data.name }))
+            }
+          })
+          .catch(err => console.error('Failed to fetch influencer name:', err))
+      }
+    }
+  }, [pathname])
 
   return (
     <header className="flex h-16 items-center justify-between border-b bg-card px-6">
@@ -101,7 +125,12 @@ export function Header() {
   )
 }
 
-function getBreadcrumbName(segment: string): string {
+function getBreadcrumbName(segment: string, dynamicNames: Record<string, string> = {}): string {
+  // 检查是否有动态名称
+  if (dynamicNames[segment]) {
+    return dynamicNames[segment]
+  }
+
   const nameMap: Record<string, string> = {
     dashboard: '仪表盘',
     market: '市场数据',
@@ -112,6 +141,7 @@ function getBreadcrumbName(segment: string): string {
     feed: '资讯流',
     analysis: '事件分析',
     trends: '领域趋势',
+    influencers: '大V监控',
     graph: '知识图谱',
     explore: '图谱探索',
     propagation: '传导路径',
@@ -125,6 +155,25 @@ function getBreadcrumbName(segment: string): string {
     optimize: '组合优化',
     risk: '风险分析',
     settings: '设置',
+    new: '新建',
   }
-  return nameMap[segment] || segment
+
+  // 如果在nameMap中找到，直接返回
+  if (nameMap[segment]) {
+    return nameMap[segment]
+  }
+
+  // 尝试作为领域代码查询
+  const domain = getDomainByCode(segment)
+  if (domain) {
+    return domain.name
+  }
+
+  // 如果是ID格式（inf_开头或纯数字），显示"详情"而不是ID
+  if (segment.startsWith('inf_') || /^\d+$/.test(segment)) {
+    return '详情'
+  }
+
+  // 默认返回原始segment
+  return segment
 }

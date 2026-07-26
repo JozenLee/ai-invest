@@ -81,9 +81,13 @@ export class EventService {
         where.category = category
       }
 
-      // 领域筛选（支持多选）
+      // 领域筛选（支持多选）- 基于domainIds字段（JSON数组）
       if (domainIds && domainIds.length > 0) {
-        where.domainId = { in: domainIds }
+        // domainIds是JSON字符串，需要匹配数组中的任一元素
+        // SQLite不支持JSON函数，所以使用字符串匹配
+        where.OR = domainIds.map(domainId => ({
+          domainIds: { contains: `"${domainId}"` }
+        }))
       }
 
       // 数据源筛选（支持多选）
@@ -164,27 +168,40 @@ export class EventService {
         return {
           total,
           source: 'local',
-          items: articles.map((a) => ({
-            id: a.id,
-            title: a.title,
-            content: a.content || '',
-            summary: a.summary || undefined,
-            source: a.sourceRef?.name || a.source || '财联社',
-            url: a.url || undefined,
-            publishTime: a.publishTime?.toISOString() || new Date().toISOString(),
-            category: a.categoryRef?.code || a.category || 'market',
-            categoryId: a.categoryId || undefined,
-            categoryName: a.categoryRef?.name || undefined,
-            domainId: a.domainId || undefined,
-            domainName: a.domain?.name || undefined,
-            sentiment: a.sentiment || undefined,
-            sentimentLabel: a.sentimentLabel || undefined,
-            impact: a.impact || undefined,
-            entities: a.entities ? JSON.parse(a.entities as string) : undefined,
-            sectors: a.sectors ? JSON.parse(a.sectors as string) : undefined,
-            keywords: a.keywords ? JSON.parse(a.keywords as string) : undefined,
-            aiProcessed: a.aiProcessed || false,
-          })),
+          items: articles.map((a) => {
+            // 解析domainIds（JSON数组）
+            let domainIds: string[] = []
+            if (a.domainIds) {
+              try {
+                domainIds = JSON.parse(a.domainIds as string)
+              } catch (e) {
+                console.error('解析domainIds失败:', e)
+              }
+            }
+
+            return {
+              id: a.id,
+              title: a.title,
+              content: a.content || '',
+              summary: a.summary || undefined,
+              source: a.sourceRef?.name || a.source || '财联社',
+              url: a.url || undefined,
+              publishTime: a.publishTime?.toISOString() || new Date().toISOString(),
+              category: a.categoryRef?.code || a.category || 'market',
+              categoryId: a.categoryId || undefined,
+              categoryName: a.categoryRef?.name || undefined,
+              domainId: a.domainId || undefined,
+              domainIds: domainIds,
+              domainName: a.domain?.name || undefined,
+              sentiment: a.sentiment || undefined,
+              sentimentLabel: a.sentimentLabel || undefined,
+              impact: a.impact || undefined,
+              entities: a.entities ? JSON.parse(a.entities as string) : undefined,
+              sectors: a.sectors ? JSON.parse(a.sectors as string) : undefined,
+              keywords: a.keywords ? JSON.parse(a.keywords as string) : undefined,
+              aiProcessed: a.aiProcessed || false,
+            }
+          }),
         }
       }
 

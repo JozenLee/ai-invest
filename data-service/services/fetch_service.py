@@ -300,17 +300,23 @@ class FetchService:
                 try:
                     analysis = analysis_results[i] if i < len(analysis_results) else {}
 
+                    # 检查是否为无影响新闻
+                    domains = analysis.get("domains", [])
+                    is_irrelevant = "irrelevant" in domains
+
                     processed_item = {
                         **item,
-                        "category": analysis.get("category", "market"),
+                        "summary": analysis.get("summary", item.get("title", "")[:100]),
+                        "category": analysis.get("category", "global_market"),
                         "categoryConfidence": analysis.get("categoryConfidence", 0.5),
-                        "sentiment": analysis.get("sentiment", 0.0),
-                        "sentimentLabel": analysis.get("sentimentLabel", "neutral"),
-                        "sentimentConfidence": analysis.get("sentimentConfidence", 0.5),
+                        "sentiment": analysis.get("sentiment"),  # 可能为None
+                        "sentimentLabel": analysis.get("sentimentLabel"),  # 可能为None
+                        "sentimentConfidence": analysis.get("sentimentConfidence"),  # 可能为None
+                        "impact": analysis.get("impact", 3),
                         "keywords": analysis.get("keywords", []),
                         "entities": analysis.get("entities", []),
                         "sectors": self._extract_sectors(item.get("title", "")),
-                        "domainIds": analysis.get("domains", []),
+                        "domainIds": domains,
                         "aiProcessed": True,
                         "aiProcessedAt": datetime.now(timezone.utc).isoformat(),
                         "aiError": None
@@ -341,6 +347,10 @@ class FetchService:
         for item in raw_data:
             try:
                 title = item.get("title", "")
+                content = item.get("content", "")
+
+                # 简单摘要（截取内容前100字）
+                summary = content[:100] if content else title[:100]
 
                 # 简单分类
                 category = self._categorize_news(title)
@@ -348,15 +358,20 @@ class FetchService:
                 # 简单情感分析
                 sentiment_score, sentiment_label = self._simple_sentiment(title)
 
+                # 简单影响力评估（默认3）
+                impact = 3
+
                 # 提取板块
                 sectors = self._extract_sectors(title)
 
                 processed_item = {
                     **item,
+                    "summary": summary,
                     "category": category,
                     "sentiment": sentiment_score,
                     "sentimentLabel": sentiment_label,
                     "sentimentConfidence": 0.5,  # 简单规则的置信度较低
+                    "impact": impact,
                     "sectors": sectors,
                     "keywords": [],
                     "entities": [],
@@ -526,10 +541,11 @@ class FetchService:
                         "source": item.get("source", "未知"),
                         "url": url,
                         "publishTime": publish_time.isoformat() if isinstance(publish_time, datetime) else publish_time,
-                        "category": item.get("category", "market"),
+                        "category": item.get("category", "global_market"),  # 使用 category 而不是 categoryId
                         "sentiment": item.get("sentiment"),
                         "sentimentLabel": item.get("sentimentLabel"),
                         "sentimentConfidence": item.get("sentimentConfidence", 0.0),
+                        "impact": item.get("impact"),  # 添加 impact
                         "keywords": json.dumps(item.get("keywords", []), ensure_ascii=False) if item.get("keywords") else None,
                         "entities": json.dumps(item.get("entities", []), ensure_ascii=False) if item.get("entities") else None,
                         "sectors": json.dumps(item.get("sectors", []), ensure_ascii=False) if item.get("sectors") else None,

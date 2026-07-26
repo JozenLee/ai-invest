@@ -29,15 +29,30 @@ class AIAnalyzer:
         """
         self.concurrency = concurrency
 
-        # 获取API密钥
+        # 获取API密钥和配置
         api_key = anthropic_api_key or os.getenv('ANTHROPIC_API_KEY')
+        base_url = os.getenv('ANTHROPIC_BASE_URL')
+
         if not api_key:
             logger.warning("未配置ANTHROPIC_API_KEY，AI分析功能将不可用")
 
-        self.claude_client = AsyncAnthropic(api_key=api_key) if api_key else None
+        # 初始化Claude客户端，支持自定义base_url
+        if api_key:
+            client_kwargs = {'api_key': api_key}
+            if base_url:
+                client_kwargs['base_url'] = base_url
+                logger.info(f"使用自定义API端点: {base_url}")
+
+            self.claude_client = AsyncAnthropic(**client_kwargs)
+        else:
+            self.claude_client = None
+
         self.redis_client = None  # 可选Redis客户端
 
-        logger.info(f"AI分析器初始化完成，并发数: {concurrency}")
+        # 获取模型配置
+        self.model = os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+
+        logger.info(f"AI分析器初始化完成，并发数: {concurrency}, 模型: {self.model}")
 
     async def analyze_batch(self, articles: List[RawArticle]) -> List[AnalyzedArticle]:
         """
@@ -128,6 +143,7 @@ class AIAnalyzer:
 
             return AnalyzedArticle(
                 **article.dict(),
+                summary=analysis.get('summary', article.title[:100]),
                 categoryId=category_id,
                 categoryConfidence=analysis.get('category_confidence', 0.0),
                 domainId=domain_ids[0] if domain_ids else None,
@@ -167,30 +183,32 @@ class AIAnalyzer:
         prompt = f"""请分析以下财经新闻，提供结构化的分析结果：
 
 标题：{article.title}
-内容：{article.content[:500]}
+内容：{article.content[:1000]}
 来源：{article.source}
 
 请提供以下分析：
-1. 分类（category）：从以下选择 - policy/earnings/product/partnership/supply/tech/regulation/market
-2. 情感（sentiment）：分数-1到1（score），标签bullish/neutral/bearish（label），置信度0-1（confidence）
-3. 影响力（impact）：1-5级别（magnitude）
-4. 关键词（keywords）：3-5个关键词数组
-5. 实体（entities）：companies（公司数组）, sectors（板块数组）, products（产品数组）
-6. 相关板块（sectors）：半导体/光通信/服务器/存储/散热/PCB/AI应用
+1. 摘要（summary）：30-50字的新闻摘要，提炼核心要点
+2. 分类（category）：从以下选择 - policy/earnings/product/partnership/supply/tech/regulation/market
+3. 情感（sentiment）：分数-1到1（score），标签bullish/neutral/bearish（label），置信度0-1（confidence）
+4. 影响力（impact）：1-5级别（magnitude）
+5. 关键词（keywords）：3-5个关键词数组
+6. 实体（entities）：companies（公司数组）, sectors（板块数组）, products（产品数组）
+7. 相关板块（sectors）：必须从以下选择 - 半导体/光通信/服务器/存储/散热/PCB/AI应用，可多选
 
 以JSON格式返回，格式如下：
 {{
+  "summary": "英伟达发布新一代GPU，AI算力提升3倍，推动数据中心市场增长",
   "category": "tech",
   "category_confidence": 0.9,
   "sentiment": {{"score": 0.8, "label": "bullish", "confidence": 0.85}},
   "impact": {{"magnitude": 4}},
-  "keywords": ["AI", "芯片", "需求"],
+  "keywords": ["AI", "芯片", "GPU", "英伟达"],
   "entities": {{"companies": ["英伟达"], "sectors": ["半导体"], "products": ["GPU"]}},
   "sectors": ["半导体", "AI应用"]
 }}"""
 
         message = await self.claude_client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=self.model,
             max_tokens=1024,
             messages=[
                 {"role": "user", "content": prompt}
@@ -204,7 +222,11 @@ class AIAnalyzer:
         import re
         json_match = re.search(r'\{.*\}', content, re.DOTALL)
         if json_match:
-            return json.loads(json_match.group())
+            result = json.loads(json_match.group())
+            # 确保summary字段存在
+            if 'summary' not in result or not result['summary']:
+                result['summary'] = article.title[:100]
+            return result
         else:
             raise ValueError("Claude API未返回有效JSON")
 

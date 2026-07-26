@@ -89,6 +89,39 @@ export function formatBeijingTime(
 }
 
 /**
+ * 直接格式化时间字符串（假设输入已经是北京时间）
+ * 用于处理数据库中存储的时间字符串，避免时区转换
+ * @param dateString 时间字符串（格式：2026-07-25T18:57:23）
+ * @param format 'full' | 'short' | 'date-only'
+ * @returns 格式化后的时间字符串
+ */
+export function formatLocalTimeString(
+  dateString: string,
+  format: 'full' | 'short' | 'date-only' = 'full'
+): string {
+  if (!dateString) return '';
+
+  // 直接解析字符串，不做时区转换
+  // 假设输入格式: 2026-07-25T18:57:23 或 2026-07-25 18:57:23
+  const normalized = dateString.replace(' ', 'T').split('.')[0]; // 移除毫秒
+
+  const [datePart, timePart] = normalized.split('T');
+  const [year, month, day] = datePart.split('-');
+  const [hour, minute, second] = (timePart || '00:00:00').split(':');
+
+  switch (format) {
+    case 'full':
+      return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+    case 'short':
+      return `${month}-${day} ${hour}:${minute}`;
+    case 'date-only':
+      return `${year}-${month}-${day}`;
+    default:
+      return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  }
+}
+
+/**
  * 获取北京时间的当前时间
  * @returns Date对象
  */

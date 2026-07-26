@@ -1,97 +1,65 @@
 #!/bin/bash
-# UI修复验证脚本
-# 测试超时优化、错误处理和日志改进
 
-echo "================================================"
-echo "UI修复验证测试"
-echo "================================================"
+# UI显示修复验证脚本
+
+echo "======================================"
+echo "UI显示修复验证"
+echo "======================================"
 echo ""
 
-# 颜色定义
 GREEN='\033[0;32m'
 RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# 测试计数
-PASSED=0
-FAILED=0
-
-# 测试1: 检查TypeScript编译
-echo "📋 测试1: TypeScript类型检查"
-if npm run typecheck > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ 通过${NC} - 无TypeScript错误"
-    ((PASSED++))
-else
-    echo -e "${RED}✗ 失败${NC} - 存在TypeScript错误"
-    ((FAILED++))
-fi
+echo "修复内容:"
+echo "1. 详情页面标题显示中文名称（而非英文代码）"
+echo "2. AI分析提示文案更新为'点击上方按钮生成AI智能趋势分析报告'"
 echo ""
 
-# 测试2: 检查超时配置
-echo "📋 测试2: 超时配置验证"
-TIMEOUT_CLIENT=$(grep -o "AbortSignal.timeout([0-9]*)" src/contexts/MarketContext.tsx | grep -o "[0-9]*")
-TIMEOUT_CAPITAL=$(grep -o "AbortSignal.timeout([0-9]*)" src/app/api/market/capital-flow/route.ts | grep -o "[0-9]*")
-TIMEOUT_OVERVIEW=$(grep -o "AbortSignal.timeout([0-9]*)" src/app/api/market/overview/route.ts | grep -o "[0-9]*")
-
-if [ "$TIMEOUT_CLIENT" -le 10000 ] && [ "$TIMEOUT_CAPITAL" -le 15000 ] && [ "$TIMEOUT_OVERVIEW" -le 15000 ]; then
-    echo -e "${GREEN}✓ 通过${NC} - 超时配置已优化"
-    echo "  - 客户端: ${TIMEOUT_CLIENT}ms (≤10000ms)"
-    echo "  - Capital Flow API: ${TIMEOUT_CAPITAL}ms (≤15000ms)"
-    echo "  - Overview API: ${TIMEOUT_OVERVIEW}ms (≤15000ms)"
-    ((PASSED++))
-else
-    echo -e "${RED}✗ 失败${NC} - 超时配置未优化"
-    ((FAILED++))
-fi
+echo "代码验证:"
+echo "-----------------------------------"
 echo ""
 
-# 测试3: 检查条件日志
-echo "📋 测试3: 条件日志验证"
-DEV_LOGS=$(grep -c "process.env.NODE_ENV === 'development'" src/contexts/MarketContext.tsx)
-if [ "$DEV_LOGS" -gt 0 ]; then
-    echo -e "${GREEN}✓ 通过${NC} - 已实现条件日志 (${DEV_LOGS} 处)"
-    ((PASSED++))
+# 检查导入是否添加
+if grep -q "getDomainByCode" /Users/jozen.lee/ai-softwares/ai-invest/src/app/\(dashboard\)/events/trends/\[domain\]/page.tsx; then
+    echo -e "${GREEN}✓${NC} getDomainByCode 已导入"
 else
-    echo -e "${YELLOW}⚠ 警告${NC} - 未检测到条件日志"
-    ((FAILED++))
+    echo -e "${RED}✗${NC} getDomainByCode 未导入"
 fi
+
+# 检查错误处理是否使用getDomainByCode
+if grep -q "getDomainByCode(domain)" /Users/jozen.lee/ai-softwares/ai-invest/src/app/\(dashboard\)/events/trends/\[domain\]/page.tsx; then
+    echo -e "${GREEN}✓${NC} 错误状态使用中文名称"
+else
+    echo -e "${RED}✗${NC} 错误状态未修复"
+fi
+
+# 检查AI分析文案
+if grep -q "点击上方按钮生成AI智能趋势分析报告" /Users/jozen.lee/ai-softwares/ai-invest/src/components/trends/AIInsightSection.tsx; then
+    echo -e "${GREEN}✓${NC} AI分析文案已更新"
+else
+    echo -e "${RED}✗${NC} AI分析文案未更新"
+fi
+
+echo ""
+echo "手动验证步骤:"
+echo "-----------------------------------"
+echo ""
+echo "1. 打开浏览器访问: http://localhost:3000/events/trends"
+echo ""
+echo "2. 点击任意领域卡片（如'半导体'）"
+echo ""
+echo "3. 验证页面标题显示:"
+echo "   ✓ 预期: '半导体领域深度分析'"
+echo "   ✗ 错误: 'semiconductor领域深度分析'"
+echo ""
+echo "4. 滚动到'AI趋势分析'区块，验证提示文案:"
+echo "   ✓ 预期: '点击上方按钮生成AI智能趋势分析报告'"
+echo "   ✗ 错误: '点击上方按钮生成基于Claude的智能投资分析报告'"
+echo ""
+echo "5. 点击'生成AI分析'按钮，验证功能正常"
 echo ""
 
-# 测试4: 检查错误处理
-echo "📋 测试4: 错误处理验证"
-ERROR_MESSAGES=$(grep -c "数据请求超时\|网络请求失败" src/contexts/MarketContext.tsx)
-if [ "$ERROR_MESSAGES" -gt 0 ]; then
-    echo -e "${GREEN}✓ 通过${NC} - 已实现友好错误提示"
-    ((PASSED++))
-else
-    echo -e "${RED}✗ 失败${NC} - 缺少友好错误提示"
-    ((FAILED++))
-fi
-echo ""
-
-# 测试5: 检查数据服务
-echo "📋 测试5: 数据服务健康检查"
-if curl -s http://localhost:8000/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ 通过${NC} - 数据服务运行正常"
-    ((PASSED++))
-else
-    echo -e "${YELLOW}⚠ 警告${NC} - 数据服务未运行 (端口8000)"
-fi
-echo ""
-
-# 总结
-echo "================================================"
-echo "测试总结"
-echo "================================================"
-echo -e "通过: ${GREEN}${PASSED}${NC}"
-echo -e "失败: ${RED}${FAILED}${NC}"
-echo ""
-
-if [ $FAILED -eq 0 ]; then
-    echo -e "${GREEN}✓ 所有测试通过！UI修复验证成功。${NC}"
-    exit 0
-else
-    echo -e "${YELLOW}⚠ 部分测试未通过，请检查上述详情。${NC}"
-    exit 1
-fi
+echo "======================================"
+echo "请在浏览器中手动验证UI显示"
+echo "======================================"

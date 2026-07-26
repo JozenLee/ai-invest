@@ -135,7 +135,7 @@ class DatabaseWriter:
                 'id': a.id,
                 'title': a.title,
                 'content': a.content,
-                'summary': a.title[:100] if len(a.title) > 100 else a.title,
+                'summary': a.summary or a.title[:100],  # 使用AI生成的摘要，fallback到标题
                 'source': a.source,
                 'url': a.url,
                 'publishTime': a.publishTime,

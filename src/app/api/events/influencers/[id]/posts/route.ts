@@ -39,8 +39,11 @@ export async function GET(
       originalUrl: post.originalUrl,
       publishTime: post.publishTime.toISOString(),
       sentiment: post.sentiment,
-      extractedTopics: post.extractedTopics ? JSON.parse(post.extractedTopics) : [],
-      relatedDomains: post.relatedDomains ? JSON.parse(post.relatedDomains) : [],
+      primaryDomain: post.primaryDomain,
+      secondaryDomains: post.secondaryDomains ? JSON.parse(post.secondaryDomains) : [],
+      opinionSummary: post.opinionSummary,
+      opinionStance: post.opinionStance,
+      aiProcessed: post.aiProcessed,
       createdAt: post.createdAt.toISOString(),
     }))
 

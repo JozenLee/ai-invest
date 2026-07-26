@@ -46,8 +46,8 @@ export function MarketProvider({ children }: MarketProviderProps) {
     setError(null)
 
     try {
-      // Reduced timeout for better UX - fail fast and show cached data
-      const clientTimeout = AbortSignal.timeout(10000)
+      // Increased timeout to 15s to accommodate slower network/API responses
+      const clientTimeout = AbortSignal.timeout(15000)
 
       const startTime = Date.now()
 
@@ -150,12 +150,15 @@ export function MarketProvider({ children }: MarketProviderProps) {
       setLastUpdate(new Date())
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
-      console.error('[MarketContext] 数据获取失败:', errorMessage)
+      console.warn('[MarketContext] 数据获取失败:', errorMessage)
 
-      // Provide user-friendly error message
-      if (errorMessage.includes('aborted')) {
-        setError('数据请求超时，请检查网络连接或稍后重试')
+      // Silent fail on timeout - don't show error to user
+      // Market data is not critical for all pages (e.g., influencer management)
+      if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
+        console.warn('[MarketContext] 请求超时，将在下次刷新时重试')
+        // Don't set error - fail silently
       } else {
+        console.error('[MarketContext] 网络请求失败:', errorMessage)
         setError('网络请求失败，请确认数据服务已启动')
       }
 

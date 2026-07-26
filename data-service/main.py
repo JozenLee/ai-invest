@@ -3,14 +3,19 @@
 
 import logging
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-# 加载环境变量
-load_dotenv()
+# 加载环境变量（从项目根目录加载）
+project_root = Path(__file__).parent.parent
+env_path = project_root / '.env'
+load_dotenv(env_path)
+logger = logging.getLogger(__name__)
+logger.info(f"加载环境变量: {env_path}, ENABLE_AI_ANALYSIS={os.getenv('ENABLE_AI_ANALYSIS')}")
 
 # 修复：禁用系统代理，避免AKShare/requests库代理问题
 # macOS系统配置了HTTP代理(127.0.0.1:1082)但代理连接不稳定

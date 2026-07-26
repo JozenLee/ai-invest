@@ -7,8 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
-from services.data_service import data_service
-from services.trend_analysis_service import TrendAnalysisService
+from services.trend_analysis_service_v2 import get_trend_analysis_service
 from db import db
 
 logger = logging.getLogger(__name__)
@@ -32,8 +31,8 @@ async def get_all_domains_summary(
     try:
         logger.info(f"开始轻量级分析，新闻数量: {newsCount}")
 
-        # 初始化趋势分析服务
-        service = TrendAnalysisService(data_service, db)
+        # 获取趋势分析服务实例
+        service = get_trend_analysis_service(db)
 
         # 执行轻量级分析
         summaries = await service.analyze_all_domains_lightweight(newsCount)
@@ -41,9 +40,11 @@ async def get_all_domains_summary(
         if not summaries:
             return {
                 "success": False,
-                "error": "未能生成趋势摘要，请检查领域配置和新闻数据",
+                "error": "未能生成趋势摘要，请检查新闻数据",
                 "data": None
             }
+
+        logger.info(f"成功分析 {len(summaries)} 个领域")
 
         return {
             "success": True,
@@ -56,32 +57,36 @@ async def get_all_domains_summary(
 
     except Exception as e:
         logger.error(f"获取趋势摘要失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/analysis")
 async def get_domain_detailed_analysis(
     domain: str = Query(..., description="领域代码"),
-    newsCount: int = Query(default=50, ge=10, le=200, description="分析的新闻数量")
+    newsCount: int = Query(default=50, ge=10, le=200, description="分析的新闻数量"),
+    includeAI: bool = Query(default=False, description="是否包含AI深度分析")
 ):
     """
-    获取单领域的完整AI分析
+    获取单领域的详细分析
 
     Args:
-        domain: 领域代码（如：semiconductor, ai_compute）
+        domain: 领域代码（如：semiconductor, ai, battery）
         newsCount: 分析的新闻数量（默认50条）
+        includeAI: 是否包含AI深度分析（默认False，按需生成）
 
     Returns:
         单领域的详细分析结果
     """
     try:
-        logger.info(f"开始深度分析，领域: {domain}, 新闻数量: {newsCount}")
+        logger.info(f"开始分析，领域: {domain}, 新闻数量: {newsCount}, AI分析: {includeAI}")
 
-        # 初始化趋势分析服务
-        service = TrendAnalysisService(data_service, db)
+        # 获取趋势分析服务实例
+        service = get_trend_analysis_service(db)
 
-        # 执行深度分析
-        analysis = await service.analyze_domain_detailed(domain, newsCount)
+        # 执行分析（根据includeAI参数决定是否调用AI）
+        analysis = await service.analyze_domain_detailed(domain, newsCount, include_ai=includeAI)
 
         if not analysis:
             return {
@@ -96,7 +101,9 @@ async def get_domain_detailed_analysis(
         }
 
     except Exception as e:
-        logger.error(f"获取深度分析失败: {e}")
+        logger.error(f"获取分析失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 

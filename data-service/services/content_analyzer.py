@@ -262,11 +262,13 @@ class ContentAnalyzer:
 
         Returns:
             分析结果列表，每条包含：
+            - summary: AI生成的摘要（30-50字）
             - sentiment: 情感分数 (-1 到 1)
             - sentimentLabel: 情感标签 (bullish/neutral/bearish)
             - sentimentConfidence: 置信度 (0 到 1)
-            - category: 分类
+            - category: 分类（22个类别之一）
             - categoryConfidence: 分类置信度
+            - impact: 影响力等级 (1-5)
             - keywords: 关键词列表
             - entities: 实体列表
             - domains: 关联领域
@@ -282,7 +284,7 @@ class ContentAnalyzer:
         return results
 
     async def _analyze_batch(self, batch: List[Dict[str, str]]) -> List[Dict[str, Any]]:
-        """处理单个批次"""
+        """处理单个批次 - 使用单个API调用获取所有分析结果"""
         results = []
 
         for item in batch:
@@ -291,38 +293,198 @@ class ContentAnalyzer:
                 content = item.get("content", "")
                 combined_text = f"{title}\n\n{content}"
 
-                # 1. 情感分析
-                sentiment = await self.analyze_sentiment(combined_text)
-                sentiment_label = self._get_sentiment_label(sentiment)
+                # 使用单个API调用获取所有分析结果
+                analysis = await self._analyze_single_comprehensive(title, content)
 
-                # 2. 分类
-                category, category_confidence = await self.categorize_news(combined_text)
-
-                # 3. 关键词提取
-                keywords = await self.extract_keywords(combined_text)
-
-                # 4. 实体识别
-                entities = await self.extract_entities(combined_text)
-
-                # 5. 领域匹配
-                domains = await self.match_domains(combined_text)
-
-                results.append({
-                    "sentiment": sentiment,
-                    "sentimentLabel": sentiment_label,
-                    "sentimentConfidence": 0.8 if self.client else 0.5,
-                    "category": category,
-                    "categoryConfidence": category_confidence,
-                    "keywords": keywords,
-                    "entities": entities,
-                    "domains": domains
-                })
+                results.append(analysis)
 
             except Exception as e:
                 logger.error(f"批量分析单条失败: {e}")
                 results.append(self._get_default_analysis())
 
         return results
+
+    async def _analyze_single_comprehensive(self, title: str, content: str) -> Dict[str, Any]:
+        """使用单个API调用进行综合分析"""
+        if not self.client:
+            return await self._fallback_analysis(title, content)
+
+        try:
+            combined_text = f"{title}\n\n{content[:1500]}"
+
+            prompt = f"""请对以下新闻进行全面分析，以JSON格式返回结果：
+
+{{
+  "summary": "新闻摘要（30-50字）",
+  "category": "分类代码（ai/chip/earnings/policy等22个类别之一）",
+  "domains": ["领域代码1", "领域代码2"],
+  "sentiment": 情感分数（-1到1的浮点数，若irrelevant则为null）,
+  "impact": 影响力等级（1-5的整数）,
+  "keywords": ["关键词1", "关键词2", "关键词3"]
+}}
+
+分类代码说明（保持与历史数据兼容）：
+科技类: ai, chip, internet, product, breakthrough
+财经类: earnings, merger, capital, macro
+政策类: policy, regulation, government
+社会类: event, consume
+国际类: geopolitics, global_market, trade
+产业类: supply, capacity, competition, new_energy, medical
+
+领域代码说明（对应ETF指数分类，选择1-3个最相关的）：
+科技类: semiconductor(半导体), ai(人工智能), computing(算力设备), robotics(机器人), communication(通信设备), software(软件互联网)
+新能源: new_energy_vehicle(新能源车), battery(电池储能), photovoltaic(光伏), wind_power(风电)
+医药类: innovative_drug(创新药), medical_device(医疗器械)
+制造类: equipment(高端装备), military(国防军工)
+消费类: food_beverage(食品饮料), consumer_electronics(消费电子)
+其他: finance(金融), real_estate(房地产), agriculture(农业), environment(环保)
+特殊: irrelevant(与股市投资无关)
+
+重要规则：
+1. 如果新闻与股市投资完全无关（纯娱乐、体育、社会民生等），domains返回["irrelevant"]，sentiment返回null，impact返回1
+2. 对于irrelevant新闻，不要标注利好/利空/中性，影响力必须为1
+3. domains应按相关度从高到低排序，最多3个
+4. 多个领域相关的新闻应打上所有相关标签（如："芯片制造设备"应标注["semiconductor", "equipment"]）
+5. 新能源相关新闻应根据具体内容选择：new_energy_vehicle(新能源车)、battery(电池储能)、photovoltaic(光伏)、wind_power(风电)，不要使用new_energy
+
+新闻内容：
+{combined_text}
+
+请严格按照JSON格式返回，不要添加其他说明文字。"""
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            result_text = response.content[0].text.strip()
+
+            # 移除可能的代码块标记
+            if result_text.startswith("```json"):
+                result_text = result_text[7:]  # 移除 ```json
+            if result_text.startswith("```"):
+                result_text = result_text[3:]  # 移除 ```
+            if result_text.endswith("```"):
+                result_text = result_text[:-3]  # 移除结尾 ```
+            result_text = result_text.strip()
+
+            # 解析JSON响应
+            try:
+                analysis = json.loads(result_text)
+
+                # 验证和规范化数据
+                summary = analysis.get("summary", title[:50])
+                category = analysis.get("category", "global_market")
+                domains = analysis.get("domains", [])
+
+                # 验证domains格式
+                if not isinstance(domains, list):
+                    domains = []
+
+                # 修正常见的领域代码错误
+                domain_mapping = {
+                    "new_energy": "battery",  # 新能源 → 电池储能（宁德时代等）
+                    "医药": "innovative_drug",
+                    "医疗": "medical_device",
+                }
+                domains = [domain_mapping.get(d, d) for d in domains]
+                domains = domains[:3]  # 最多保留3个
+
+                # 检查是否为无影响新闻
+                is_irrelevant = "irrelevant" in domains
+
+                # 情感处理
+                sentiment_raw = analysis.get("sentiment")
+                if is_irrelevant or sentiment_raw is None:
+                    sentiment = None
+                    sentiment_label = None
+                else:
+                    sentiment = float(sentiment_raw)
+                    sentiment = max(-1.0, min(1.0, sentiment))
+                    # 生成情感标签
+                    if sentiment > 0.2:
+                        sentiment_label = "bullish"
+                    elif sentiment < -0.2:
+                        sentiment_label = "bearish"
+                    else:
+                        sentiment_label = "neutral"
+
+                impact = int(analysis.get("impact", 3))
+
+                # irrelevant新闻强制impact=1
+                if is_irrelevant:
+                    impact = 1
+                else:
+                    impact = max(1, min(5, impact))
+
+                keywords = analysis.get("keywords", [])
+
+                return {
+                    "summary": summary,
+                    "sentiment": sentiment,
+                    "sentimentLabel": sentiment_label,
+                    "sentimentConfidence": 0.85 if sentiment is not None else None,
+                    "category": category,
+                    "categoryConfidence": 0.85,
+                    "impact": impact,
+                    "keywords": keywords[:10],
+                    "entities": [],  # 可以后续优化
+                    "domains": domains
+                }
+
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON解析失败: {e}, 返回文本: {result_text[:200]}")
+                return await self._fallback_analysis(title, content)
+
+        except Exception as e:
+            logger.error(f"综合分析失败: {e}")
+            return await self._fallback_analysis(title, content)
+
+    async def _fallback_analysis(self, title: str, content: str) -> Dict[str, Any]:
+        """降级分析方案"""
+        combined_text = f"{title}\n\n{content}"
+
+        # 简单摘要
+        summary = content[:50] if content else title[:50]
+
+        # 简单分类
+        category = self._simple_categorize(combined_text)
+
+        # 简单领域判断
+        domains = self._simple_domains(combined_text)
+
+        # 检查是否为无影响新闻
+        is_irrelevant = "irrelevant" in domains
+
+        # 简单情感（无影响新闻不标注情感）
+        if is_irrelevant:
+            sentiment = None
+            sentiment_label = None
+            sentiment_confidence = None
+        else:
+            sentiment = self._simple_sentiment(combined_text)
+            sentiment_label = self._get_sentiment_label(sentiment)
+            sentiment_confidence = 0.5
+
+        # 简单影响力
+        impact = self._simple_impact(combined_text, sentiment or 0.0, category)
+
+        # 简单关键词
+        keywords = self._simple_keywords(combined_text)
+
+        return {
+            "summary": summary,
+            "sentiment": sentiment,
+            "sentimentLabel": sentiment_label,
+            "sentimentConfidence": sentiment_confidence,
+            "category": category,
+            "categoryConfidence": 0.6,
+            "impact": impact,
+            "keywords": keywords,
+            "entities": [],
+            "domains": domains
+        }
 
     def _get_sentiment_label(self, sentiment: float) -> str:
         """根据情感分数获取标签"""
@@ -410,6 +572,80 @@ class ContentAnalyzer:
         except Exception as e:
             logger.error(f"AI分类失败: {e}")
             return self._simple_categorize(content), 0.6
+
+    async def assess_impact(self, content: str, sentiment: float, category: str) -> int:
+        """
+        评估新闻影响力
+
+        Args:
+            content: 新闻内容
+            sentiment: 情感分数
+            category: 新闻分类
+
+        Returns:
+            影响力等级 (1-5)
+        """
+        if not self.client:
+            return self._simple_impact(content, sentiment, category)
+
+        try:
+            prompt = f"""评估以下新闻对投资市场的影响力，返回1-5的整数：
+1 = 影响很小（常规新闻）
+2 = 影响较小（行业动态）
+3 = 中等影响（重要企业新闻）
+4 = 较大影响（行业重大事件）
+5 = 重大影响（市场级事件）
+
+只返回数字，不要其他内容。
+
+新闻分类: {category}
+情感倾向: {sentiment}
+
+内容：
+{content[:600]}"""
+
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=10,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            result = response.content[0].text.strip()
+            # 提取数字
+            import re
+            numbers = re.findall(r'\d+', result)
+            if numbers:
+                impact = int(numbers[0])
+                return max(1, min(5, impact))  # 限制在1-5之间
+
+            return 3  # 默认中等影响
+
+        except Exception as e:
+            logger.error(f"影响力评估失败: {e}")
+            return self._simple_impact(content, sentiment, category)
+
+    def _simple_impact(self, content: str, sentiment: float, category: str) -> int:
+        """简化版影响力评估"""
+        impact = 3  # 默认中等
+
+        # 根据分类调整
+        high_impact_categories = ["policy", "regulation", "macro", "geopolitics", "breakthrough"]
+        if category in high_impact_categories:
+            impact += 1
+
+        # 根据情感强度调整
+        if abs(sentiment) > 0.7:
+            impact += 1
+
+        # 根据关键词调整
+        high_impact_keywords = [
+            "重大", "突破", "首次", "历史", "创纪录", "禁止", "制裁",
+            "暴跌", "暴涨", "崩盘", "危机", "IPO", "并购", "破产"
+        ]
+        if any(kw in content for kw in high_impact_keywords):
+            impact += 1
+
+        return max(1, min(5, impact))
 
     async def extract_keywords(self, content: str, max_keywords: int = 10) -> List[str]:
         """提取关键词"""
@@ -571,14 +807,57 @@ class ContentAnalyzer:
 
         return entities[:10]
 
+    def _simple_domains(self, content: str) -> List[str]:
+        """简化版领域判断（基于关键词匹配）"""
+        content_lower = content.lower()
+        domains = []
+
+        # 领域关键词映射（对应ETF指数分类）
+        domain_keywords = {
+            'semiconductor': ['半导体', '芯片', '晶圆', '封测', 'ic', '集成电路', 'gpu', 'cpu', '光刻'],
+            'ai': ['人工智能', 'ai', '大模型', '算力', '深度学习', '机器学习', 'gpt'],
+            'computing': ['服务器', '数据中心', '云计算', '边缘计算', 'idc', '光模块'],
+            'robotics': ['机器人', '工业机器人', '服务机器人', '人形机器人', '自动化'],
+            'communication': ['5g', '6g', '通信', '基站', '光通信', '光纤', '物联网'],
+            'software': ['软件', 'saas', '云服务', '互联网', '电商', '社交', '游戏'],
+            'new_energy_vehicle': ['新能源车', '电动车', '新能源汽车', '智能驾驶', '自动驾驶', '充电桩'],
+            'battery': ['锂电池', '动力电池', '储能', '钠电池', '固态电池', '电解液'],
+            'photovoltaic': ['光伏', '太阳能', '硅料', '硅片', '电池片', '组件', '逆变器'],
+            'wind_power': ['风电', '风力发电', '风机', '海上风电'],
+            'innovative_drug': ['创新药', '生物制药', 'cxo', '抗体药', '基因治疗', '细胞治疗'],
+            'medical_device': ['医疗器械', '医疗设备', '高值耗材', 'ivd', '体外诊断'],
+            'equipment': ['高端装备', '工业母机', '机床', '精密仪器', '工程机械'],
+            'military': ['军工', '国防', '航空', '航天', '导弹', '卫星', '无人机'],
+            'food_beverage': ['白酒', '啤酒', '饮料', '乳制品', '调味品', '食品'],
+            'consumer_electronics': ['消费电子', '手机', '可穿戴设备', '家电', 'ar', 'vr'],
+            'finance': ['银行', '券商', '保险', '金融', '证券', '基金'],
+            'real_estate': ['房地产', '地产', '物业', '建材', 'reits'],
+            'agriculture': ['农业', '种植', '养殖', '种业', '化肥', '农药'],
+            'environment': ['环保', '水务', '污水处理', '固废', '垃圾处理'],
+            'irrelevant': ['娱乐明星', '演唱会', '电影', '电视剧', '综艺', '足球', '篮球', '体育赛事', '网红', '八卦']
+        }
+
+        # 匹配领域
+        for domain, keywords in domain_keywords.items():
+            for keyword in keywords:
+                if keyword in content_lower:
+                    if domain not in domains:
+                        domains.append(domain)
+                    break
+
+        # 如果没有匹配到任何领域，返回空列表（不默认为irrelevant）
+        return domains[:3]  # 最多返回3个
+
     def _get_default_analysis(self) -> Dict[str, Any]:
         """获取默认分析结果"""
         return {
-            "sentiment": 0.0,
-            "sentimentLabel": "neutral",
-            "sentimentConfidence": 0.3,
-            "category": "market",
+            "summary": "",
+            "sentiment": None,
+            "sentimentLabel": None,
+            "sentimentConfidence": None,
+            "category": "global_market",
             "categoryConfidence": 0.3,
+            "impact": 3,
             "keywords": [],
             "entities": [],
             "domains": []

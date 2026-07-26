@@ -40,6 +40,9 @@ class AnalyzedArticle(BaseModel):
     url: Optional[str] = None
     publishTime: str
 
+    # AI生成字段
+    summary: Optional[str] = None  # AI生成的摘要
+
     # AI分析字段
     categoryId: Optional[str] = None
     categoryConfidence: Optional[float] = 0.0
@@ -64,6 +67,7 @@ class AnalyzedArticle(BaseModel):
                 "id": "cls_123",
                 "title": "AI芯片需求暴增",
                 "content": "据财联社报道...",
+                "summary": "英伟达Q4财报超预期，AI芯片需求持续强劲，数据中心业务增长200%",
                 "source": "财联社",
                 "categoryId": "tech",
                 "sentiment": 0.8,

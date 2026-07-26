@@ -224,7 +224,7 @@ class TrendAnalysisService:
         self, news_list: List[Dict]
     ) -> Dict[str, int]:
         """
-        统计情绪分布（基于关键词）
+        统计情绪分布（基于sentiment字段值，与前端显示逻辑一致）
 
         Args:
             news_list: 新闻列表
@@ -232,25 +232,23 @@ class TrendAnalysisService:
         Returns:
             情绪分布统计
         """
-        positive_keywords = ['上涨', '利好', '突破', '增长', '扩产', '创新', '领先', '强劲', '看好', '推荐']
-        negative_keywords = ['下跌', '利空', '风险', '限制', '下滑', '下降', '危机', '困难', '谨慎', '警惕']
-
         bullish = 0
         bearish = 0
         neutral = 0
 
         for news in news_list:
-            text = f"{news.get('title', '')} {news.get('content', '')}".lower()
+            sentiment = news.get('sentiment')
 
-            pos_count = sum(1 for kw in positive_keywords if kw in text)
-            neg_count = sum(1 for kw in negative_keywords if kw in text)
-
-            if pos_count > neg_count:
-                bullish += 1
-            elif neg_count > pos_count:
-                bearish += 1
-            else:
+            # 使用与前端getSentimentInfo相同的逻辑
+            # sentiment > 0.2 → bullish
+            # sentiment < -0.2 → bearish
+            # 其他 → neutral
+            if sentiment is None or abs(sentiment) <= 0.2:
                 neutral += 1
+            elif sentiment > 0.2:
+                bullish += 1
+            else:  # sentiment < -0.2
+                bearish += 1
 
         return {
             "bullish": bullish,

@@ -41,8 +41,8 @@ export async function POST(
             originalUrl: post.url,
             publishTime: new Date(post.publishTime),
             sentiment: post.sentiment,
-            extractedTopics: JSON.stringify(post.topics),
-            relatedDomains: JSON.stringify(post.domains),
+            primaryDomain: post.domains[0] || null,
+            secondaryDomains: post.domains.length > 1 ? JSON.stringify(post.domains.slice(1)) : null,
           },
         })
       }
