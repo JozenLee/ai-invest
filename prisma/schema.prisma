@@ -344,6 +344,12 @@ model Influencer {
   lastFetchAt  DateTime?
   lastFetchStatus String?
   lastFetchError String?
+
+  // 调度配置字段
+  scheduleType      String   @default("polling")
+  dailyFetchTimes   String?
+  dataRetentionDays Int      @default(30)
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
