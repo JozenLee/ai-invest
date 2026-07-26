@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from db import db
 from services.influencer_fetch_service import InfluencerFetchService
 from services.opinion_aggregation_service import OpinionAggregationService
+from providers.bilibili_provider import BilibiliAPIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,11 @@ class InfluencerCreate(BaseModel):
     category: Optional[str] = None
     tags: Optional[List[str]] = None
 
+    # Schedule configuration fields
+    scheduleType: str = Field(default="polling", description="Schedule type: polling or daily")
+    dailyFetchTimes: Optional[List[str]] = Field(default=None, description="Daily fetch times in HH:MM format")
+    dataRetentionDays: int = Field(default=30, description="Data retention in days")
+
 
 class InfluencerResponse(BaseModel):
     id: str
@@ -54,6 +60,11 @@ class InfluencerResponse(BaseModel):
     driverType: str
     profileUrl: Optional[str] = None
     category: Optional[str] = None
+
+    # Schedule configuration fields
+    scheduleType: str
+    dailyFetchTimes: Optional[List[str]] = None
+    dataRetentionDays: int
 
 
 class InfluencerListResponse(BaseModel):
@@ -71,6 +82,69 @@ class FetchTriggerResponse(BaseModel):
 
 
 # ==================== API Endpoints ====================
+
+@router.post("/validate")
+async def validate_influencer_account(data: dict):
+    """
+    验证平台账号并获取信息
+
+    支持的平台会返回自动获取的用户信息
+    不支持的平台返回错误提示
+    """
+    try:
+        platform = data.get('platform')
+        account_id = data.get('accountId')
+
+        if not platform or not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="缺少必要参数: platform 和 accountId"
+            )
+
+        # 检查平台是否支持自动获取
+        if platform == 'bilibili':
+            # 初始化Bilibili provider
+            provider = BilibiliAPIProvider(config={
+                'cookies': {},  # TODO: 从配置读取
+                'retry_delay': 2,
+                'max_retries': 3
+            })
+
+            # 获取用户信息
+            user_info = await provider.fetch_user_info(account_id)
+
+            if not user_info or not user_info.get('name'):
+                raise HTTPException(
+                    status_code=400,
+                    detail="无法获取用户信息，请检查账号ID是否正确"
+                )
+
+            logger.info(f"Validated Bilibili account: {account_id} -> {user_info.get('name')}")
+
+            return {
+                "success": True,
+                "data": {
+                    "name": user_info['name'],
+                    "avatarUrl": user_info.get('avatar_url'),
+                    "profileUrl": user_info.get('profile_url', f'https://space.bilibili.com/{account_id}'),
+                    "category": user_info.get('category', '未分类'),
+                    "verified": user_info.get('verified', False),
+                    "followersCount": user_info.get('followers_count', 0)
+                }
+            }
+        else:
+            # 其他平台暂不支持
+            raise HTTPException(
+                status_code=400,
+                detail=f"该平台暂不支持自动获取，请手动填写信息"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to validate influencer account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/", response_model=InfluencerResponse)
 async def create_influencer(data: InfluencerCreate):
@@ -105,8 +179,9 @@ async def create_influencer(data: InfluencerCreate):
         influencer_id = f"inf_{int(datetime.now().timestamp() * 1000000)}"
         created_at = datetime.now().isoformat()
 
-        # Serialize tags
+        # Serialize tags and dailyFetchTimes
         tags_str = json.dumps(data.tags) if data.tags else None
+        daily_times_str = json.dumps(data.dailyFetchTimes) if data.dailyFetchTimes else None
 
         # Insert to database
         async with db.get_connection() as conn:
@@ -114,8 +189,9 @@ async def create_influencer(data: InfluencerCreate):
                 INSERT INTO Influencer (
                     id, name, platform, accountId, driverType, providerConfig,
                     fetchInterval, priority, isActive, profileUrl, avatarUrl,
-                    category, tags, createdAt, updatedAt
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    category, tags, scheduleType, dailyFetchTimes, dataRetentionDays,
+                    createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 influencer_id,
                 data.name,
@@ -130,6 +206,9 @@ async def create_influencer(data: InfluencerCreate):
                 data.avatarUrl,
                 data.category,
                 tags_str,
+                data.scheduleType,
+                daily_times_str,
+                data.dataRetentionDays,
                 created_at,
                 created_at
             ))
@@ -149,7 +228,10 @@ async def create_influencer(data: InfluencerCreate):
             fetchInterval=data.fetchInterval,
             driverType=data.driverType,
             profileUrl=data.profileUrl,
-            category=data.category
+            category=data.category,
+            scheduleType=data.scheduleType,
+            dailyFetchTimes=data.dailyFetchTimes,
+            dataRetentionDays=data.dataRetentionDays
         )
 
     except HTTPException:
@@ -201,6 +283,9 @@ async def list_influencers(
         # Convert to response models
         items = []
         for row in rows:
+            # Parse dailyFetchTimes if present
+            daily_times = json.loads(row['dailyFetchTimes']) if row.get('dailyFetchTimes') else None
+
             items.append(InfluencerResponse(
                 id=row['id'],
                 name=row['name'],
@@ -214,7 +299,10 @@ async def list_influencers(
                 fetchInterval=row['fetchInterval'],
                 driverType=row['driverType'],
                 profileUrl=row['profileUrl'],
-                category=row['category']
+                category=row['category'],
+                scheduleType=row.get('scheduleType', 'polling'),
+                dailyFetchTimes=daily_times,
+                dataRetentionDays=row.get('dataRetentionDays', 30)
             ))
 
         return InfluencerListResponse(
@@ -247,6 +335,9 @@ async def get_influencer(influencer_id: str):
         if not row:
             raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
 
+        # Parse dailyFetchTimes if present
+        daily_times = json.loads(row['dailyFetchTimes']) if row.get('dailyFetchTimes') else None
+
         return InfluencerResponse(
             id=row['id'],
             name=row['name'],
@@ -260,7 +351,10 @@ async def get_influencer(influencer_id: str):
             fetchInterval=row['fetchInterval'],
             driverType=row['driverType'],
             profileUrl=row['profileUrl'],
-            category=row['category']
+            category=row['category'],
+            scheduleType=row.get('scheduleType', 'polling'),
+            dailyFetchTimes=daily_times,
+            dataRetentionDays=row.get('dataRetentionDays', 30)
         )
 
     except HTTPException:
