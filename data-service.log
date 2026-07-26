@@ -1,0 +1,50 @@
+/Users/jozen.lee/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+  warnings.warn(
+INFO:     Started server process [23160]
+INFO:     Waiting for application startup.
+INFO:__main__:数据服务启动中...
+INFO:services.scheduler_service:初始化调度器服务：并发限制=2
+INFO:workers.influencer_ai_queue:InfluencerAIQueue initialized with 3 workers
+INFO:services.scheduler_service:Influencer services initialized
+INFO:workers.influencer_ai_queue:Started 3 influencer AI workers
+INFO:services.scheduler_service:Influencer AI queue started
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:apscheduler.scheduler:Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:services.scheduler_service:Influencer tasks scheduled: fetch (hourly), AI analysis (every 10min)
+INFO:apscheduler.scheduler:Added job "Influencer Fetch Task" to job store "default"
+INFO:apscheduler.scheduler:Added job "Influencer AI Analysis Task" to job store "default"
+INFO:apscheduler.scheduler:Scheduler started
+INFO:services.scheduler_service:定时任务调度器已启动
+INFO:services.scheduler_service:开始从数据库同步调度任务...
+INFO:workers.influencer_ai_queue:Worker 0 started
+INFO:workers.influencer_ai_queue:Worker 1 started
+INFO:workers.influencer_ai_queue:Worker 2 started
+INFO:services.scheduler_service:从数据库读取到 0 个启用的调度任务
+INFO:services.scheduler_service:调度任务同步完成: {'loaded': 0, 'failed': 0, 'skipped': 0}
+INFO:__main__:✅ 调度任务同步成功: {'loaded': 0, 'failed': 0, 'skipped': 0}
+INFO:__main__:新闻采集任务已禁用（避免AI API故障阻塞服务）
+INFO:apscheduler.scheduler:Added job "lifespan.<locals>.daily_cache_refresh" to job store "default"
+INFO:services.scheduler_service:添加Cron任务: daily_cache_refresh, 时间: 15:30
+INFO:__main__:已注册每日缓存刷新任务 (每天15:30执行)
+INFO:apscheduler.scheduler:Added job "run_cleanup_task" to job store "default"
+INFO:services.scheduler_service:添加Cron任务: data_cleanup, 时间: 2:00
+INFO:__main__:已注册数据清理任务 (每天凌晨2:00执行)
+INFO:     Application startup complete.
+INFO:__main__:缓存预热完成
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+Warning: redis-py not installed, using in-memory cache
+[Registry] 注册数据源: eastmoney_direct
+[Registry] 注册数据源: newsnow
+[Registry] 注册数据源: akshare
+[Tushare] 未配置 TUSHARE_TOKEN，Tushare 数据源不可用
+[DataService] Tushare 未配置，跳过注册
+[Registry] 注册数据源: xueqiu
+[Registry] 注册数据源: sina
+[DataService] 初始化完成，可用数据源: ['eastmoney_direct', 'newsnow', 'akshare', 'xueqiu', 'sina']
+[Registry] 使用文件缓存: market_overview
+[Registry] 使用文件缓存: market_capital_flow
+[Registry] 使用文件缓存: sector_capital_flow_今日
+INFO:     127.0.0.1:57436 - "GET /api/market/overview HTTP/1.1" 200 OK
+[Registry] 使用文件缓存: northbound_flow
+INFO:     127.0.0.1:57438 - "GET /api/capital-flow/macro HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57453 - "GET /api/influencers/?page=1&pageSize=10 HTTP/1.1" 200 OK

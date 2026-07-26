@@ -284,7 +284,7 @@ async def list_influencers(
         items = []
         for row in rows:
             # Parse dailyFetchTimes if present
-            daily_times = json.loads(row['dailyFetchTimes']) if row.get('dailyFetchTimes') else None
+            daily_times = json.loads(row['dailyFetchTimes']) if row['dailyFetchTimes'] else None
 
             items.append(InfluencerResponse(
                 id=row['id'],
@@ -300,9 +300,9 @@ async def list_influencers(
                 driverType=row['driverType'],
                 profileUrl=row['profileUrl'],
                 category=row['category'],
-                scheduleType=row.get('scheduleType', 'polling'),
+                scheduleType=row['scheduleType'] if 'scheduleType' in row.keys() else 'polling',
                 dailyFetchTimes=daily_times,
-                dataRetentionDays=row.get('dataRetentionDays', 30)
+                dataRetentionDays=row['dataRetentionDays'] if 'dataRetentionDays' in row.keys() else 30
             ))
 
         return InfluencerListResponse(
@@ -352,9 +352,9 @@ async def get_influencer(influencer_id: str):
             driverType=row['driverType'],
             profileUrl=row['profileUrl'],
             category=row['category'],
-            scheduleType=row.get('scheduleType', 'polling'),
+            scheduleType=row['scheduleType'] if 'scheduleType' in row.keys() else 'polling',
             dailyFetchTimes=daily_times,
-            dataRetentionDays=row.get('dataRetentionDays', 30)
+            dataRetentionDays=row['dataRetentionDays'] if 'dataRetentionDays' in row.keys() else 30
         )
 
     except HTTPException:
