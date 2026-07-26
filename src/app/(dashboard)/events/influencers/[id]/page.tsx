@@ -194,7 +194,7 @@ export default function InfluencerDetailPage() {
             <RefreshCw className="h-4 w-4 mr-2" />
             手动采集
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={() => router.push(`/events/influencers/${influencerId}/edit`)}>
             <Edit className="h-4 w-4 mr-2" />
             编辑
           </Button>

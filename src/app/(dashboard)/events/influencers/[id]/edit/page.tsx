@@ -2,11 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ArrowLeft, Save, Loader2, ExternalLink, Lock } from 'lucide-react';
 import { toast } from 'sonner';
@@ -20,8 +22,7 @@ interface Influencer {
   profileUrl: string | null;
   avatarUrl: string | null;
   category: string | null;
-  tags: string[] | null;
-  priority: string;
+  tags: string[];
   isActive: boolean;
   scheduleType: 'polling' | 'daily';
   fetchInterval: number;
@@ -35,16 +36,22 @@ export default function EditInfluencerPage() {
   const router = useRouter();
   const influencerId = params.id as string;
 
-  // 状态管理
-  const [influencer, setInfluencer] = useState<Influencer | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const { data: influencerData, isLoading, error } = useQuery<{
+    success: boolean;
+    data: Influencer;
+  }>({
+    queryKey: ['influencer', influencerId],
+    queryFn: async () => {
+      const response = await fetch(`/api/influencers/${influencerId}`);
+      if (!response.ok) {
+        throw new Error('加载失败');
+      }
+      return response.json();
+    },
+  });
 
-  // 表单状态
   const [formData, setFormData] = useState({
     tags: '',
-    priority: 'medium',
     isActive: true,
     scheduleType: 'polling' as 'polling' | 'daily',
     fetchInterval: 30,
@@ -52,107 +59,81 @@ export default function EditInfluencerPage() {
     dataRetentionDays: 30,
   });
 
-  // 获取influencer数据
   useEffect(() => {
-    const fetchInfluencer = async () => {
-      try {
-        const response = await fetch(`http://localhost:8000/api/influencers/${influencerId}`);
-        if (!response.ok) {
-          throw new Error('加载失败');
-        }
-        const data = await response.json();
-        setInfluencer(data);
+    if (influencerData?.data) {
+      const influencer = influencerData.data;
+      setFormData({
+        tags: influencer.tags.join(', '),
+        isActive: influencer.isActive,
+        scheduleType: influencer.scheduleType,
+        fetchInterval: influencer.fetchInterval,
+        dailyFetchTimes: influencer.dailyFetchTimes || ['12:00', '14:00'],
+        dataRetentionDays: influencer.dataRetentionDays,
+      });
+    }
+  }, [influencerData]);
 
-        // 初始化表单数据
-        setFormData({
-          tags: data.tags ? data.tags.join(', ') : '',
-          priority: data.priority,
-          isActive: data.isActive,
-          scheduleType: data.scheduleType,
-          fetchInterval: data.fetchInterval,
-          dailyFetchTimes: data.dailyFetchTimes || ['12:00', '14:00'],
-          dataRetentionDays: data.dataRetentionDays,
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : '加载失败');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchInfluencer();
-  }, [influencerId]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!influencer) return;
-
-    setSaving(true);
-
-    try {
-      const tags = formData.tags
-        .split(',')
-        .map(tag => tag.trim())
-        .filter(tag => tag.length > 0);
-
-      const payload = {
-        // 保持只读字段不变（后端会验证）
-        name: influencer.name,
-        platform: influencer.platform,
-        accountId: influencer.accountId,
-        profileUrl: influencer.profileUrl,
-        avatarUrl: influencer.avatarUrl,
-        category: influencer.category,
-
-        // 可编辑字段
-        tags: tags,
-        priority: formData.priority,
-        isActive: formData.isActive,
-        scheduleType: formData.scheduleType,
-        fetchInterval: formData.fetchInterval,
-        dailyFetchTimes: formData.scheduleType === 'daily' ? formData.dailyFetchTimes : null,
-        dataRetentionDays: formData.dataRetentionDays,
-      };
-
-      const response = await fetch(`http://localhost:8000/api/influencers/${influencerId}`, {
+  const updateMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const response = await fetch(`/api/influencers/${influencerId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(data),
       });
-
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.detail || '更新失败');
+        throw new Error(error.message || error.error || '更新失败');
       }
-
+      return response.json();
+    },
+    onSuccess: () => {
       toast.success('更新成功');
       router.push(`/events/influencers/${influencerId}`);
-    } catch (error) {
-      console.error('更新失败:', error);
+    },
+    onError: (error: Error) => {
       toast.error('更新失败', {
-        description: error instanceof Error ? error.message : '未知错误',
+        description: error.message,
       });
-    } finally {
-      setSaving(false);
-    }
+    },
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!influencerData?.data) return;
+
+    const tags = formData.tags
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0);
+
+    const payload = {
+      tags: tags,
+      isActive: formData.isActive,
+      scheduleType: formData.scheduleType,
+      fetchInterval: formData.fetchInterval,
+      dailyFetchTimes: formData.scheduleType === 'daily' ? formData.dailyFetchTimes : null,
+      dataRetentionDays: formData.dataRetentionDays,
+    };
+
+    updateMutation.mutate(payload);
   };
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="container mx-auto p-6 max-w-3xl space-y-6">
-        <div className="h-10 w-64 bg-muted animate-pulse rounded" />
-        <div className="h-[400px] bg-muted animate-pulse rounded" />
+        <Skeleton className="h-10 w-64" />
+        <Skeleton className="h-[400px]" />
       </div>
     );
   }
 
-  if (error || !influencer) {
+  if (error || !influencerData?.success) {
     return (
       <div className="container mx-auto p-6 max-w-3xl">
         <Alert variant="destructive">
           <AlertDescription>
-            加载失败: {error || '未知错误'}
+            加载失败: {error instanceof Error ? error.message : '未知错误'}
           </AlertDescription>
         </Alert>
         <Button onClick={() => router.back()} className="mt-4">
@@ -161,6 +142,8 @@ export default function EditInfluencerPage() {
       </div>
     );
   }
+
+  const influencer = influencerData.data;
 
   const getPlatformLabel = (platform: string) => {
     const labels: Record<string, string> = {
@@ -257,7 +240,7 @@ export default function EditInfluencerPage() {
           <CardHeader>
             <CardTitle>自定义配置</CardTitle>
             <CardDescription>
-              您可以修改标签、优先级和调度策略
+              您可以修改标签、状态和调度策略
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -270,20 +253,6 @@ export default function EditInfluencerPage() {
                 onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
                 rows={2}
               />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="priority">优先级</Label>
-              <select
-                id="priority"
-                value={formData.priority}
-                onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
-                className="w-full rounded-md border border-input bg-background px-3 py-2"
-              >
-                <option value="high">高</option>
-                <option value="medium">中</option>
-                <option value="low">低</option>
-              </select>
             </div>
 
             <div className="flex items-center space-x-2">
@@ -329,10 +298,10 @@ export default function EditInfluencerPage() {
         <div className="flex gap-4">
           <Button
             type="submit"
-            disabled={saving}
+            disabled={updateMutation.isPending}
             className="flex-1"
           >
-            {saving ? (
+            {updateMutation.isPending ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 保存中...
@@ -348,7 +317,7 @@ export default function EditInfluencerPage() {
             type="button"
             variant="outline"
             onClick={() => router.push(`/events/influencers/${influencerId}`)}
-            disabled={saving}
+            disabled={updateMutation.isPending}
           >
             取消
           </Button>
