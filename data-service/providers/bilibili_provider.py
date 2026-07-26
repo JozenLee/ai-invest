@@ -6,6 +6,67 @@ from providers.base_influencer_provider import BaseInfluencerProvider
 
 logger = logging.getLogger(__name__)
 
+
+def extract_category_from_official(user_info: Dict) -> str:
+    """
+    从Bilibili用户认证信息中提取领域分类
+
+    Args:
+        user_info: fetch_user_info返回的用户信息字典
+
+    Returns:
+        领域分类字符串
+    """
+    official = user_info.get('official', {})
+    if not official or official.get('type', -1) < 0:
+        return '未分类'
+
+    # 优先从title提取
+    title = official.get('title', '')
+    if title:
+        category = _extract_category_from_text(title)
+        if category:
+            return category
+
+    # 其次从desc提取
+    desc = official.get('desc', '')
+    if desc:
+        category = _extract_category_from_text(desc)
+        if category:
+            return category
+
+    return '未分类'
+
+
+def _extract_category_from_text(text: str) -> str:
+    """
+    从文本中提取领域关键词
+
+    使用关键词匹配策略
+    """
+    # 领域关键词映射（按匹配优先级排序）
+    category_keywords = {
+        '半导体': ['半导体', '芯片', '集成电路', 'IC'],
+        'AI': ['AI', '人工智能', '机器学习', '深度学习'],
+        '科技': ['科技', '数码', '技术', '互联网'],
+        '财经': ['财经', '金融', '投资', '股票', '基金'],
+        '汽车': ['汽车', '新能源车', '电动车'],
+        '医药': ['医药', '医疗', '生物'],
+        '消费': ['消费', '零售', '电商'],
+        '能源': ['能源', '电力', '光伏', '风电'],
+    }
+
+    text_lower = text.lower()
+
+    # 遍历关键词进行匹配
+    for category, keywords in category_keywords.items():
+        for keyword in keywords:
+            if keyword.lower() in text_lower:
+                return category
+
+    return ''
+
+
 class BilibiliAPIProvider(BaseInfluencerProvider):
     """Bilibili Open Platform API Provider"""
 
@@ -30,12 +91,19 @@ class BilibiliAPIProvider(BaseInfluencerProvider):
                         if result.get('code') == 0:
                             data = result.get('data', {})
                             official = data.get('official', {})
+
+                            # 提取领域分类
+                            category = extract_category_from_official({'official': official})
+
+                            logger.info(f"Successfully fetched Bilibili user info for {account_id}")
                             return {
                                 'name': data.get('name'),
                                 'avatar_url': data.get('face'),
                                 'description': data.get('sign'),
                                 'verified': official.get('type', -1) >= 0,
-                                'followers_count': data.get('follower', 0)
+                                'followers_count': data.get('follower', 0),
+                                'category': category,
+                                'profile_url': f'https://space.bilibili.com/{account_id}'
                             }
                         else:
                             logger.error(f"Bilibili API error code: {result.get('code')}")
