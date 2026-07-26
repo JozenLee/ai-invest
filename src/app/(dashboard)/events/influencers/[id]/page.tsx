@@ -29,6 +29,12 @@ interface Influencer {
   isActive: boolean;
   postCount: number;
   createdAt: string;
+
+  // Schedule configuration
+  scheduleType: 'polling' | 'daily';
+  fetchInterval: number;
+  dailyFetchTimes: string[] | null;
+  dataRetentionDays: number;
 }
 
 interface Post {
@@ -287,6 +293,45 @@ export default function InfluencerDetailPage() {
               </div>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>监控配置</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <span className="text-sm font-medium text-muted-foreground">调度策略:</span>
+              <p className="mt-1">
+                {influencer.scheduleType === 'polling' ? '轮询模式' : '定时模式'}
+              </p>
+            </div>
+
+            {influencer.scheduleType === 'polling' && (
+              <div>
+                <span className="text-sm font-medium text-muted-foreground">轮询周期:</span>
+                <p className="mt-1">{influencer.fetchInterval} 分钟</p>
+              </div>
+            )}
+
+            {influencer.scheduleType === 'daily' && influencer.dailyFetchTimes && (
+              <div>
+                <span className="text-sm font-medium text-muted-foreground">执行时间:</span>
+                <div className="flex flex-wrap gap-2 mt-1">
+                  {influencer.dailyFetchTimes.map((time) => (
+                    <Badge key={time} variant="outline">{time}</Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <span className="text-sm font-medium text-muted-foreground">数据保留:</span>
+              <p className="mt-1">{influencer.dataRetentionDays} 天</p>
+            </div>
+          </div>
         </CardContent>
       </Card>
 
