@@ -67,7 +67,7 @@ export function PlatformValidator({ onValidated }: PlatformValidatorProps) {
         <Label htmlFor="platform">
           平台 <span className="text-red-500">*</span>
         </Label>
-        <Select value={platform} onValueChange={setPlatform}>
+        <Select value={platform} onValueChange={(value) => setPlatform(value || 'bilibili')}>
           <SelectTrigger>
             <SelectValue />
           </SelectTrigger>
