@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from db import db
 from services.influencer_fetch_service import InfluencerFetchService
 from services.opinion_aggregation_service import OpinionAggregationService
+from providers.bilibili_provider import BilibiliAPIProvider
 
 logger = logging.getLogger(__name__)
 
@@ -26,61 +27,126 @@ fetch_service = InfluencerFetchService(db)
 # ==================== Request/Response Models ====================
 
 class InfluencerCreate(BaseModel):
-    model_config = {"populate_by_name": True}
-
     name: str
     platform: str  # weibo, bilibili
-    account_id: str = Field(serialization_alias="accountId", alias="accountId")
-    driver_type: str = Field(default="api", serialization_alias="driverType", alias="driverType")
-    provider_config: Optional[str] = Field(default=None, serialization_alias="providerConfig", alias="providerConfig")
-    fetch_interval: int = Field(default=60, serialization_alias="fetchInterval", alias="fetchInterval", description="Fetch interval in minutes")
+    accountId: str
+    driverType: str = "api"
+    providerConfig: Optional[str] = None
+    fetchInterval: int = Field(default=60, description="Fetch interval in minutes")
     priority: str = Field(default="medium", description="Priority: high/medium/low")
-    is_active: bool = Field(default=True, serialization_alias="isActive", alias="isActive")
-    profile_url: Optional[str] = Field(default=None, serialization_alias="profileUrl", alias="profileUrl")
-    avatar_url: Optional[str] = Field(default=None, serialization_alias="avatarUrl", alias="avatarUrl")
+    isActive: bool = True
+    profileUrl: Optional[str] = None
+    avatarUrl: Optional[str] = None
     category: Optional[str] = None
     tags: Optional[List[str]] = None
 
+    # Schedule configuration fields
+    scheduleType: str = Field(default="polling", description="Schedule type: polling or daily")
+    dailyFetchTimes: Optional[List[str]] = Field(default=None, description="Daily fetch times in HH:MM format")
+    dataRetentionDays: int = Field(default=30, description="Data retention in days")
+
 
 class InfluencerResponse(BaseModel):
-    model_config = {"populate_by_name": True, "by_alias": True}
-
     id: str
     name: str
     platform: str
-    account_id: str = Field(serialization_alias="accountId", alias="accountId")
-    is_active: bool = Field(serialization_alias="isActive", alias="isActive")
-    last_fetch_at: Optional[str] = Field(default=None, serialization_alias="lastFetchAt", alias="lastFetchAt")
-    last_fetch_status: Optional[str] = Field(default=None, serialization_alias="lastFetchStatus", alias="lastFetchStatus")
-    created_at: str = Field(serialization_alias="createdAt", alias="createdAt")
+    accountId: str
+    isActive: bool
+    lastFetchAt: Optional[str]
+    lastFetchStatus: Optional[str]
+    createdAt: str
     priority: str
-    fetch_interval: int = Field(serialization_alias="fetchInterval", alias="fetchInterval")
-    driver_type: str = Field(serialization_alias="driverType", alias="driverType")
-    profile_url: Optional[str] = Field(default=None, serialization_alias="profileUrl", alias="profileUrl")
+    fetchInterval: int
+    driverType: str
+    profileUrl: Optional[str] = None
     category: Optional[str] = None
+
+    # Schedule configuration fields
+    scheduleType: str
+    dailyFetchTimes: Optional[List[str]] = None
+    dataRetentionDays: int
 
 
 class InfluencerListResponse(BaseModel):
-    model_config = {"populate_by_name": True, "by_alias": True}
-
     items: List[InfluencerResponse]
     total: int
     page: int
-    page_size: int = Field(serialization_alias="pageSize", alias="pageSize")
+    pageSize: int
 
 
 class FetchTriggerResponse(BaseModel):
-    model_config = {"populate_by_name": True, "by_alias": True}
-
     success: bool
-    posts_fetched: int = Field(serialization_alias="postsFetched", alias="postsFetched")
-    posts_new: int = Field(serialization_alias="postsNew", alias="postsNew")
+    postsFetched: int
+    postsNew: int
     error: Optional[str] = None
 
 
 # ==================== API Endpoints ====================
 
-@router.post("/", response_model=InfluencerResponse, response_model_by_alias=True)
+@router.post("/validate")
+async def validate_influencer_account(data: dict):
+    """
+    验证平台账号并获取信息
+
+    支持的平台会返回自动获取的用户信息
+    不支持的平台返回错误提示
+    """
+    try:
+        platform = data.get('platform')
+        account_id = data.get('accountId')
+
+        if not platform or not account_id:
+            raise HTTPException(
+                status_code=400,
+                detail="缺少必要参数: platform 和 accountId"
+            )
+
+        # 检查平台是否支持自动获取
+        if platform == 'bilibili':
+            # 初始化Bilibili provider
+            provider = BilibiliAPIProvider(config={
+                'cookies': {},  # TODO: 从配置读取
+                'retry_delay': 2,
+                'max_retries': 3
+            })
+
+            # 获取用户信息
+            user_info = await provider.fetch_user_info(account_id)
+
+            if not user_info or not user_info.get('name'):
+                raise HTTPException(
+                    status_code=400,
+                    detail="无法获取用户信息，请检查账号ID是否正确"
+                )
+
+            logger.info(f"Validated Bilibili account: {account_id} -> {user_info.get('name')}")
+
+            return {
+                "success": True,
+                "data": {
+                    "name": user_info['name'],
+                    "avatarUrl": user_info.get('avatar_url'),
+                    "profileUrl": user_info.get('profile_url', f'https://space.bilibili.com/{account_id}'),
+                    "category": user_info.get('category', '未分类'),
+                    "verified": user_info.get('verified', False),
+                    "followersCount": user_info.get('followers_count', 0)
+                }
+            }
+        else:
+            # 其他平台暂不支持
+            raise HTTPException(
+                status_code=400,
+                detail=f"该平台暂不支持自动获取，请手动填写信息"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to validate influencer account: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/", response_model=InfluencerResponse)
 async def create_influencer(data: InfluencerCreate):
     """
     Create a new influencer
@@ -100,21 +166,22 @@ async def create_influencer(data: InfluencerCreate):
         async with db.get_connection() as conn:
             cursor = await conn.execute(
                 "SELECT id FROM Influencer WHERE platform = ? AND accountId = ?",
-                (data.platform, data.account_id)
+                (data.platform, data.accountId)
             )
             existing = await cursor.fetchone()
             if existing:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Influencer already exists: {data.platform}/{data.account_id}"
+                    detail=f"Influencer already exists: {data.platform}/{data.accountId}"
                 )
 
         # Generate ID
         influencer_id = f"inf_{int(datetime.now().timestamp() * 1000000)}"
         created_at = datetime.now().isoformat()
 
-        # Serialize tags
+        # Serialize tags and dailyFetchTimes
         tags_str = json.dumps(data.tags) if data.tags else None
+        daily_times_str = json.dumps(data.dailyFetchTimes) if data.dailyFetchTimes else None
 
         # Insert to database
         async with db.get_connection() as conn:
@@ -122,22 +189,26 @@ async def create_influencer(data: InfluencerCreate):
                 INSERT INTO Influencer (
                     id, name, platform, accountId, driverType, providerConfig,
                     fetchInterval, priority, isActive, profileUrl, avatarUrl,
-                    category, tags, createdAt, updatedAt
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    category, tags, scheduleType, dailyFetchTimes, dataRetentionDays,
+                    createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 influencer_id,
                 data.name,
                 data.platform,
-                data.account_id,
-                data.driver_type,
-                data.provider_config,
-                data.fetch_interval,
+                data.accountId,
+                data.driverType,
+                data.providerConfig,
+                data.fetchInterval,
                 data.priority,
-                1 if data.is_active else 0,
-                data.profile_url,
-                data.avatar_url,
+                1 if data.isActive else 0,
+                data.profileUrl,
+                data.avatarUrl,
                 data.category,
                 tags_str,
+                data.scheduleType,
+                daily_times_str,
+                data.dataRetentionDays,
                 created_at,
                 created_at
             ))
@@ -148,16 +219,19 @@ async def create_influencer(data: InfluencerCreate):
             id=influencer_id,
             name=data.name,
             platform=data.platform,
-            account_id=data.account_id,
-            is_active=data.is_active,
-            last_fetch_at=None,
-            last_fetch_status=None,
-            created_at=created_at,
+            accountId=data.accountId,
+            isActive=data.isActive,
+            lastFetchAt=None,
+            lastFetchStatus=None,
+            createdAt=created_at,
             priority=data.priority,
-            fetch_interval=data.fetch_interval,
-            driver_type=data.driver_type,
-            profile_url=data.profile_url,
-            category=data.category
+            fetchInterval=data.fetchInterval,
+            driverType=data.driverType,
+            profileUrl=data.profileUrl,
+            category=data.category,
+            scheduleType=data.scheduleType,
+            dailyFetchTimes=data.dailyFetchTimes,
+            dataRetentionDays=data.dataRetentionDays
         )
 
     except HTTPException:
@@ -167,7 +241,7 @@ async def create_influencer(data: InfluencerCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=InfluencerListResponse, response_model_by_alias=True)
+@router.get("/", response_model=InfluencerListResponse)
 async def list_influencers(
     platform: Optional[str] = Query(None, description="Filter by platform"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -209,27 +283,33 @@ async def list_influencers(
         # Convert to response models
         items = []
         for row in rows:
+            # Parse dailyFetchTimes if present
+            daily_times = json.loads(row['dailyFetchTimes']) if row.get('dailyFetchTimes') else None
+
             items.append(InfluencerResponse(
                 id=row['id'],
                 name=row['name'],
                 platform=row['platform'],
-                account_id=row['accountId'],
-                is_active=bool(row['isActive']),
-                last_fetch_at=row['lastFetchAt'],
-                last_fetch_status=row['lastFetchStatus'],
-                created_at=row['createdAt'],
+                accountId=row['accountId'],
+                isActive=bool(row['isActive']),
+                lastFetchAt=row['lastFetchAt'],
+                lastFetchStatus=row['lastFetchStatus'],
+                createdAt=row['createdAt'],
                 priority=row['priority'],
-                fetch_interval=row['fetchInterval'],
-                driver_type=row['driverType'],
-                profile_url=row['profileUrl'],
-                category=row['category']
+                fetchInterval=row['fetchInterval'],
+                driverType=row['driverType'],
+                profileUrl=row['profileUrl'],
+                category=row['category'],
+                scheduleType=row.get('scheduleType', 'polling'),
+                dailyFetchTimes=daily_times,
+                dataRetentionDays=row.get('dataRetentionDays', 30)
             ))
 
         return InfluencerListResponse(
             items=items,
             total=total,
             page=page,
-            page_size=pageSize
+            pageSize=pageSize
         )
 
     except Exception as e:
@@ -237,7 +317,7 @@ async def list_influencers(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{influencer_id}", response_model=InfluencerResponse, response_model_by_alias=True)
+@router.get("/{influencer_id}", response_model=InfluencerResponse)
 async def get_influencer(influencer_id: str):
     """
     Get a single influencer by ID
@@ -255,177 +335,32 @@ async def get_influencer(influencer_id: str):
         if not row:
             raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
 
+        # Parse dailyFetchTimes if present
+        daily_times = json.loads(row['dailyFetchTimes']) if row.get('dailyFetchTimes') else None
+
         return InfluencerResponse(
             id=row['id'],
             name=row['name'],
             platform=row['platform'],
-            account_id=row['accountId'],
-            is_active=bool(row['isActive']),
-            last_fetch_at=row['lastFetchAt'],
-            last_fetch_status=row['lastFetchStatus'],
-            created_at=row['createdAt'],
+            accountId=row['accountId'],
+            isActive=bool(row['isActive']),
+            lastFetchAt=row['lastFetchAt'],
+            lastFetchStatus=row['lastFetchStatus'],
+            createdAt=row['createdAt'],
             priority=row['priority'],
-            fetch_interval=row['fetchInterval'],
-            driver_type=row['driverType'],
-            profile_url=row['profileUrl'],
-            category=row['category']
+            fetchInterval=row['fetchInterval'],
+            driverType=row['driverType'],
+            profileUrl=row['profileUrl'],
+            category=row['category'],
+            scheduleType=row.get('scheduleType', 'polling'),
+            dailyFetchTimes=daily_times,
+            dataRetentionDays=row.get('dataRetentionDays', 30)
         )
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to get influencer: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/{influencer_id}", response_model=InfluencerResponse, response_model_by_alias=True)
-async def update_influencer(influencer_id: str, data: InfluencerCreate):
-    """
-    Update an existing influencer
-
-    Updates influencer information by ID.
-    """
-    try:
-        # Check if influencer exists
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                "SELECT id FROM Influencer WHERE id = ?",
-                (influencer_id,)
-            )
-            row = await cursor.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
-
-        # Serialize tags
-        tags_str = json.dumps(data.tags) if data.tags else None
-        updated_at = datetime.now().isoformat()
-
-        # Update database
-        async with db.get_connection() as conn:
-            await conn.execute("""
-                UPDATE Influencer SET
-                    name = ?,
-                    platform = ?,
-                    accountId = ?,
-                    driverType = ?,
-                    providerConfig = ?,
-                    fetchInterval = ?,
-                    priority = ?,
-                    isActive = ?,
-                    profileUrl = ?,
-                    avatarUrl = ?,
-                    category = ?,
-                    tags = ?,
-                    updatedAt = ?
-                WHERE id = ?
-            """, (
-                data.name,
-                data.platform,
-                data.account_id,
-                data.driver_type,
-                data.provider_config,
-                data.fetch_interval,
-                data.priority,
-                1 if data.is_active else 0,
-                data.profile_url,
-                data.avatar_url,
-                data.category,
-                tags_str,
-                updated_at,
-                influencer_id
-            ))
-
-            # Fetch updated record
-            cursor = await conn.execute(
-                "SELECT * FROM Influencer WHERE id = ?",
-                (influencer_id,)
-            )
-            row = await cursor.fetchone()
-
-        logger.info(f"Updated influencer: {influencer_id} ({data.name})")
-
-        return InfluencerResponse(
-            id=row['id'],
-            name=row['name'],
-            platform=row['platform'],
-            account_id=row['accountId'],
-            is_active=bool(row['isActive']),
-            last_fetch_at=row['lastFetchAt'],
-            last_fetch_status=row['lastFetchStatus'],
-            created_at=row['createdAt'],
-            priority=row['priority'],
-            fetch_interval=row['fetchInterval'],
-            driver_type=row['driverType'],
-            profile_url=row['profileUrl'],
-            category=row['category']
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to update influencer: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/{influencer_id}")
-async def delete_influencer(influencer_id: str):
-    """
-    Delete an influencer
-
-    Performs a hard delete, removing the influencer and all associated posts.
-    """
-    try:
-        # Check if influencer exists
-        async with db.get_connection() as conn:
-            cursor = await conn.execute(
-                "SELECT id, name FROM Influencer WHERE id = ?",
-                (influencer_id,)
-            )
-            row = await cursor.fetchone()
-
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
-
-        influencer_name = row['name']
-
-        # Delete associated data (cascade delete)
-        async with db.get_connection() as conn:
-            # Delete posts
-            await conn.execute(
-                "DELETE FROM InfluencerPost WHERE influencerId = ?",
-                (influencer_id,)
-            )
-
-            # Delete domain associations
-            await conn.execute(
-                "DELETE FROM DomainInfluencer WHERE influencerId = ?",
-                (influencer_id,)
-            )
-
-            # Delete fetch logs
-            await conn.execute(
-                "DELETE FROM InfluencerFetchLog WHERE influencerId = ?",
-                (influencer_id,)
-            )
-
-            # Delete the influencer
-            await conn.execute(
-                "DELETE FROM Influencer WHERE id = ?",
-                (influencer_id,)
-            )
-
-        logger.info(f"Deleted influencer: {influencer_id} ({influencer_name})")
-
-        return {
-            "success": True,
-            "message": f"Influencer {influencer_name} deleted successfully"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to delete influencer: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -467,91 +402,106 @@ async def trigger_fetch(influencer_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{influencer_id}/posts")
-async def get_influencer_posts(
-    influencer_id: str,
-    page: int = Query(1, ge=1, description="Page number"),
-    pageSize: int = Query(20, ge=1, le=100, description="Page size"),
-    aiProcessed: Optional[bool] = Query(None, description="Filter by AI processing status")
-):
+@router.put("/{influencer_id}", response_model=InfluencerResponse)
+async def update_influencer(influencer_id: str, data: InfluencerCreate):
     """
-    Get posts for a specific influencer
+    Update an existing influencer
 
-    Supports pagination and filtering by AI processing status.
+    Only editable fields can be modified. Platform-bound fields (name, platform, accountId,
+    profileUrl, avatarUrl, category) are readonly and cannot be changed manually.
     """
     try:
         # Check if influencer exists
         async with db.get_connection() as conn:
             cursor = await conn.execute(
-                "SELECT id FROM Influencer WHERE id = ?",
+                "SELECT * FROM Influencer WHERE id = ?",
+                (influencer_id,)
+            )
+            existing = await cursor.fetchone()
+
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
+
+        # Validate readonly fields are not changed
+        readonly_changes = []
+        if data.name != existing['name']:
+            readonly_changes.append('name')
+        if data.avatarUrl and data.avatarUrl != existing['avatarUrl']:
+            readonly_changes.append('avatarUrl')
+        if data.profileUrl and data.profileUrl != existing['profileUrl']:
+            readonly_changes.append('profileUrl')
+        if data.category and data.category != existing['category']:
+            readonly_changes.append('category')
+        if data.platform != existing['platform']:
+            readonly_changes.append('platform')
+        if data.accountId != existing['accountId']:
+            readonly_changes.append('accountId')
+
+        if readonly_changes:
+            raise HTTPException(
+                status_code=400,
+                detail=f"以下字段不允许手动修改（平台绑定字段）: {', '.join(readonly_changes)}"
+            )
+
+        # Serialize tags and dailyFetchTimes
+        tags_str = json.dumps(data.tags) if data.tags else None
+        daily_times_str = json.dumps(data.dailyFetchTimes) if data.dailyFetchTimes else None
+        updated_at = datetime.now().isoformat()
+
+        # Update only editable fields
+        async with db.get_connection() as conn:
+            await conn.execute("""
+                UPDATE Influencer SET
+                    tags = ?,
+                    priority = ?,
+                    isActive = ?,
+                    fetchInterval = ?,
+                    scheduleType = ?,
+                    dailyFetchTimes = ?,
+                    dataRetentionDays = ?,
+                    updatedAt = ?
+                WHERE id = ?
+            """, (
+                tags_str, data.priority, 1 if data.isActive else 0,
+                data.fetchInterval, data.scheduleType, daily_times_str,
+                data.dataRetentionDays, updated_at, influencer_id
+            ))
+
+            # Fetch updated record
+            cursor = await conn.execute(
+                "SELECT * FROM Influencer WHERE id = ?",
                 (influencer_id,)
             )
             row = await cursor.fetchone()
 
-        if not row:
-            raise HTTPException(status_code=404, detail=f"Influencer not found: {influencer_id}")
+        # Parse dailyFetchTimes back
+        daily_times = json.loads(row['dailyFetchTimes']) if row['dailyFetchTimes'] else None
 
-        offset = (page - 1) * pageSize
+        logger.info(f"Updated influencer: {influencer_id}")
 
-        # Build query
-        where_clause = "WHERE influencerId = ?"
-        params = [influencer_id]
-
-        if aiProcessed is not None:
-            where_clause += " AND aiProcessed = ?"
-            params.append(1 if aiProcessed else 0)
-
-        # Get total count
-        async with db.get_connection() as conn:
-            count_query = f"SELECT COUNT(*) as total FROM InfluencerPost {where_clause}"
-            cursor = await conn.execute(count_query, params)
-            row = await cursor.fetchone()
-            total = row['total'] if row else 0
-
-            # Get paginated results
-            query = f"""
-                SELECT * FROM InfluencerPost
-                {where_clause}
-                ORDER BY publishTime DESC
-                LIMIT ? OFFSET ?
-            """
-            cursor = await conn.execute(query, params + [pageSize, offset])
-            rows = await cursor.fetchall()
-
-        # Format posts
-        items = []
-        for row in rows:
-            items.append({
-                "id": row['id'],
-                "influencerId": row['influencerId'],
-                "content": row['content'],
-                "originalUrl": row['originalUrl'],
-                "publishTime": row['publishTime'],
-                "mediaType": row['mediaType'],
-                "mediaUrls": row['mediaUrls'],
-                "engagement": row['engagement'],
-                "aiProcessed": bool(row['aiProcessed']),
-                "aiProcessedAt": row['aiProcessedAt'],
-                "opinionSummary": row['opinionSummary'],
-                "opinionStance": row['opinionStance'],
-                "opinionConfidence": row['opinionConfidence'],
-                "primaryDomain": row['primaryDomain'],
-                "secondaryDomains": row['secondaryDomains'],
-                "sentiment": row['sentiment'],
-                "createdAt": row['createdAt']
-            })
-
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "pageSize": pageSize
-        }
+        return InfluencerResponse(
+            id=row['id'],
+            name=row['name'],
+            platform=row['platform'],
+            accountId=row['accountId'],
+            isActive=bool(row['isActive']),
+            lastFetchAt=row['lastFetchAt'],
+            lastFetchStatus=row['lastFetchStatus'],
+            createdAt=row['createdAt'],
+            priority=row['priority'],
+            fetchInterval=row['fetchInterval'],
+            driverType=row['driverType'],
+            profileUrl=row['profileUrl'],
+            category=row['category'],
+            scheduleType=row['scheduleType'],
+            dailyFetchTimes=daily_times,
+            dataRetentionDays=row['dataRetentionDays']
+        )
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get influencer posts: {e}")
+        logger.error(f"Failed to update influencer: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

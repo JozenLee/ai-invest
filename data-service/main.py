@@ -134,6 +134,17 @@ async def lifespan(app: FastAPI):
     )
     logger.info("已注册每日缓存刷新任务 (每天15:30执行)")
 
+    # 注册数据清理任务（每天凌晨2:00执行）
+    from workers.data_cleanup import run_cleanup_task
+
+    await scheduler_service.add_cron_job(
+        job_id="data_cleanup",
+        func=run_cleanup_task,
+        hour=2,
+        minute=0
+    )
+    logger.info("已注册数据清理任务 (每天凌晨2:00执行)")
+
     async def warmup():
         """后台预热：提前加载常用数据到内存缓存"""
         try:

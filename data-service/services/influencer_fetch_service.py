@@ -67,6 +67,33 @@ class InfluencerFetchService:
             })
             provider = provider_class(provider_config)
 
+            # 2.5. Sync platform information
+            try:
+                user_info = await provider.fetch_user_info(account_id)
+                if user_info and user_info.get('name'):
+                    # Update platform-bound fields
+                    async with self.db.get_connection() as conn:
+                        await conn.execute("""
+                            UPDATE Influencer SET
+                                name = ?,
+                                avatarUrl = ?,
+                                profileUrl = ?,
+                                category = ?,
+                                updatedAt = ?
+                            WHERE id = ?
+                        """, (
+                            user_info.get('name'),
+                            user_info.get('avatar_url'),
+                            user_info.get('profile_url'),
+                            user_info.get('category'),
+                            datetime.now().isoformat(),
+                            influencer_id
+                        ))
+                    logger.info(f"Synced platform info for influencer {influencer_id}")
+            except Exception as e:
+                logger.warning(f"Failed to sync platform info for {influencer_id}: {e}")
+                # Continue with fetch even if sync fails
+
             # 3. Fetch posts from provider
             since = None
             if influencer.get('lastFetchAt'):
