@@ -23,6 +23,10 @@ export async function GET(
     }
 
     const data = await response.json();
+    // Wrap response in {success, data} format if not already wrapped
+    if (data.success === undefined) {
+      return NextResponse.json({ success: true, data });
+    }
     return NextResponse.json(data);
   } catch (error) {
     console.error('Error fetching influencer:', error);

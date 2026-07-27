@@ -3,7 +3,7 @@ import { apiCache } from '@/lib/cache'
 import { prisma } from '@/lib/db/prisma'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
-const CACHE_KEY = 'capital_flow_macro'
+const CACHE_KEY = 'capital_flow_enhanced'
 const CACHE_TTL = 30 // 秒
 
 export async function GET(request: Request) {
@@ -31,8 +31,9 @@ export async function GET(request: Request) {
   console.log('[capital-flow API] 缓存未命中，请求 Python 服务')
 
   try {
-    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/macro`, {
-      signal: AbortSignal.timeout(15000), // Reduced from 20s to 15s for better UX
+    // 使用增强版资金流向API
+    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/advanced/enhanced`, {
+      signal: AbortSignal.timeout(15000),
     })
 
     console.log('[capital-flow API] Python 服务响应:', response.status)

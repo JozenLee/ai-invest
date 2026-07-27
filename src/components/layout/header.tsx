@@ -132,7 +132,6 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
   }
 
   const nameMap: Record<string, string> = {
-    dashboard: '仪表盘',
     market: '市场数据',
     overview: '概览',
     sectors: '板块轮动',

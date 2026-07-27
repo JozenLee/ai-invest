@@ -109,6 +109,22 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
         sources=["akshare", "tushare"],
         cache_ttl=60,
     ),
+    # 龙虎榜和个股资金流向
+    "lhb_data": CategoryConfig(
+        sources=["akshare"],
+        cache_ttl=600,
+        fallback_to_file=True,
+    ),
+    "lhb_detail": CategoryConfig(
+        sources=["akshare"],
+        cache_ttl=3600,
+        fallback_to_file=True,
+    ),
+    "individual_capital_flow": CategoryConfig(
+        sources=["akshare"],
+        cache_ttl=600,
+        fallback_to_file=True,
+    ),
 }
 
 

@@ -26,7 +26,7 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -188,6 +188,7 @@ app.add_middleware(
 # 注册路由
 app.include_router(market.router, prefix="/api/market", tags=["market"])
 app.include_router(capital_flow.router, prefix="/api/capital-flow", tags=["capital-flow"])
+app.include_router(advanced_capital_flow.router, prefix="/api/capital-flow/advanced", tags=["advanced-capital-flow"])
 app.include_router(etf.router, prefix="/api/etf", tags=["etf"])
 app.include_router(macro_flow.router, prefix="/api/macro-flow", tags=["macro-flow"])
 app.include_router(news.router, prefix="/api/news", tags=["news"])
@@ -199,6 +200,7 @@ app.include_router(cache.router, prefix="", tags=["cache"])
 app.include_router(datasources.router, prefix="/api", tags=["datasources"])
 app.include_router(schedulers.router, prefix="/schedulers", tags=["schedulers"])
 app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
+app.include_router(platform_configs.router, prefix="/api/platform-configs", tags=["platform-configs"])
 
 @app.get("/health")
 async def health_check():

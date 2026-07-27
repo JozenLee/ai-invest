@@ -218,8 +218,63 @@ export interface NorthboundData {
 // Data quality indicator for market data
 export type DataQuality = 'realtime' | 'estimated' | 'cached' | 'unavailable'
 
+// 持续多日大单净流入趋势
+export interface ConsecutiveTrend {
+  days: number              // 连续天数
+  totalNet: number          // 累计净流入（亿元）
+  avgDaily: number          // 日均净流入（亿元）
+  direction: 'inflow' | 'outflow'
+  strength: 'strong' | 'moderate' | 'weak'
+}
+
+// 成交量放大情况
+export interface VolumeAmplification {
+  currentVolume: number     // 当日成交量（亿元）
+  avgVolume: number         // 近N日均量（亿元）
+  amplification: number     // 放大倍数
+  isAmplified: boolean      // 是否放大（>1.5倍）
+}
+
+// 股价与资金流向背离
+export interface PriceFlowDivergence {
+  priceChange: number       // 股价涨跌幅（%）
+  flowNet: number           // 资金净流入（亿元）
+  isDivergent: boolean      // 是否背离
+  divergenceType: 'bullish' | 'bearish' | 'none'  // 背离类型
+  signal: string            // 信号说明
+}
+
+// 机构行为数据
+export interface InstitutionalBehavior {
+  dragonTiger: {            // 龙虎榜数据
+    count: number           // 上榜次数
+    netBuy: number          // 机构净买入（亿元）
+    topStocks: Array<{
+      name: string
+      netBuy: number
+    }>
+  }
+  institutionalSeats: {     // 机构席位
+    buySeats: number        // 买方机构席位数
+    sellSeats: number       // 卖方机构席位数
+    netBuy: number          // 机构席位净买入（亿元）
+  }
+  northboundCapital: NorthboundData  // 北向资金（已有类型）
+}
+
 export interface CapitalFlowData {
-  market: {
+  consecutiveTrend: ConsecutiveTrend | null
+  volumeAmplification: VolumeAmplification | null
+  priceFlowDivergence: PriceFlowDivergence | null
+  institutionalBehavior: InstitutionalBehavior | null
+  topInflowSectors: UnifiedSectorFlow[]
+  topOutflowSectors: UnifiedSectorFlow[]
+  source?: string
+  dataDate?: string
+  dataQuality?: DataQuality
+
+  // 保留旧字段以兼容过渡期
+  market?: {
     institutionalNet: number
     institutionalPct: number
     retailNet: number
@@ -227,12 +282,7 @@ export interface CapitalFlowData {
     totalNet: number
     sentiment: number
   }
-  northbound: NorthboundData
-  topInflowSectors: UnifiedSectorFlow[]
-  topOutflowSectors: UnifiedSectorFlow[]
-  source?: string
-  dataDate?: string
-  dataQuality?: DataQuality
+  northbound?: NorthboundData
 }
 
 export interface MarketMeta {

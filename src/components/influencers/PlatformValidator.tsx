@@ -12,9 +12,8 @@ interface ValidatedInfo {
   name: string;
   avatarUrl: string;
   profileUrl: string;
-  category: string;
   verified: boolean;
-  followersCount: number;
+  description?: string;
 }
 
 interface PlatformValidatorProps {
@@ -27,6 +26,20 @@ export function PlatformValidator({ onValidated }: PlatformValidatorProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+
+  // 平台名称映射
+  const getPlatformLabel = (platformValue: string) => {
+    const labels: Record<string, string> = {
+      bilibili: 'B站',
+      weibo: '微博',
+      xiaohongshu: '小红书',
+      zhihu: '知乎',
+      douyin: '抖音',
+      alipay: '支付宝',
+    };
+    return labels[platformValue] || platformValue;
+  };
 
   const handleValidate = async () => {
     setError('');
@@ -34,28 +47,48 @@ export function PlatformValidator({ onValidated }: PlatformValidatorProps) {
     setLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8000/api/influencers/validate', {
+      const controller = new AbortController();
+      const fetchTimeoutId = setTimeout(() => controller.abort(), 15000); // 增加到15秒，给重试留时间
+
+      const response = await fetch('/api/influencers/validate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ platform, accountId }),
+        signal: controller.signal,
       });
+
+      clearTimeout(fetchTimeoutId);
 
       const data = await response.json();
 
       if (!response.ok) {
-        if (data.detail?.includes('暂不支持自动获取')) {
-          // 平台不支持自动获取，回退到手动模式
-          onValidated(platform, accountId, null);
-        } else {
-          throw new Error(data.detail || '验证失败');
+        // 验证失败，显示错误信息
+        const errorMsg = data.detail || '验证失败';
+
+        // 检查是否是频率限制错误
+        if (errorMsg.includes('频率限制') || errorMsg.includes('过于频繁')) {
+          setRetryCount(prev => prev + 1);
+          throw new Error(`${errorMsg}\n\n💡 提示：${retryCount > 0 ? '已重试' + retryCount + '次，' : ''}建议等待10-30秒后重试，或直接点击"跳过验证"手动填写`);
         }
+
+        throw new Error(errorMsg);
       } else {
         // 验证成功
         setSuccess(true);
+        setRetryCount(0); // 重置重试计数
         onValidated(platform, accountId, data.data);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '验证失败，请稍后重试');
+      // 显示错误信息，不自动跳转
+      let errorMsg = '验证失败';
+      if (err instanceof Error) {
+        if (err.name === 'AbortError') {
+          errorMsg = '验证超时（超过15秒），请点击"跳过验证"按钮手动填写';
+        } else {
+          errorMsg = err.message;
+        }
+      }
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -69,7 +102,7 @@ export function PlatformValidator({ onValidated }: PlatformValidatorProps) {
         </Label>
         <Select value={platform} onValueChange={(value) => setPlatform(value || 'bilibili')}>
           <SelectTrigger>
-            <SelectValue />
+            <SelectValue>{getPlatformLabel(platform)}</SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="bilibili">B站</SelectItem>
@@ -133,6 +166,15 @@ export function PlatformValidator({ onValidated }: PlatformValidatorProps) {
         ) : (
           '验证并获取信息'
         )}
+      </Button>
+
+      <Button
+        onClick={() => onValidated(platform, accountId, null)}
+        disabled={!accountId || loading}
+        variant="outline"
+        className="w-full"
+      >
+        跳过验证，手动填写
       </Button>
     </div>
   );

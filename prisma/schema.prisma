@@ -401,6 +401,12 @@ model InfluencerPost {
 
   influencer Influencer @relation(fields: [influencerId], references: [id], onDelete: Cascade)
 
+  // Platform-specific extensions
+  xiaohongshuExtra XiaohongshuPostExtra?
+  zhihuExtra       ZhihuPostExtra?
+  douyinExtra      DouyinPostExtra?
+  alipayExtra      AlipayPostExtra?
+
   @@index([influencerId, publishTime])
   @@index([aiProcessed])
   @@index([primaryDomain, publishTime])
@@ -416,6 +422,77 @@ model DomainInfluencer {
   influencer Influencer @relation(fields: [influencerId], references: [id])
 
   @@id([domainId, influencerId])
+}
+
+// ==================== 平台扩展表 ====================
+
+// 小红书动态扩展
+model XiaohongshuPostExtra {
+  id            String   @id @default(cuid())
+  postId        String   @unique
+  noteType      String   // 'image' | 'video'
+  tags          String   // JSON array
+  collects      Int      @default(0)
+  hasGoodsLink  Boolean  @default(false)
+  topicIds      String?  // JSON array
+
+  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([postId])
+}
+
+// 知乎内容扩展
+model ZhihuPostExtra {
+  id            String   @id @default(cuid())
+  postId        String   @unique
+  contentType   String   // 'answer' | 'article' | 'pin' | 'video'
+  questionId    String?
+  questionTitle String?
+  voteupCount   Int      @default(0)
+  votedownCount Int      @default(0)
+  isFeatured    Boolean  @default(false)
+
+  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([postId])
+}
+
+// 抖音视频扩展
+model DouyinPostExtra {
+  id            String   @id @default(cuid())
+  postId        String   @unique
+  videoDuration Int      // 秒
+  musicId       String?
+  musicTitle    String?
+  musicAuthor   String?
+  challengeTags String?  // JSON array
+  isAd          Boolean  @default(false)
+
+  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([postId])
+}
+
+// 支付宝生活号文章扩展
+model AlipayPostExtra {
+  id            String   @id @default(cuid())
+  postId        String   @unique
+  articleType   String   // 'news' | 'service' | 'promotion'
+  category      String?
+  serviceId     String?  // 关联的服务ID
+  hasService    Boolean  @default(false)
+
+  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([postId])
 }
 
 model InfluencerFetchLog {
@@ -446,6 +523,23 @@ model InfluencerAnalysisLog {
 
   @@index([postId])
   @@index([createdAt])
+}
+
+// Platform configuration for influencer providers
+model PlatformConfig {
+  id             String   @id @default(cuid())
+  platform       String   @unique  // bilibili/weibo/douyin/xiaohongshu
+  displayName    String             // 平台显示名称
+  configData     String             // JSON: 平台配置数据（cookies等）
+  isActive       Boolean  @default(true)
+  lastUpdatedAt  DateTime @default(now())
+  expiresAt      DateTime?          // Cookie过期时间
+  autoRefresh    Boolean  @default(false)  // 是否支持自动刷新
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([platform])
+  @@index([isActive])
 }
 
 // ==================== 知识图谱 ====================

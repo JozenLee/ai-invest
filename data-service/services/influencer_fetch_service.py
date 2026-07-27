@@ -59,7 +59,26 @@ class InfluencerFetchService:
 
             logger.info(f"Starting fetch for influencer: {influencer_id} (platform={platform}, account={account_id}, driver={driver_type})")
 
-            # 2. Get provider instance
+            # 2. Get provider instance with merged config
+            # Priority: PlatformConfig table > influencer.providerConfig
+            try:
+                async with self.db.get_connection() as conn:
+                    cursor = await conn.execute(
+                        "SELECT configData FROM PlatformConfig WHERE platform = ? AND isActive = 1",
+                        (platform,)
+                    )
+                    platform_config_row = await cursor.fetchone()
+
+                if platform_config_row:
+                    platform_config_data = json.loads(platform_config_row['configData'])
+                    # Merge: platform config overrides influencer config
+                    provider_config.update(platform_config_data)
+                    logger.info(f"Using platform config for {platform}")
+                else:
+                    logger.info(f"No platform config found for {platform}, using influencer-specific config")
+            except Exception as e:
+                logger.warning(f"Failed to load platform config: {e}, using influencer-specific config")
+
             provider_class = InfluencerProviderRegistry.get_provider(platform, driver_type)
             provider_config.update({
                 'platform': platform,
@@ -95,20 +114,24 @@ class InfluencerFetchService:
                 # Continue with fetch even if sync fails
 
             # 3. Fetch posts from provider
-            since = None
-            if influencer.get('lastFetchAt'):
-                since = datetime.fromisoformat(influencer['lastFetchAt'])
+            # Determine the time range based on dataRetentionDays
+            # Always fetch from retention period to ensure complete historical data
+            data_retention_days = influencer.get('dataRetentionDays', 30)
+            retention_cutoff = datetime.now() - timedelta(days=data_retention_days)
+            since = retention_cutoff
+
+            logger.info(f"Fetching posts since {since.isoformat()} (retention: {data_retention_days} days)")
 
             fetch_start = time.time()
             posts = await provider.fetch_user_posts(
                 account_id=account_id,
                 since=since,
-                limit=20
+                limit=100  # Increase limit for initial fetch
             )
-            posts_fetched = len(posts)
+            total_posts_from_api = len(posts)
             fetch_elapsed = time.time() - fetch_start
 
-            logger.info(f"Provider fetch completed: {posts_fetched} posts from {platform} in {fetch_elapsed:.2f}s")
+            logger.info(f"Provider fetch completed: {total_posts_from_api} posts from {platform} in {fetch_elapsed:.2f}s")
 
             # 4. Get existing posts for deduplication
             dedup_start = time.time()
@@ -118,12 +141,24 @@ class InfluencerFetchService:
 
             # 5. Save new posts
             duplicates_skipped = 0
+            empty_content_skipped = 0
+            valid_posts = 0  # Track valid posts with content
             for post in posts:
+                content = post.get('content', '')
+
+                # Skip posts with empty content (unsupported dynamic types)
+                if not content or not content.strip():
+                    empty_content_skipped += 1
+                    logger.debug(f"Skipping post with empty content (unsupported type)")
+                    continue
+
+                valid_posts += 1  # Count posts with valid content
+
                 # Calculate content hash for deduplication
                 content_hash = self._calculate_content_hash(
                     platform=platform,
                     account_id=account_id,
-                    content=post['content']
+                    content=content
                 )
 
                 # Skip if already exists
@@ -138,8 +173,13 @@ class InfluencerFetchService:
                     posts_new += 1
                     existing_hashes.add(content_hash)
 
+            # Set posts_fetched to valid posts count (excluding empty content)
+            posts_fetched = valid_posts
+
             if duplicates_skipped > 0:
                 logger.info(f"Skipped {duplicates_skipped} duplicate posts for {influencer_id}")
+            if empty_content_skipped > 0:
+                logger.info(f"Skipped {empty_content_skipped} empty content posts (API returned {total_posts_from_api} total) for {influencer_id}")
 
             # 6. Update influencer status
             await self._update_influencer_status(
@@ -330,7 +370,7 @@ class InfluencerFetchService:
         platform: str,
         account_id: str
     ) -> bool:
-        """Save a post to database"""
+        """Save a post to database with platform-specific extra data"""
         try:
             async with self.db.get_connection() as conn:
                 post_id = f"post_{int(datetime.now().timestamp() * 1000000)}"
@@ -362,11 +402,14 @@ class InfluencerFetchService:
                     datetime.now().isoformat()
                 ))
 
-                logger.debug(f"Saved post {post_id}")
+                # Save platform-specific extra data
+                await self._save_platform_extra(conn, post_id, platform, post)
+
+                logger.debug(f"Saved post {post_id} with {platform} extra data")
                 return True
 
         except Exception as e:
-            logger.error(f"Failed to save post: {e}")
+            logger.error(f"Failed to save post: {e}", exc_info=True)
             return False
 
     async def _update_influencer_status(
@@ -425,3 +468,110 @@ class InfluencerFetchService:
             ))
 
             logger.debug(f"Created fetch log {log_id}")
+
+    async def _save_platform_extra(
+        self,
+        conn,
+        post_id: str,
+        platform: str,
+        post: Dict
+    ):
+        """
+        Save platform-specific extra data to extension tables
+
+        Args:
+            conn: Database connection
+            post_id: ID of the post
+            platform: Platform name
+            post: Post dict containing 'extra' or 'extra_data' field
+        """
+        # Get extra data from post (supports both 'extra' and 'extra_data' keys)
+        extra = post.get('extra') or post.get('extra_data')
+        if not extra:
+            return
+
+        now = datetime.now().isoformat()
+
+        try:
+            if platform == 'xiaohongshu_api':
+                # XiaohongshuPostExtra
+                await conn.execute("""
+                    INSERT INTO XiaohongshuPostExtra (
+                        id, postId, noteType, tags, collects, hasGoodsLink, topicIds, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"extra_{post_id}",
+                    post_id,
+                    extra.get('noteType', 'normal'),
+                    extra.get('tags', '[]'),
+                    extra.get('collects', 0),
+                    extra.get('hasGoodsLink', False),
+                    extra.get('topicIds'),
+                    now,
+                    now
+                ))
+                logger.debug(f"Saved XiaohongshuPostExtra for post {post_id}")
+
+            elif platform == 'zhihu_api':
+                # ZhihuPostExtra
+                await conn.execute("""
+                    INSERT INTO ZhihuPostExtra (
+                        id, postId, contentType, questionId, questionTitle,
+                        voteupCount, votedownCount, isFeatured, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"extra_{post_id}",
+                    post_id,
+                    extra.get('contentType', 'unknown'),
+                    extra.get('questionId'),
+                    extra.get('questionTitle'),
+                    extra.get('voteupCount', 0),
+                    extra.get('votedownCount', 0),
+                    extra.get('isFeatured', False),
+                    now,
+                    now
+                ))
+                logger.debug(f"Saved ZhihuPostExtra for post {post_id}")
+
+            elif platform == 'douyin_api':
+                # DouyinPostExtra
+                await conn.execute("""
+                    INSERT INTO DouyinPostExtra (
+                        id, postId, videoDuration, musicId, musicTitle,
+                        musicAuthor, challengeTags, isAd, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"extra_{post_id}",
+                    post_id,
+                    extra.get('videoDuration', 0),
+                    extra.get('musicId'),
+                    extra.get('musicTitle'),
+                    extra.get('musicAuthor'),
+                    extra.get('challengeTags'),
+                    extra.get('isAd', False),
+                    now,
+                    now
+                ))
+                logger.debug(f"Saved DouyinPostExtra for post {post_id}")
+
+            elif platform == 'alipay_api':
+                # AlipayPostExtra
+                await conn.execute("""
+                    INSERT INTO AlipayPostExtra (
+                        id, postId, articleType, category, serviceId, hasService, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    f"extra_{post_id}",
+                    post_id,
+                    extra.get('articleType', 'news'),
+                    extra.get('category'),
+                    extra.get('serviceId'),
+                    extra.get('hasService', False),
+                    now,
+                    now
+                ))
+                logger.debug(f"Saved AlipayPostExtra for post {post_id}")
+
+        except Exception as e:
+            # Don't fail the entire post save if extra data fails
+            logger.warning(f"Failed to save {platform} extra data for post {post_id}: {e}")

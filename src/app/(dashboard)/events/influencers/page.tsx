@@ -1,14 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
-import { Plus, Search, Users, Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Search, Users, Loader2, AlertCircle, ChevronLeft, ChevronRight, Settings, ExternalLink } from 'lucide-react';
 
 interface Influencer {
   id: string;
@@ -36,7 +37,13 @@ export default function InfluencersPage() {
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [mounted, setMounted] = useState(false);
   const pageSize = 20;
+
+  // Prevent hydration mismatch for time-based rendering
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const { data, isLoading, error, refetch } = useQuery<InfluencerListResponse>({
     queryKey: ['influencers', platformFilter, page],
@@ -135,6 +142,7 @@ export default function InfluencersPage() {
 
   const formatTime = (dateStr: string | null) => {
     if (!dateStr) return '未抓取';
+    if (!mounted) return '加载中...'; // Prevent hydration mismatch
     try {
       const date = new Date(dateStr);
       const now = new Date();
@@ -175,10 +183,16 @@ export default function InfluencersPage() {
             关注行业大V，实时追踪观点动态
           </p>
         </div>
-        <Button onClick={() => router.push('/events/influencers/new')}>
-          <Plus className="h-4 w-4 mr-2" />
-          添加大V
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => router.push('/events/influencers/settings')}>
+            <Settings className="h-4 w-4 mr-2" />
+            平台设置
+          </Button>
+          <Button onClick={() => router.push('/events/influencers/new')}>
+            <Plus className="h-4 w-4 mr-2" />
+            添加大V
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -298,11 +312,14 @@ export default function InfluencersPage() {
                 <CardHeader>
                   <div className="flex items-start gap-3">
                     {influencer.avatarUrl ? (
-                      <img
-                        src={influencer.avatarUrl}
-                        alt={influencer.name}
-                        className="w-12 h-12 rounded-full"
-                      />
+                      <div className="relative w-12 h-12 rounded-full overflow-hidden flex-shrink-0">
+                        <Image
+                          src={influencer.avatarUrl}
+                          alt={influencer.name}
+                          fill
+                          className="object-cover"
+                        />
+                      </div>
                     ) : (
                       getPlatformIcon(influencer.platform)
                     )}
@@ -322,10 +339,18 @@ export default function InfluencersPage() {
                     <span className="text-muted-foreground">账号: </span>
                     <span className="font-mono text-xs">{influencer.accountId}</span>
                   </div>
-                  {influencer.category && (
+                  {influencer.profileUrl && (
                     <div className="text-sm">
-                      <span className="text-muted-foreground">领域: </span>
-                      <span>{influencer.category}</span>
+                      <span className="text-muted-foreground">主页: </span>
+                      <a
+                        href={influencer.profileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary hover:underline inline-flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        访问主页 <ExternalLink className="h-3 w-3" />
+                      </a>
                     </div>
                   )}
                   <div className="flex items-center justify-between text-sm pt-2 border-t">

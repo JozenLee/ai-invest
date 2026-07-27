@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Image from 'next/image';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +35,7 @@ interface Influencer {
 export default function EditInfluencerPage() {
   const params = useParams();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const influencerId = params.id as string;
 
   const { data: influencerData, isLoading, error } = useQuery<{
@@ -87,6 +89,10 @@ export default function EditInfluencerPage() {
       return response.json();
     },
     onSuccess: () => {
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['influencer', influencerId] });
+      queryClient.invalidateQueries({ queryKey: ['influencers'] });
+
       toast.success('更新成功');
       router.push(`/events/influencers/${influencerId}`);
     },
@@ -192,11 +198,14 @@ export default function EditInfluencerPage() {
           <CardContent>
             <div className="flex items-start gap-4">
               {influencer.avatarUrl && (
-                <img
-                  src={influencer.avatarUrl}
-                  alt={influencer.name}
-                  className="w-16 h-16 rounded-full"
-                />
+                <div className="relative w-16 h-16 rounded-full overflow-hidden flex-shrink-0">
+                  <Image
+                    src={influencer.avatarUrl}
+                    alt={influencer.name}
+                    fill
+                    className="object-cover"
+                  />
+                </div>
               )}
               <div className="flex-1 grid grid-cols-2 gap-4">
                 <div>

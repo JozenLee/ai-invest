@@ -598,6 +598,92 @@ class AKShareProvider(DataProvider):
             }
         raise Exception("市场情绪数据为空")
 
+    # ==================== 龙虎榜 ====================
+
+    async def get_lhb_data(self) -> List[Dict]:
+        """获取最近交易日龙虎榜数据"""
+        try:
+            # 尝试获取最近3个交易日的数据
+            for i in range(1, 4):
+                date = (datetime.now() - timedelta(days=i)).strftime('%Y%m%d')
+                df = await self._call(ak.stock_lhb_detail_daily_sina, date=date, timeout=15)
+                if not df.empty:
+                    result = []
+                    for _, row in df.iterrows():
+                        result.append({
+                            "stock_code": str(row.get("股票代码", "")),
+                            "stock_name": str(row.get("股票名称", "")),
+                            "close_price": float(row.get("收盘价", 0)),
+                            "change_pct": float(row.get("对应值", 0)),
+                            "volume": float(row.get("成交量", 0)),
+                            "amount": float(row.get("成交额", 0)),
+                            "reason": str(row.get("指标", "")),
+                            "date": date[:4] + "-" + date[4:6] + "-" + date[6:8],
+                        })
+                    return result
+            return []
+        except Exception as e:
+            print(f"[AKShare] 获取龙虎榜数据失败: {e}")
+            return []
+
+    async def get_lhb_detail(self, date: str) -> List[Dict]:
+        """获取指定日期龙虎榜详细数据
+
+        Args:
+            date: YYYY-MM-DD 格式
+        """
+        try:
+            date_str = date.replace("-", "")
+            df = await self._call(ak.stock_lhb_detail_daily_sina, date=date_str, timeout=15)
+            if df.empty:
+                return []
+
+            result = []
+            for _, row in df.iterrows():
+                result.append({
+                    "stock_code": str(row.get("股票代码", "")),
+                    "stock_name": str(row.get("股票名称", "")),
+                    "close_price": float(row.get("收盘价", 0)),
+                    "change_pct": float(row.get("对应值", 0)),
+                    "volume": float(row.get("成交量", 0)),
+                    "amount": float(row.get("成交额", 0)),
+                    "reason": str(row.get("指标", "")),
+                    "date": date,
+                })
+            return result
+        except Exception as e:
+            print(f"[AKShare] 获取龙虎榜详情失败: {e}")
+            return []
+
+    async def get_individual_capital_flow_rank(self, indicator: str = "今日") -> List[Dict]:
+        """获取个股资金流向排名（用于连续流入分析）
+
+        注意：此API依赖东方财富，可能因网络问题失败
+        """
+        try:
+            df = await self._call(ak.stock_individual_fund_flow_rank, indicator=indicator, timeout=15)
+            if df.empty:
+                return []
+
+            result = []
+            for _, row in df.iterrows():
+                result.append({
+                    "stock_code": str(row.get("代码", "")),
+                    "stock_name": str(row.get("名称", "")),
+                    "close_price": float(row.get("最新价", 0)),
+                    "change_pct": float(row.get("涨跌幅", 0)),
+                    "main_net": float(row.get("主力净流入-净额", 0)),
+                    "main_net_pct": float(row.get("主力净流入-净占比", 0)),
+                    "super_large_net": float(row.get("超大单净流入-净额", 0)),
+                    "large_net": float(row.get("大单净流入-净额", 0)),
+                    "mid_net": float(row.get("中单净流入-净额", 0)),
+                    "small_net": float(row.get("小单净流入-净额", 0)),
+                })
+            return result
+        except Exception as e:
+            print(f"[AKShare] 获取个股资金流向排名失败: {e}")
+            return []
+
     # ==================== 新闻 ====================
 
     async def get_news(self, keyword: str = "财联社", limit: int = 50, api: str = "stock_news_em") -> pd.DataFrame:

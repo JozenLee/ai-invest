@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,9 +18,8 @@ interface ValidatedInfo {
   name: string;
   avatarUrl: string;
   profileUrl: string;
-  category: string;
   verified: boolean;
-  followersCount: number;
+  description?: string;
 }
 
 export default function NewInfluencerPage() {
@@ -64,7 +64,6 @@ export default function NewInfluencerPage() {
         name: info.name,
         avatarUrl: info.avatarUrl,
         profileUrl: info.profileUrl,
-        category: info.category,
       }));
       setManualMode(false);
     } else {
@@ -100,7 +99,7 @@ export default function NewInfluencerPage() {
         dataRetentionDays: formData.dataRetentionDays,
       };
 
-      const response = await fetch('http://localhost:8000/api/influencers', {
+      const response = await fetch('/api/influencers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -178,28 +177,29 @@ export default function NewInfluencerPage() {
               <CardContent>
                 <div className="flex items-start gap-4">
                   {validatedInfo.avatarUrl && (
-                    <img
-                      src={validatedInfo.avatarUrl}
-                      alt={validatedInfo.name}
-                      className="w-16 h-16 rounded-full"
-                    />
+                    <div className="relative w-16 h-16 rounded-full overflow-hidden flex-shrink-0">
+                      <Image
+                        src={validatedInfo.avatarUrl}
+                        alt={validatedInfo.name}
+                        fill
+                        className="object-cover"
+                      />
+                    </div>
                   )}
                   <div className="flex-1 space-y-2">
                     <div>
                       <span className="text-sm text-muted-foreground">名称：</span>
                       <span className="font-medium">{validatedInfo.name}</span>
                       {validatedInfo.verified && (
-                        <span className="ml-2 text-xs text-blue-600">已认证</span>
+                        <span className="ml-2 text-xs text-blue-600">✓ 已认证</span>
                       )}
                     </div>
-                    <div>
-                      <span className="text-sm text-muted-foreground">领域：</span>
-                      <span>{validatedInfo.category}</span>
-                    </div>
-                    <div>
-                      <span className="text-sm text-muted-foreground">粉丝数：</span>
-                      <span>{validatedInfo.followersCount.toLocaleString()}</span>
-                    </div>
+                    {validatedInfo.description && (
+                      <div>
+                        <span className="text-sm text-muted-foreground">简介：</span>
+                        <span className="text-sm">{validatedInfo.description}</span>
+                      </div>
+                    )}
                     {validatedInfo.profileUrl && (
                       <a
                         href={validatedInfo.profileUrl}

@@ -192,6 +192,40 @@ class DataService:
         )
         return result if isinstance(result, list) else []
 
+    async def get_individual_capital_flow_rank(self, indicator: str = "今日") -> List[Dict]:
+        """获取个股资金流向排名（用于分析连续流入趋势）"""
+        cache_key = f"individual_capital_flow_{indicator}"
+        result = await self.registry.fetch(
+            category="individual_capital_flow",
+            method="get_individual_capital_flow_rank",
+            cache_key=cache_key,
+            cache_ttl=600,
+            indicator=indicator,
+        )
+        return result if isinstance(result, list) else []
+
+    async def get_lhb_data(self) -> List[Dict]:
+        """获取龙虎榜数据"""
+        result = await self.registry.fetch(
+            category="lhb_data",
+            method="get_lhb_data",
+            cache_key="lhb_data",
+            cache_ttl=600,
+        )
+        return result if isinstance(result, list) else []
+
+    async def get_lhb_detail(self, date: str) -> List[Dict]:
+        """获取龙虎榜详细数据"""
+        cache_key = f"lhb_detail_{date}"
+        result = await self.registry.fetch(
+            category="lhb_detail",
+            method="get_lhb_detail",
+            cache_key=cache_key,
+            cache_ttl=3600,
+            date=date,
+        )
+        return result if isinstance(result, list) else []
+
     async def get_stock_capital_flow(self, ticker: str) -> Dict:
         """获取个股资金流向"""
         result = await self.registry.fetch(

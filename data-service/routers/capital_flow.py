@@ -219,21 +219,28 @@ async def get_macro_capital_flow():
             }
 
         if has_market:
+            # 主力资金 = 超大单 + 大单
             main_net = float(market_data.get("主力净流入-净额", 0))
-            main_pct = float(market_data.get("主力净流入-净占比", 0))
+            main_pct_original = float(market_data.get("主力净流入-净占比", 0))
+
+            # 散户资金 = 中单 + 小单
             mid_net = float(market_data.get("中单净流入-净额", 0))
             small_net = float(market_data.get("小单净流入-净额", 0))
             retail_net = mid_net + small_net
+
+            # 市场总净流入 = 主力 + 散户（零和市场理论上应该为0，但实际可能有微小偏差）
             market_total = main_net + retail_net
             data_date = str(market_data.get("日期", datetime.now().strftime("%Y-%m-%d")))
 
-            # 散户净占比：根据实际散户净额计算
-            # 如果数据源提供了散户占比，使用它；否则基于零和博弈估算
-            if "散户净流入-净占比" in market_data:
-                retail_pct = round(float(market_data.get("散户净流入-净占比", 0)), 2)
+            # 占比计算：基于成交活跃度（绝对值）
+            # 这样主力和散户的占比都是正数，表示各自的交易参与度
+            total_volume = abs(main_net) + abs(retail_net)
+            if total_volume > 0:
+                main_pct = round((abs(main_net) / total_volume) * 100, 2)
+                retail_pct = round((abs(retail_net) / total_volume) * 100, 2)
             else:
-                # 零和博弈估算：散户占比 ≈ -主力占比
-                retail_pct = round(-main_pct, 2)
+                main_pct = 0
+                retail_pct = 0
         else:
             main_net = retail_net = market_total = 0
             main_pct = retail_pct = 0

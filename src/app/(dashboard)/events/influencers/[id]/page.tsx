@@ -1,7 +1,9 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useParams, useRouter } from 'next/navigation';
+import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,9 +15,11 @@ import {
   RefreshCw,
   ExternalLink,
   Users,
+  Loader2,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { zhCN } from 'date-fns/locale';
+import { toast } from 'sonner';
 
 interface Influencer {
   id: string;
@@ -52,7 +56,15 @@ interface Post {
 export default function InfluencerDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const influencerId = params.id as string;
+  const [mounted, setMounted] = useState(false);
+  const [isFetching, setIsFetching] = useState(false);
+
+  // Prevent hydration mismatch for time-based rendering
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const { data: influencerData, isLoading: loadingInfluencer, error: influencerError } = useQuery<{
     success: boolean;
@@ -83,20 +95,38 @@ export default function InfluencerDetailPage() {
   };
 
   const handleFetch = async () => {
+    // 立即显示加载状态和Toast提示
+    setIsFetching(true);
+    toast.info('开始采集数据...', {
+      description: '正在从平台获取最新动态',
+    });
+
     try {
       const response = await fetch(`/api/influencers/${influencerId}/fetch`, {
         method: 'POST',
       });
       const result = await response.json();
-      
+
       if (result.success) {
-        alert('采集任务已触发！');
+        toast.success('采集完成！', {
+          description: `获取 ${result.postsFetched} 条动态，新增 ${result.postsNew} 条`,
+        });
+
+        // 刷新帖子列表和大V信息
+        queryClient.invalidateQueries({ queryKey: ['influencer-posts', influencerId] });
+        queryClient.invalidateQueries({ queryKey: ['influencer', influencerId] });
       } else {
-        alert(`采集失败: ${result.message || result.error}`);
+        toast.error('采集失败', {
+          description: result.error || result.message || '未知错误',
+        });
       }
     } catch (error) {
       console.error('Error triggering fetch:', error);
-      alert('触发采集失败');
+      toast.error('采集失败', {
+        description: error instanceof Error ? error.message : '网络错误',
+      });
+    } finally {
+      setIsFetching(false);
     }
   };
 
@@ -109,14 +139,17 @@ export default function InfluencerDetailPage() {
       });
 
       if (response.ok) {
-        alert('已删除');
+        // 使列表页缓存失效
+        queryClient.invalidateQueries({ queryKey: ['influencers'] });
+
+        toast.success('已删除');
         router.push('/events/influencers');
       } else {
-        alert('删除失败');
+        toast.error('删除失败');
       }
     } catch (error) {
       console.error('Error deleting influencer:', error);
-      alert('删除失败');
+      toast.error('删除失败');
     }
   };
 
@@ -170,11 +203,14 @@ export default function InfluencerDetailPage() {
           </Button>
           <div className="flex items-center gap-3">
             {influencer.avatarUrl ? (
-              <img
-                src={influencer.avatarUrl}
-                alt={influencer.name}
-                className="w-16 h-16 rounded-full"
-              />
+              <div className="relative w-16 h-16 rounded-full overflow-hidden flex-shrink-0">
+                <Image
+                  src={influencer.avatarUrl}
+                  alt={influencer.name}
+                  fill
+                  className="object-cover"
+                />
+              </div>
             ) : (
               <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center">
                 <Users className="h-8 w-8 text-muted-foreground" />
@@ -190,9 +226,23 @@ export default function InfluencerDetailPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleFetch}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            手动采集
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleFetch}
+            disabled={isFetching}
+          >
+            {isFetching ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                采集中...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4 mr-2" />
+                手动采集
+              </>
+            )}
           </Button>
           <Button variant="outline" size="sm" onClick={() => router.push(`/events/influencers/${influencerId}/edit`)}>
             <Edit className="h-4 w-4 mr-2" />
@@ -238,10 +288,10 @@ export default function InfluencerDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-sm">
-              {formatDistanceToNow(new Date(influencer.createdAt), {
+              {mounted ? formatDistanceToNow(new Date(influencer.createdAt), {
                 locale: zhCN,
                 addSuffix: true,
-              })}
+              }) : '加载中...'}
             </div>
           </CardContent>
         </Card>
@@ -251,7 +301,7 @@ export default function InfluencerDetailPage() {
         <CardHeader>
           <CardTitle>基本信息</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3">
+        <CardContent>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <span className="text-sm font-medium text-muted-foreground">平台:</span>
@@ -261,12 +311,6 @@ export default function InfluencerDetailPage() {
               <span className="text-sm font-medium text-muted-foreground">账号ID:</span>
               <p className="mt-1">{influencer.accountId}</p>
             </div>
-            {influencer.category && (
-              <div>
-                <span className="text-sm font-medium text-muted-foreground">领域:</span>
-                <p className="mt-1">{influencer.category}</p>
-              </div>
-            )}
             {influencer.profileUrl && (
               <div>
                 <span className="text-sm font-medium text-muted-foreground">主页:</span>
@@ -280,19 +324,19 @@ export default function InfluencerDetailPage() {
                 </a>
               </div>
             )}
-          </div>
-          {influencer.tags.length > 0 && (
-            <div>
-              <span className="text-sm font-medium text-muted-foreground">标签:</span>
-              <div className="flex flex-wrap gap-2 mt-2">
-                {influencer.tags.map((tag, idx) => (
-                  <Badge key={idx} variant="secondary">
-                    {tag}
-                  </Badge>
-                ))}
+            {influencer.tags.length > 0 && (
+              <div>
+                <span className="text-sm font-medium text-muted-foreground">标签:</span>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {influencer.tags.map((tag, idx) => (
+                    <Badge key={idx} variant="secondary">
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -337,16 +381,36 @@ export default function InfluencerDetailPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>最近动态</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            共 {postsData?.data.total || 0} 条动态
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>最近动态</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                共 {postsData?.data.total || 0} 条动态
+              </p>
+            </div>
+            {isFetching && (
+              <Badge variant="secondary" className="animate-pulse">
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                数据采集中
+              </Badge>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
-          {loadingPosts && <p className="text-center py-4">加载中...</p>}
-          
+          {loadingPosts && (
+            <div className="flex flex-col items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mb-2" />
+              <p className="text-sm text-muted-foreground">加载中...</p>
+            </div>
+          )}
+
           {!loadingPosts && postsData?.data.items.length === 0 && (
-            <p className="text-center py-8 text-muted-foreground">暂无动态</p>
+            <div className="text-center py-8">
+              <p className="text-muted-foreground mb-2">暂无动态</p>
+              <p className="text-xs text-muted-foreground">
+                点击"手动采集"按钮获取最新动态
+              </p>
+            </div>
           )}
 
           {!loadingPosts && postsData && postsData.data.items.length > 0 && (
@@ -367,10 +431,10 @@ export default function InfluencerDetailPage() {
                   
                   <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>
-                      {formatDistanceToNow(new Date(post.publishTime), {
+                      {mounted ? formatDistanceToNow(new Date(post.publishTime), {
                         locale: zhCN,
                         addSuffix: true,
-                      })}
+                      }) : '加载中...'}
                     </span>
                     {post.url && (
                       <a

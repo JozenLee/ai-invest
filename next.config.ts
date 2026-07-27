@@ -9,6 +9,27 @@ const nextConfig: NextConfig = {
     '100.80.0.0/16',       // Tailscale网络段
   ],
 
+  // 配置外部图片域名
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'i0.hdslb.com',
+        pathname: '/bfs/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'i1.hdslb.com',
+        pathname: '/bfs/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'i2.hdslb.com',
+        pathname: '/bfs/**',
+      },
+    ],
+  },
+
   // 配置WebSocket代理以支持远程HMR
   async rewrites() {
     return [

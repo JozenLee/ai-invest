@@ -16,18 +16,9 @@ import {
 
 const navigation = [
   {
-    name: '仪表盘',
-    href: '/dashboard',
-    icon: LayoutDashboard,
-  },
-  {
     name: '市场数据',
     href: '/market',
     icon: BarChart3,
-    children: [
-      { name: '市场概览', href: '/market/overview' },
-      { name: '资金流向', href: '/market/capital' },
-    ],
   },
   {
     name: '事件驱动',
