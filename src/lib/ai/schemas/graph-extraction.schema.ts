@@ -113,14 +113,25 @@ export function validateExtractionResult(data: unknown): {
       if (!entity.name || typeof entity.name !== 'string') {
         return { success: false, error: 'Entity name required' }
       }
+      if (entity.name.length < 1 || entity.name.length > 100) {
+        return { success: false, error: 'Entity name must be 1-100 chars' }
+      }
       if (!NODE_TYPES.includes(entity.type)) {
         return { success: false, error: `Invalid entity type: ${entity.type}` }
+      }
+      if (entity.description && entity.description.length > 500) {
+        return { success: false, error: 'Entity description max 500 chars' }
       }
       if (typeof entity.confidence !== 'number' || entity.confidence < 0 || entity.confidence > 1) {
         return { success: false, error: 'Confidence must be 0-1' }
       }
       if (!Array.isArray(entity.evidence) || entity.evidence.length === 0) {
         return { success: false, error: 'Evidence required' }
+      }
+      for (const evidence of entity.evidence) {
+        if (typeof evidence !== 'string' || evidence.length > 200) {
+          return { success: false, error: 'Evidence items max 200 chars' }
+        }
       }
     }
 
@@ -141,10 +152,24 @@ export function validateExtractionResult(data: unknown): {
       if (typeof relation.confidence !== 'number' || relation.confidence < 0 || relation.confidence > 1) {
         return { success: false, error: 'Confidence must be 0-1' }
       }
+      if (!Array.isArray(relation.evidence) || relation.evidence.length === 0) {
+        return { success: false, error: 'Relation evidence required' }
+      }
+      for (const evidence of relation.evidence) {
+        if (typeof evidence !== 'string' || evidence.length > 200) {
+          return { success: false, error: 'Relation evidence items max 200 chars' }
+        }
+      }
+      if (relation.lag && relation.lag.length > 50) {
+        return { success: false, error: 'Relation lag max 50 chars' }
+      }
     }
 
     if (!obj.summary || typeof obj.summary !== 'string') {
       return { success: false, error: 'Summary required' }
+    }
+    if (obj.summary.length < 10 || obj.summary.length > 1000) {
+      return { success: false, error: 'Summary must be 10-1000 chars' }
     }
 
     return { success: true, data: obj as ExtractionResult }
