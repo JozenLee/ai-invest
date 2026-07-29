@@ -27,7 +27,7 @@ async def test_alipay_provider():
     """测试支付宝生活号 Provider"""
 
     print("=" * 60)
-    print("Alipay Provider Test")
+    print("支付宝生活号 Provider 测试 - 米姐养基")
     print("=" * 60)
 
     # 初始化配置
@@ -46,26 +46,46 @@ async def test_alipay_provider():
     # 创建 Provider 实例
     provider = AlipayAPIProvider(config)
 
-    # 测试账号（这些是示例，实际测试需要使用真实的生活号ID）
+    # 测试账号：米姐养基
+    # 注意：需要找到米姐养基的正确生活号ID
+    # 可能的ID格式包括：数字ID、拼音、特殊标识符
     test_accounts = [
-        '2088000000000001',  # 示例生活号ID
-        'alipay-test',       # 示例生活号标识
+        'mijieyangjijijin',      # 拼音全称
+        'mijie-yangji',          # 拼音-连字符
+        'mijieyangji',           # 拼音简写
+        '2088102180560853',      # 可能的数字ID（需确认）
+        'fundmijie',             # 英文标识
     ]
 
     print("\n" + "=" * 60)
     print("Test 1: Validate Account")
     print("=" * 60)
 
+    valid_account = None
     for account_id in test_accounts:
         print(f"\nValidating account: {account_id}")
         try:
             is_valid = await provider.validate_account(account_id)
             print(f"  Result: {'✓ Valid' if is_valid else '✗ Invalid'}")
+            if is_valid and not valid_account:
+                valid_account = account_id
+                print(f"  ✓ 找到有效账号: {account_id}")
         except Exception as e:
             print(f"  Error: {e}")
 
-    # 选择一个有效账号进行深入测试
-    test_account = test_accounts[0]
+    # 如果没找到有效账号，给出提示
+    if not valid_account:
+        print("\n❌ 未找到有效的支付宝生活号ID")
+        print("\n获取正确ID的方法：")
+        print("1. 打开支付宝APP，搜索'米姐养基'")
+        print("2. 进入生活号主页")
+        print("3. 分享生活号，查看URL中的ID参数")
+        print("4. 或在浏览器中打开支付宝生活号页面查看URL")
+        await provider.close()
+        return
+
+    # 选择有效账号进行深入测试
+    test_account = valid_account
 
     print("\n" + "=" * 60)
     print("Test 2: Fetch User Info")

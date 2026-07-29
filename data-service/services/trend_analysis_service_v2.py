@@ -68,26 +68,26 @@ class TrendAnalysisService:
         直接基于domainIds字段统计
 
         Args:
-            news_count: 分析的新闻数量
+            news_count: 分析的新闻数量（从最近的N条新闻中进行领域分类统计）
 
         Returns:
             领域趋势摘要列表
         """
         try:
-            # 1. 获取最近的新闻（只要有domainIds的）
-            news_list = await self._get_recent_news_with_domains(news_count * 2)
+            # 1. 获取最近的指定数量新闻（只要有domainIds的）
+            news_list = await self._get_recent_news_with_domains(news_count)
             if not news_list:
                 logger.warning("未获取到新闻数据")
                 return []
 
             logger.info(f"获取到 {len(news_list)} 条新闻，开始分析领域趋势")
 
-            # 2. 为每个ETF领域生成轻量级分析
+            # 2. 为每个ETF领域生成轻量级分析（不再限制每个领域的新闻数量）
             summaries = []
             for domain_config in ETF_DOMAINS:
                 try:
                     summary = await self._analyze_domain_lightweight_new(
-                        domain_config, news_list, news_count
+                        domain_config, news_list
                     )
                     if summary and summary['relatedNewsCount'] > 0:
                         summaries.append(summary)
@@ -112,7 +112,7 @@ class TrendAnalysisService:
 
         Args:
             domain_code: 领域代码
-            news_count: 分析的新闻数量
+            news_count: 分析的新闻数量（从最近N条新闻中筛选该领域的）
             include_ai: 是否包含AI深度分析（默认False，按需生成）
 
         Returns:
@@ -125,22 +125,32 @@ class TrendAnalysisService:
                 logger.error(f"未找到领域配置: {domain_code}")
                 return None
 
-            # 2. 获取该领域的相关新闻
-            filtered_news = await self._get_news_by_domain(domain_code, news_count)
+            # 2. 获取最近的N条新闻（与概览页面使用相同的数据源，保证一致性）
+            all_news = await self._get_recent_news_with_domains(news_count)
 
-            if not filtered_news:
-                logger.warning(f"领域 {domain_code} 没有找到相关新闻")
+            if not all_news:
+                logger.warning("未获取到新闻数据")
                 return None
 
-            logger.info(f"领域 {domain_code} 找到 {len(filtered_news)} 条相关新闻")
+            # 3. 从这N条新闻中筛选出该领域的新闻
+            filtered_news = [
+                news for news in all_news
+                if domain_code in news.get('domainIds', [])
+            ]
 
-            # 3. 轻量级统计
+            if not filtered_news:
+                logger.warning(f"领域 {domain_code} 在最近{news_count}条新闻中没有找到相关内容")
+                return None
+
+            logger.info(f"领域 {domain_code} 在最近{news_count}条新闻中找到 {len(filtered_news)} 条相关新闻")
+
+            # 4. 轻量级统计
             sentiment_dist = self.calculate_sentiment_distribution(filtered_news)
             trend_direction, confidence = self._calculate_trend(
                 sentiment_dist, len(filtered_news)
             )
 
-            # 4. 组装基础结果（快速返回）
+            # 5. 组装基础结果（快速返回）
             result = {
                 "domainCode": domain_code,
                 "domainName": domain_config['name'],
@@ -153,7 +163,7 @@ class TrendAnalysisService:
                 "lastUpdated": datetime.now().isoformat(),
             }
 
-            # 5. AI深度分析（仅在明确请求时生成）
+            # 6. AI深度分析（仅在明确请求时生成）
             ai_insight = None
             if include_ai and self.client:
                 logger.info(f"开始为领域 {domain_code} 生成AI分析...")
@@ -261,17 +271,23 @@ class TrendAnalysisService:
             return []
 
     async def _analyze_domain_lightweight_new(
-        self, domain_config: Dict, news_list: List[Dict], max_news: int
+        self, domain_config: Dict, news_list: List[Dict]
     ) -> Optional[Dict[str, Any]]:
-        """轻量级分析单个领域（新版）"""
+        """
+        轻量级分析单个领域（新版）
+
+        Args:
+            domain_config: 领域配置
+            news_list: 已筛选的新闻列表（从这些新闻中统计该领域的数据）
+        """
         try:
             domain_code = domain_config['code']
 
-            # 筛选该领域的新闻
+            # 筛选该领域的新闻（不再限制数量，因为news_list已经是限定数量的）
             filtered_news = [
                 news for news in news_list
                 if domain_code in news.get('domainIds', [])
-            ][:max_news]
+            ]
 
             if not filtered_news:
                 return None

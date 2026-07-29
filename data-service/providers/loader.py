@@ -5,7 +5,7 @@ Provider 加载器
 from typing import Optional, Dict, Any
 from .bilibili_provider import BilibiliAPIProvider
 from .weibo_provider import WeiboAPIProvider
-from .xiaohongshu_provider import XiaohongshuProvider
+from .xiaohongshu_provider import XiaohongshuAPIProvider
 from .schemas import get_provider_schema, validate_provider_config, list_provider_schemas
 
 
@@ -16,7 +16,7 @@ class ProviderLoader:
     PROVIDERS = {
         'bilibili': BilibiliAPIProvider,
         'weibo': WeiboAPIProvider,
-        'xiaohongshu': XiaohongshuProvider,
+        'xiaohongshu': XiaohongshuAPIProvider,
     }
 
     # Provider 实例缓存 {cache_key: provider_instance}

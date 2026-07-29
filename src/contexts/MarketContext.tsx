@@ -54,10 +54,11 @@ export function MarketProvider({ children }: MarketProviderProps) {
       // Add refresh query parameter if force refresh requested
       const refreshParam = forceRefresh ? '?refresh=true' : ''
 
-      // Parallel requests for index data and capital flow data
-      const [overviewRes, capitalRes] = await Promise.all([
+      // Parallel requests for index data, capital flow data, and sector data
+      const [overviewRes, capitalRes, sectorRes] = await Promise.all([
         fetch(`/api/market/overview${refreshParam}`, { signal: clientTimeout }),
         fetch(`/api/market/capital-flow${refreshParam}`, { signal: clientTimeout }),
+        fetch(`/api/market/sectors${refreshParam}`, { signal: clientTimeout }),
       ])
 
       const fetchDuration = Date.now() - startTime
@@ -65,6 +66,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
         console.log(`[MarketContext] API 请求完成 (${fetchDuration}ms)`)
         console.log(`  - overview: ${overviewRes.status}`)
         console.log(`  - capital-flow: ${capitalRes.status}`)
+        console.log(`  - sectors: ${sectorRes.status}`)
       }
 
       // Process index data
@@ -147,6 +149,16 @@ export function MarketProvider({ children }: MarketProviderProps) {
         setCapitalFlow(null)
       }
 
+      // Process sector flow data (log only, no state update needed)
+      if (sectorRes.ok) {
+        const sectorData = await sectorRes.json()
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[MarketContext] 板块资金流向已更新:', sectorData.success ? '成功' : '失败')
+        }
+      } else {
+        console.error('[MarketContext] sectors 请求失败:', sectorRes.status)
+      }
+
       setLastUpdate(new Date())
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err)
@@ -182,11 +194,17 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
   // 自动刷新定时器
   useEffect(() => {
-    // 交易时段每30秒刷新，非交易时段每5分钟刷新
-    const refreshInterval = marketMeta?.isOpen ? 30 * 1000 : 5 * 60 * 1000
+    // 交易时段每1分钟刷新，非交易时段每5分钟刷新
+    const refreshInterval = marketMeta?.isOpen ? 60 * 1000 : 5 * 60 * 1000
     const interval = setInterval(() => {
       fetchData() // Automatic refresh uses cache
     }, refreshInterval)
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(
+        `[MarketContext] 刷新间隔: ${marketMeta?.isOpen ? '1分钟' : '5分钟'} (交易状态: ${marketMeta?.isOpen ? '开盘' : '休市'})`
+      )
+    }
 
     return () => clearInterval(interval)
   }, [marketMeta?.isOpen, fetchData])

@@ -4,7 +4,9 @@ import { prisma } from '@/lib/db/prisma'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 const CACHE_KEY = 'capital_flow_enhanced'
-const CACHE_TTL = 30 // 秒
+// 动态缓存TTL：交易时段30秒，非交易时段2分钟
+const CACHE_TTL_TRADING = 30 // 秒
+const CACHE_TTL_CLOSED = 120 // 秒
 
 export async function GET(request: Request) {
   console.log('[capital-flow API] 收到请求')
@@ -66,8 +68,11 @@ export async function GET(request: Request) {
           })
         }
 
-        apiCache.set(CACHE_KEY, data, CACHE_TTL)
-        console.log('[capital-flow API] 返回成功数据并缓存')
+        // 动态TTL：根据交易状态调整缓存时间
+        const isTrading = data.meta?.isRealtime === true
+        const ttl = isTrading ? CACHE_TTL_TRADING : CACHE_TTL_CLOSED
+        apiCache.set(CACHE_KEY, data, ttl)
+        console.log('[capital-flow API] 返回成功数据并缓存 (TTL:', ttl, '秒)')
         return NextResponse.json(data)
       }
       console.warn('[capital-flow API] Python 返回失败:', result.error)

@@ -57,6 +57,87 @@ describe('GraphRuleEngine', () => {
       expect(result.valid).toBe(false)
       expect(result.violations).toContain('子节点层级必须大于父节点')
     })
+
+    it('should reject confidence outside [0,1] range', () => {
+      const edgeWithNegativeConfidence: Partial<GraphEdge> = {
+        relation: 'supply_chain',
+        direction: 'positive',
+        sourceId: 'node1',
+        targetId: 'node2',
+        weight: 0.8,
+        confidence: -0.1
+      }
+
+      const result1 = graphRuleEngine.validateEdge(edgeWithNegativeConfidence as GraphEdge)
+      expect(result1.valid).toBe(false)
+      expect(result1.violations).toContain('置信度-0.1超出范围[0,1]')
+
+      const edgeWithHighConfidence: Partial<GraphEdge> = {
+        relation: 'supply_chain',
+        direction: 'positive',
+        sourceId: 'node1',
+        targetId: 'node2',
+        weight: 0.8,
+        confidence: 1.5
+      }
+
+      const result2 = graphRuleEngine.validateEdge(edgeWithHighConfidence as GraphEdge)
+      expect(result2.valid).toBe(false)
+      expect(result2.violations).toContain('置信度1.5超出范围[0,1]')
+    })
+
+    it('should reject weight outside [0,1] range', () => {
+      const edgeWithNegativeWeight: Partial<GraphEdge> = {
+        relation: 'supply_chain',
+        direction: 'positive',
+        sourceId: 'node1',
+        targetId: 'node2',
+        weight: -0.2,
+        confidence: 0.9
+      }
+
+      const result1 = graphRuleEngine.validateEdge(edgeWithNegativeWeight as GraphEdge)
+      expect(result1.valid).toBe(false)
+      expect(result1.violations).toContain('权重-0.2超出范围[0,1]')
+
+      const edgeWithHighWeight: Partial<GraphEdge> = {
+        relation: 'supply_chain',
+        direction: 'positive',
+        sourceId: 'node1',
+        targetId: 'node2',
+        weight: 1.2,
+        confidence: 0.9
+      }
+
+      const result2 = graphRuleEngine.validateEdge(edgeWithHighWeight as GraphEdge)
+      expect(result2.valid).toBe(false)
+      expect(result2.violations).toContain('权重1.2超出范围[0,1]')
+    })
+
+    it('should accept valid node hierarchy (child level > parent level)', () => {
+      const parentNode: Partial<GraphNode> = {
+        id: 'parent',
+        level: 1,
+        type: 'industry_l1',
+        name: 'Parent'
+      }
+
+      const childNode: Partial<GraphNode> = {
+        id: 'child',
+        level: 2,
+        type: 'industry_l2',
+        name: 'Child',
+        parentId: 'parent'
+      }
+
+      const result = graphRuleEngine.validateNodeHierarchy(
+        childNode as GraphNode,
+        parentNode as GraphNode
+      )
+
+      expect(result.valid).toBe(true)
+      expect(result.violations).toHaveLength(0)
+    })
   })
 
   describe('inference rules', () => {

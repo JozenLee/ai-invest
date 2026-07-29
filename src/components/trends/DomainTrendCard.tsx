@@ -144,7 +144,21 @@ export function DomainTrendCard({ trend }: DomainTrendCardProps) {
         </div>
 
         {/* View Details Button */}
-        <Link href={`/events/trends/${trend.domainCode}`}>
+        <Link
+          href={`/events/trends/${trend.domainCode}`}
+          onClick={() => {
+            // 确保localStorage已更新（作为备用方案）
+            if (typeof window !== 'undefined') {
+              const storedCount = localStorage.getItem('trendNewsCount')
+              if (!storedCount) {
+                // 如果localStorage中没有值，从页面URL或默认值获取
+                const searchParams = new URLSearchParams(window.location.search)
+                const newsCount = searchParams.get('newsCount') || '50'
+                localStorage.setItem('trendNewsCount', newsCount)
+              }
+            }
+          }}
+        >
           <Button variant="outline" className="w-full group">
             查看详情
             <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-1 transition-transform" />

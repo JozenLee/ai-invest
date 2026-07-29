@@ -51,7 +51,8 @@ async def get_all_domains_summary(
             "data": {
                 "domains": summaries,
                 "total": len(summaries),
-                "newsCount": newsCount
+                "newsCount": newsCount,  # 请求分析的新闻数量
+                "actualNewsAnalyzed": newsCount  # 实际分析的不同新闻数量（用于前端显示）
             }
         }
 

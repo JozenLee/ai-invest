@@ -5,7 +5,9 @@ import { getCachedMarketOverview, setCachedMarketOverview } from '@/lib/market-c
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 const CACHE_KEY = 'market_overview'
-const CACHE_TTL = 30 // 秒
+// 动态缓存TTL：交易时段30秒，非交易时段2分钟
+const CACHE_TTL_TRADING = 30 // 交易中缓存30秒
+const CACHE_TTL_CLOSED = 120 // 非交易时段缓存2分钟
 
 // 主要指数配置（Yahoo Finance 格式）
 const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
@@ -79,7 +81,10 @@ export async function GET(request: Request) {
           ...data,
           source: data.data?.source || 'akshare'
         })
-        apiCache.set(CACHE_KEY, result, CACHE_TTL)
+        // 动态TTL：交易时段使用短缓存
+        const isTrading = data.data?.meta?.isRealtime === true
+        const ttl = isTrading ? CACHE_TTL_TRADING : CACHE_TTL_CLOSED
+        apiCache.set(CACHE_KEY, result, ttl)
         // 持久化到文件缓存
         setCachedMarketOverview(result)
         return NextResponse.json(result)
@@ -114,7 +119,7 @@ export async function GET(request: Request) {
         },
         source: 'yahoo',
       })
-      apiCache.set(CACHE_KEY, result, CACHE_TTL)
+      apiCache.set(CACHE_KEY, result, CACHE_TTL_CLOSED)
       setCachedMarketOverview(result)
       return NextResponse.json(result)
     }
@@ -127,7 +132,7 @@ export async function GET(request: Request) {
     const cachedOverview = getCachedMarketOverview()
     if (cachedOverview && isValidIndexData(cachedOverview?.data?.indices)) {
       console.warn('所有实时数据源不可用，使用本地缓存数据')
-      apiCache.set(CACHE_KEY, cachedOverview, CACHE_TTL)
+      apiCache.set(CACHE_KEY, cachedOverview, CACHE_TTL_CLOSED)
       return NextResponse.json({
         ...cachedOverview,
         source: `${cachedOverview.source || 'cached'}-stale`,

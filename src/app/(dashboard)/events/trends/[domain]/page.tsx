@@ -42,7 +42,13 @@ export default function TrendDetailPage() {
   const params = useParams()
   const domain = params.domain as string
 
-  const [newsCount] = useState(50)
+  // 从URL参数或localStorage读取newsCount，确保与概览页面一致
+  const searchParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '')
+  const urlNewsCount = searchParams.get('newsCount')
+  const storedNewsCount = typeof window !== 'undefined' ? localStorage.getItem('trendNewsCount') : null
+  const initialNewsCount = urlNewsCount ? parseInt(urlNewsCount) : (storedNewsCount ? parseInt(storedNewsCount) : 50)
+
+  const [newsCount] = useState(initialNewsCount)
   const [trend, setTrend] = useState<DomainTrendDetail | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)

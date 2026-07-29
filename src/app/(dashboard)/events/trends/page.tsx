@@ -14,6 +14,7 @@ import { DomainTrendSummary, TrendSummaryResponse } from '@/types/trend'
 export default function TrendsOverviewPage() {
   const [newsCount, setNewsCount] = useState(50)
   const [trends, setTrends] = useState<DomainTrendSummary[]>([])
+  const [actualNewsCount, setActualNewsCount] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -32,9 +33,13 @@ export default function TrendsOverviewPage() {
       const result = await response.json()
 
       if (result.success && result.data) {
-        // 处理后端返回的嵌套结构: { data: { domains: [...] } }
+        // 处理后端返回的嵌套结构: { data: { domains: [...], actualNewsAnalyzed: N } }
         const domains = Array.isArray(result.data) ? result.data : result.data.domains || []
         setTrends(domains)
+        // 保存实际分析的新闻数量（用于统计显示）
+        if (result.data.actualNewsAnalyzed) {
+          setActualNewsCount(result.data.actualNewsAnalyzed)
+        }
       } else {
         setError(result.error || '获取趋势数据失败')
       }
@@ -57,6 +62,10 @@ export default function TrendsOverviewPage() {
 
   const handleNewsCountChange = (count: number) => {
     setNewsCount(count)
+    // 保存到localStorage，供详情页面使用
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('trendNewsCount', count.toString())
+    }
   }
 
   // Calculate stats
@@ -64,7 +73,7 @@ export default function TrendsOverviewPage() {
     totalDomains: trends.length,
     bullishDomains: trends.filter(t => t.trendDirection === 'bullish').length,
     bearishDomains: trends.filter(t => t.trendDirection === 'bearish').length,
-    totalNews: trends.reduce((sum, t) => sum + t.relatedNewsCount, 0),
+    totalNews: actualNewsCount || newsCount,  // 使用实际分析的新闻数量，如果没有则回退到请求数量
   }
 
   return (

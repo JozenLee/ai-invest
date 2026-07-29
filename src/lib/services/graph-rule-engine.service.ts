@@ -163,7 +163,7 @@ export class GraphRuleEngine {
             suggestions.push({
               source: nodeA,
               target: nodeC,
-              relation: edgeAB.relation,
+              relation: edgeAB.relation as RelationType,
               weight: Math.min(edgeAB.weight, edgeBC.weight) * 0.8, // 间接关系权重降低
               direction: 'positive',
               confidence: Math.min(edgeAB.confidence, edgeBC.confidence) * 0.7, // 置信度降低

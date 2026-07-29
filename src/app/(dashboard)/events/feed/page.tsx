@@ -105,16 +105,24 @@ export default function EventsFeedPage() {
   const [searchInput, setSearchInput] = useState('')
   const [updateCount, setUpdateCount] = useState(0)
 
+  // 今日统计数据（不受筛选影响）
+  const [todayStats, setTodayStats] = useState({
+    total: 0,
+    bullish: 0,
+    bearish: 0,
+  })
+
   // SSE实时更新
   const { isConnected, lastEvent } = useNewsStream({
     onUpdate: useCallback((data: any) => {
       console.log('收到SSE更新:', data)
       setUpdateCount(prev => prev + 1)
-      // 自动刷新新闻列表
+      // 自动刷新新闻列表和统计数据
       if (data.type === 'batch_completed' || data.type === 'news_updated') {
         // 延迟刷新，避免频繁请求
         setTimeout(() => {
           fetchNews()
+          fetchTodayStats()
         }, 500)
       }
     }, [])
@@ -194,6 +202,43 @@ export default function EventsFeedPage() {
     }
   }
 
+  // 获取今日统计数据（不受筛选影响）
+  const fetchTodayStats = async () => {
+    try {
+      // 获取大量新闻（假设今天不会超过1000条）
+      const response = await fetch('/api/events/feed?limit=1000&sortBy=publishTime')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success && data.data?.items) {
+          // 在客户端过滤出今天的新闻
+          const today = new Date()
+          today.setHours(0, 0, 0, 0)
+
+          const todayNews = data.data.items.filter((article: NewsArticle) => {
+            const publishDate = new Date(article.publishTime)
+            return publishDate >= today
+          })
+
+          const bullish = todayNews.filter((article: NewsArticle) =>
+            article.sentiment && article.sentiment > 0.2
+          ).length
+
+          const bearish = todayNews.filter((article: NewsArticle) =>
+            article.sentiment && article.sentiment < -0.2
+          ).length
+
+          setTodayStats({
+            total: todayNews.length,
+            bullish,
+            bearish,
+          })
+        }
+      }
+    } catch (error) {
+      console.error('获取今日统计失败:', error)
+    }
+  }
+
   // 获取新闻数据
   const fetchNews = useCallback(async () => {
     setIsLoading(true)
@@ -235,6 +280,7 @@ export default function EventsFeedPage() {
     fetchCategories()
     fetchDomains()
     fetchDataSources()
+    fetchTodayStats()
   }, [])
 
   useEffect(() => {
@@ -280,32 +326,6 @@ export default function EventsFeedPage() {
     return category ? category.name : categoryId
   }
 
-  // 计算统计数据
-  const getTodayNews = () => {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-    return news.filter(article => {
-      const publishDate = new Date(article.publishTime)
-      return publishDate >= today
-    }).length
-  }
-
-  const getBullishEvents = () => {
-    return news.filter(article => article.sentiment && article.sentiment > 0.2).length
-  }
-
-  const getBearishEvents = () => {
-    return news.filter(article => article.sentiment && article.sentiment < -0.2).length
-  }
-
-  const getAvgSentiment = () => {
-    if (news.length === 0) return 0
-    const validSentiments = news.filter(article => article.sentiment !== undefined)
-    if (validSentiments.length === 0) return 0
-    const sum = validSentiments.reduce((acc, article) => acc + (article.sentiment || 0), 0)
-    return ((sum / validSentiments.length) * 100).toFixed(0)
-  }
-
   return (
     <div className="space-y-6">
       {/* 页面标题 */}
@@ -337,26 +357,20 @@ export default function EventsFeedPage() {
         <StatCard
           icon={Newspaper}
           label={EVENTS_TEXT.feed.stats.todayNews}
-          value={getTodayNews()}
+          value={todayStats.total}
           variant="default"
         />
         <StatCard
           icon={TrendingUp}
           label={EVENTS_TEXT.feed.stats.bullishEvents}
-          value={getBullishEvents()}
+          value={todayStats.bullish}
           variant="success"
         />
         <StatCard
           icon={TrendingDown}
           label={EVENTS_TEXT.feed.stats.bearishEvents}
-          value={getBearishEvents()}
+          value={todayStats.bearish}
           variant="danger"
-        />
-        <StatCard
-          icon={Minus}
-          label={EVENTS_TEXT.feed.stats.avgSentiment}
-          value={`${getAvgSentiment()}%`}
-          variant="default"
         />
       </StatCardGrid>
 
