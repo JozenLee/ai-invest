@@ -1,5 +1,6 @@
 // src/app/api/graph/extraction-jobs/__tests__/route.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { NextRequest } from 'next/server'
 import { GET } from '../route'
 import prisma from '@/lib/db/prisma'
 
@@ -37,7 +38,7 @@ describe('GET /api/graph/extraction-jobs', () => {
   })
 
   it('should return all jobs by default', async () => {
-    const request = new Request('http://localhost/api/graph/extraction-jobs')
+    const request = new Request('http://localhost/api/graph/extraction-jobs') as NextRequest
     const response = await GET(request)
     const data = await response.json()
 
@@ -49,7 +50,7 @@ describe('GET /api/graph/extraction-jobs', () => {
   it('should filter by status', async () => {
     const request = new Request(
       'http://localhost/api/graph/extraction-jobs?status=completed'
-    )
+    ) as NextRequest
     const response = await GET(request)
     const data = await response.json()
 
@@ -60,7 +61,7 @@ describe('GET /api/graph/extraction-jobs', () => {
   it('should filter by sourceType', async () => {
     const request = new Request(
       'http://localhost/api/graph/extraction-jobs?sourceType=news'
-    )
+    ) as NextRequest
     const response = await GET(request)
     const data = await response.json()
 
@@ -71,7 +72,7 @@ describe('GET /api/graph/extraction-jobs', () => {
   it('should limit results', async () => {
     const request = new Request(
       'http://localhost/api/graph/extraction-jobs?limit=2'
-    )
+    ) as NextRequest
     const response = await GET(request)
     const data = await response.json()
 
@@ -79,7 +80,7 @@ describe('GET /api/graph/extraction-jobs', () => {
   })
 
   it('should return statistics', async () => {
-    const request = new Request('http://localhost/api/graph/extraction-jobs')
+    const request = new Request('http://localhost/api/graph/extraction-jobs') as NextRequest
     const response = await GET(request)
     const data = await response.json()
 

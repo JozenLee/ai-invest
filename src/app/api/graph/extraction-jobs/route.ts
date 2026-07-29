@@ -1,5 +1,6 @@
 // src/app/api/graph/extraction-jobs/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import prisma from '@/lib/db/prisma'
 
 /**
@@ -10,12 +11,14 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
 
-    const where: any = {}
-    if (searchParams.get('status')) {
-      where.status = searchParams.get('status')
+    const where: Prisma.GraphExtractionJobWhereInput = {}
+    const status = searchParams.get('status')
+    if (status) {
+      where.status = status
     }
-    if (searchParams.get('sourceType')) {
-      where.sourceType = searchParams.get('sourceType')
+    const sourceType = searchParams.get('sourceType')
+    if (sourceType) {
+      where.sourceType = sourceType
     }
 
     const limit = searchParams.get('limit')
@@ -36,7 +39,7 @@ export async function GET(request: NextRequest) {
     })
 
     const statsMap = {
-      total: jobs.length,
+      total: stats.reduce((sum, s) => sum + s._count, 0),
       pending: 0,
       processing: 0,
       completed: 0,
