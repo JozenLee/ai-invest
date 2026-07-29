@@ -621,6 +621,60 @@ model GraphChangeLog {
   @@index([createdAt])
 }
 
+// ==================== 图谱构建系统 ====================
+
+model GraphSuggestion {
+  id          String   @id @default(cuid())
+  type        String   // add_node, update_node, add_edge, update_edge, delete_node, delete_edge
+  targetType  String   // node, edge
+  targetId    String?  // 如果是update/delete，关联已有ID
+
+  data        String   // JSON: 建议的数据内容
+  confidence  Float    // 0-1
+
+  source      String   // ai_extraction, rule_inference, market_data
+  sourceRef   String?  // 来源引用（如新闻ID、报告URL）
+  evidence    String?  // JSON: 支撑证据数组
+
+  status      String   @default("pending")  // pending, approved, rejected, applied
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNote  String?  // 审核备注
+
+  appliedAt   DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([source, status])
+  @@index([type])
+}
+
+model GraphExtractionJob {
+  id            String   @id @default(cuid())
+  sourceType    String   // report, news, article, manual
+  sourceId      String?  // 关联的新闻ID、报告ID等
+  sourceUrl     String?
+  sourceText    String?  // 截取的文本片段（前500字）
+
+  status        String   @default("pending")  // pending, processing, completed, failed
+
+  extractedData String?  // JSON: 完整抽取结果
+  suggestionsCreated Int @default(0)  // 创建的建议数量
+
+  tokensUsed    Int?     // Claude API token使用量
+  durationMs    Int?     // 处理耗时（毫秒）
+  errorMessage  String?  // 错误信息
+
+  createdAt     DateTime @default(now())
+  completedAt   DateTime?
+  updatedAt     DateTime @updatedAt
+
+  @@index([status, createdAt])
+  @@index([sourceType, sourceId])
+}
+
 // ==================== AI分析记录 ====================
 
 model Analysis {
