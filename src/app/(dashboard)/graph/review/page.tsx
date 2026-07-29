@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
-import { useToast } from '@/hooks/use-toast'
+import { toast } from 'sonner'
 import { SuggestionList } from '@/components/graph/SuggestionList'
 import { SuggestionDetail } from '@/components/graph/SuggestionDetail'
 import { CheckCircle2, XCircle, RefreshCw } from 'lucide-react'
@@ -24,7 +24,6 @@ export default function GraphReviewPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [selectedSuggestion, setSelectedSuggestion] = useState<GraphSuggestion | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const { toast } = useToast()
 
   // Fetch suggestions
   const fetchSuggestions = async () => {
@@ -36,17 +35,13 @@ export default function GraphReviewPage() {
       if (data.success) {
         setSuggestions(data.data.suggestions)
       } else {
-        toast({
-          title: '加载失败',
-          description: data.error,
-          variant: 'destructive'
+        toast.error('加载失败', {
+          description: data.error
         })
       }
     } catch (error) {
-      toast({
-        title: '加载失败',
-        description: String(error),
-        variant: 'destructive'
+      toast.error('加载失败', {
+        description: String(error)
       })
     } finally {
       setIsLoading(false)
@@ -60,10 +55,8 @@ export default function GraphReviewPage() {
   // Batch approve
   const handleBatchApprove = async () => {
     if (selectedIds.length === 0) {
-      toast({
-        title: '请选择建议',
-        description: '至少选择一个建议进行批准',
-        variant: 'destructive'
+      toast.error('请选择建议', {
+        description: '至少选择一个建议进行批准'
       })
       return
     }
@@ -82,8 +75,7 @@ export default function GraphReviewPage() {
       const data = await response.json()
 
       if (data.success) {
-        toast({
-          title: '批准成功',
+        toast.success('批准成功', {
           description: `已批准 ${data.data.approvedCount} 个建议`
         })
 
@@ -92,17 +84,13 @@ export default function GraphReviewPage() {
         setSelectedIds([])
         setSelectedSuggestion(null)
       } else {
-        toast({
-          title: '批准失败',
-          description: data.error,
-          variant: 'destructive'
+        toast.error('批准失败', {
+          description: data.error
         })
       }
     } catch (error) {
-      toast({
-        title: '批准失败',
-        description: String(error),
-        variant: 'destructive'
+      toast.error('批准失败', {
+        description: String(error)
       })
     }
   }
@@ -110,10 +98,8 @@ export default function GraphReviewPage() {
   // Batch reject
   const handleBatchReject = async () => {
     if (selectedIds.length === 0) {
-      toast({
-        title: '请选择建议',
-        description: '至少选择一个建议进行拒绝',
-        variant: 'destructive'
+      toast.error('请选择建议', {
+        description: '至少选择一个建议进行拒绝'
       })
       return
     }
@@ -133,8 +119,7 @@ export default function GraphReviewPage() {
       const data = await response.json()
 
       if (data.success) {
-        toast({
-          title: '拒绝成功',
+        toast.success('拒绝成功', {
           description: `已拒绝 ${data.data.rejectedCount} 个建议`
         })
 
@@ -143,17 +128,13 @@ export default function GraphReviewPage() {
         setSelectedIds([])
         setSelectedSuggestion(null)
       } else {
-        toast({
-          title: '拒绝失败',
-          description: data.error,
-          variant: 'destructive'
+        toast.error('拒绝失败', {
+          description: data.error
         })
       }
     } catch (error) {
-      toast({
-        title: '拒绝失败',
-        description: String(error),
-        variant: 'destructive'
+      toast.error('拒绝失败', {
+        description: String(error)
       })
     }
   }
@@ -173,25 +154,20 @@ export default function GraphReviewPage() {
       const data = await response.json()
 
       if (data.success) {
-        toast({
-          title: '批准成功',
+        toast.success('批准成功', {
           description: '建议已应用到知识图谱'
         })
 
         await fetchSuggestions()
         setSelectedSuggestion(null)
       } else {
-        toast({
-          title: '批准失败',
-          description: data.error,
-          variant: 'destructive'
+        toast.error('批准失败', {
+          description: data.error
         })
       }
     } catch (error) {
-      toast({
-        title: '批准失败',
-        description: String(error),
-        variant: 'destructive'
+      toast.error('批准失败', {
+        description: String(error)
       })
     }
   }
@@ -212,24 +188,18 @@ export default function GraphReviewPage() {
       const data = await response.json()
 
       if (data.success) {
-        toast({
-          title: '拒绝成功'
-        })
+        toast.success('拒绝成功')
 
         await fetchSuggestions()
         setSelectedSuggestion(null)
       } else {
-        toast({
-          title: '拒绝失败',
-          description: data.error,
-          variant: 'destructive'
+        toast.error('拒绝失败', {
+          description: data.error
         })
       }
     } catch (error) {
-      toast({
-        title: '拒绝失败',
-        description: String(error),
-        variant: 'destructive'
+      toast.error('拒绝失败', {
+        description: String(error)
       })
     }
   }
