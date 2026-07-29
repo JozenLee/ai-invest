@@ -194,67 +194,90 @@ export class GraphSuggestionService {
   private async applySuggestion(suggestion: any): Promise<void> {
     const data = JSON.parse(suggestion.data)
 
-    if (suggestion.type === 'add_node') {
-      // 创建节点
-      const node = await prisma.graphNode.create({
-        data: {
-          name: data.name,
-          type: data.type,
-          description: data.description,
-          level: data.level,
-          cyclePos: data.cyclePos,
-          momentum: data.momentum,
-          parentId: data.parentId
+    // Wrap all operations in transaction for data integrity
+    await prisma.$transaction(async (tx) => {
+      if (suggestion.type === 'add_node') {
+        // Check for duplicate node
+        const existingNode = await tx.graphNode.findFirst({
+          where: { name: data.name }
+        })
+        if (existingNode) {
+          throw new Error(`Node with name "${data.name}" already exists`)
         }
-      })
 
-      // 记录变更日志
-      await prisma.graphChangeLog.create({
-        data: {
-          nodeId: node.id,
-          action: 'add_node',
-          after: JSON.stringify(node),
-          reason: `AI建议批准（置信度${suggestion.confidence}）`,
-          source: suggestion.source
+        // 创建节点
+        const node = await tx.graphNode.create({
+          data: {
+            name: data.name,
+            type: data.type,
+            description: data.description,
+            level: data.level,
+            cyclePos: data.cyclePos,
+            momentum: data.momentum,
+            parentId: data.parentId
+          }
+        })
+
+        // 记录变更日志
+        await tx.graphChangeLog.create({
+          data: {
+            nodeId: node.id,
+            action: 'add_node',
+            after: JSON.stringify(node),
+            reason: `AI建议批准（置信度${suggestion.confidence}）`,
+            source: suggestion.source
+          }
+        })
+      } else if (suggestion.type === 'add_edge') {
+        // 查找source和target节点
+        const sourceNode = await tx.graphNode.findFirst({
+          where: { name: data.source }
+        })
+        const targetNode = await tx.graphNode.findFirst({
+          where: { name: data.target }
+        })
+
+        if (!sourceNode || !targetNode) {
+          throw new Error(`Source or target node not found: ${data.source} -> ${data.target}`)
         }
-      })
-    } else if (suggestion.type === 'add_edge') {
-      // 查找source和target节点
-      const sourceNode = await prisma.graphNode.findFirst({
-        where: { name: data.source }
-      })
-      const targetNode = await prisma.graphNode.findFirst({
-        where: { name: data.target }
-      })
 
-      if (!sourceNode || !targetNode) {
-        throw new Error(`Source or target node not found: ${data.source} -> ${data.target}`)
+        // Check for duplicate edge
+        const existingEdge = await tx.graphEdge.findFirst({
+          where: {
+            sourceId: sourceNode.id,
+            targetId: targetNode.id,
+            relation: data.relation
+          }
+        })
+        if (existingEdge) {
+          throw new Error(`Edge already exists: ${data.source} -> ${data.target} (${data.relation})`)
+        }
+
+        // 创建边
+        const edge = await tx.graphEdge.create({
+          data: {
+            sourceId: sourceNode.id,
+            targetId: targetNode.id,
+            relation: data.relation,
+            weight: data.weight,
+            direction: data.direction,
+            lag: data.lag,
+            confidence: data.confidence
+          }
+        })
+
+        // 记录变更日志
+        await tx.graphChangeLog.create({
+          data: {
+            edgeId: edge.id,
+            action: 'add_edge',
+            after: JSON.stringify(edge),
+            reason: `AI建议批准（置信度${suggestion.confidence}）`,
+            source: suggestion.source
+          }
+        })
       }
-
-      // 创建边
-      const edge = await prisma.graphEdge.create({
-        data: {
-          sourceId: sourceNode.id,
-          targetId: targetNode.id,
-          relation: data.relation,
-          weight: data.weight,
-          direction: data.direction,
-          lag: data.lag,
-          confidence: data.confidence
-        }
-      })
-
-      // 记录变更日志
-      await prisma.graphChangeLog.create({
-        data: {
-          edgeId: edge.id,
-          action: 'add_edge',
-          after: JSON.stringify(edge),
-          reason: `AI建议批准（置信度${suggestion.confidence}）`,
-          source: suggestion.source
-        }
-      })
-    }
+    })
   }
 
   /**

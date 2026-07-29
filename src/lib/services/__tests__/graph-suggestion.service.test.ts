@@ -18,7 +18,10 @@ describe('GraphSuggestionService', () => {
   })
 
   afterEach(async () => {
-    // Clean up
+    // Clean up in proper order (respecting foreign key constraints)
+    await prisma.graphChangeLog.deleteMany({})
+    await prisma.graphEdge.deleteMany({})
+    await prisma.graphNode.deleteMany({})
     await prisma.graphSuggestion.deleteMany({})
     await prisma.graphExtractionJob.deleteMany({})
   })
