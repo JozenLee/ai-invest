@@ -34,6 +34,22 @@ npm run db:seed                # 填充数据
 - 🤖 智能投资分析报告
 - 📈 投资组合管理
 
+## 知识图谱构建器
+
+Phase 1已完成，支持AI辅助的图谱构建：
+
+```bash
+# 访问审核工作台
+open http://localhost:3000/graph/review
+
+# 触发抽取任务（API）
+curl -X POST http://localhost:3000/api/graph/extract \
+  -H "Content-Type: application/json" \
+  -d '{"text": "...", "type": "news"}'
+```
+
+详细文档: [docs/graph-builder-usage.md](docs/graph-builder-usage.md)
+
 ## 大V管理增强功能
 
 ### 自动化添加
