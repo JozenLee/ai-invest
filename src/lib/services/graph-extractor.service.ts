@@ -30,7 +30,11 @@ export class GraphExtractorService {
     if (!key) {
       throw new Error('ANTHROPIC_API_KEY environment variable is required')
     }
-    this.client = new Anthropic({ apiKey: key })
+    const baseURL = process.env.ANTHROPIC_BASE_URL
+    this.client = new Anthropic({
+      apiKey: key,
+      ...(baseURL && { baseURL })
+    })
   }
 
   async extract(input: ExtractionInput): Promise<ExtractionResultWithMetadata> {
@@ -41,7 +45,7 @@ export class GraphExtractorService {
 
     // Call Claude with structured output
     const response = await this.client.messages.create({
-      model: 'claude-opus-5',
+      model: process.env.CLAUDE_MODEL || 'claude-opus-5',
       max_tokens: 4000,
       temperature: 0.3,
       messages: [{
@@ -63,8 +67,22 @@ export class GraphExtractorService {
 
     let extractedData: unknown
     try {
-      extractedData = JSON.parse(textContent.text)
+      // Strip markdown code blocks if present
+      let jsonText = textContent.text.trim()
+      if (jsonText.startsWith('```json')) {
+        jsonText = jsonText.replace(/^```json\s*\n/, '').replace(/\n```\s*$/, '')
+      } else if (jsonText.startsWith('```')) {
+        jsonText = jsonText.replace(/^```\s*\n/, '').replace(/\n```\s*$/, '')
+      }
+
+      // Try to fix common JSON issues
+      // Remove trailing commas before closing braces/brackets
+      jsonText = jsonText.replace(/,(\s*[}\]])/g, '$1')
+
+      extractedData = JSON.parse(jsonText)
     } catch (error) {
+      // Log the problematic JSON for debugging
+      console.error('Failed to parse Claude response:', textContent.text.substring(0, 500))
       throw new Error(`Failed to parse JSON: ${error}`)
     }
 
