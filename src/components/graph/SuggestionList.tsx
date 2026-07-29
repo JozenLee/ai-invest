@@ -39,7 +39,11 @@ export function SuggestionList({
   onSelectionChange,
   onSuggestionClick
 }: SuggestionListProps) {
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<{
+    type: string
+    source: string
+    minConfidence: number
+  }>({
     type: 'all',
     source: 'all',
     minConfidence: 0
@@ -122,7 +126,7 @@ export function SuggestionList({
           <Label htmlFor="type-filter">类型</Label>
           <Select
             value={filters.type}
-            onValueChange={(value) => setFilters({ ...filters, type: value })}
+            onValueChange={(value) => setFilters({ ...filters, type: value || 'all' })}
           >
             <SelectTrigger id="type-filter">
               <SelectValue />
@@ -141,7 +145,7 @@ export function SuggestionList({
           <Label htmlFor="source-filter">来源</Label>
           <Select
             value={filters.source}
-            onValueChange={(value) => setFilters({ ...filters, source: value })}
+            onValueChange={(value) => setFilters({ ...filters, source: value || 'all' })}
           >
             <SelectTrigger id="source-filter">
               <SelectValue />
