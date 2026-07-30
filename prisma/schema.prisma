@@ -599,17 +599,26 @@ model GraphEdge {
 }
 
 model GraphStock {
-  id        String   @id @default(cuid())
-  nodeId    String
-  ticker    String
-  market    String
-  name      String
-  relevance Float    // 0~1
-  role      String   // direct/indirect/beneficiary/victim
+  id          String   @id @default(cuid())
 
-  node GraphNode @relation(fields: [nodeId], references: [id])
+  // 个股信息
+  stockCode   String   @unique
+  stockName   String
 
-  @@index([ticker])
+  // 图谱映射
+  nodeId      String
+  node        GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  // 映射元数据
+  relevance   Float    @default(1.0)
+  category    String?
+  description String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([nodeId])
+  @@index([stockCode])
 }
 
 model GraphChangeLog {
