@@ -25,7 +25,7 @@ export class ETFGraphMapperService {
 
   async mapETFToGraph(ticker: string): Promise<NodeExposure[]> {
     // 1. 从 Python 服务获取持仓
-    const response = await fetch(`${this.dataServiceUrl}/etf/${ticker}/holdings`)
+    const response = await fetch(`${this.dataServiceUrl}/api/etf/${ticker}/holdings`)
     if (!response.ok) {
       throw new Error(`获取ETF持仓失败: ${response.statusText}`)
     }
