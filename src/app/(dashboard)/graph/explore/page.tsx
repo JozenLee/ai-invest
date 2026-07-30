@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ForceGraph, TreeView } from '@/components/graph'
 import { GraphFilters } from '@/components/graph/GraphFilters'
+import { ViewSwitcher } from '@/components/graph/ViewSwitcher'
 import type { GraphNode, GraphEdge } from '@/types/graph'
 import type { GraphFilters as GraphFiltersType } from '@/components/graph/GraphFilters'
 import {
@@ -175,12 +176,31 @@ export default function GraphExplorePage() {
     minNewsCount: 0
   })
   const [showFilters, setShowFilters] = useState(false)
+  const [currentView, setCurrentView] = useState<string>('panorama')
 
   // ---------- 节点点击回调（稳定引用） ----------
   // ForceGraph 传入 GraphNode，TreeView 传入 TreeNode（结构兼容，详情面板只读共享字段）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleNodeClick = useCallback((node: any) => {
     setSelectedNode(node as GraphNode | null)
+  }, [])
+
+  // ---------- 视角切换逻辑 ----------
+  const handleViewChange = useCallback(async (viewId: string) => {
+    try {
+      const response = await fetch(`/api/graph/views/${viewId}`)
+      const result = await response.json()
+
+      if (result.success && result.data) {
+        const view = result.data
+        setCurrentView(viewId)
+        setFilters(view.filters)
+        // Map layoutType to viewMode: hierarchical -> tree, force -> force
+        setViewMode(view.layoutType === 'hierarchical' ? 'tree' : 'force')
+      }
+    } catch (error) {
+      console.error('切换视角失败:', error)
+    }
   }, [])
 
   // ---------- 数据获取 ----------
@@ -358,6 +378,10 @@ export default function GraphExplorePage() {
 
       {/* 筛选工具栏 */}
       <div className="flex items-center gap-3">
+        <ViewSwitcher
+          currentView={currentView}
+          onViewChange={handleViewChange}
+        />
         <Button
           variant={showFilters ? 'default' : 'outline'}
           size="sm"
@@ -393,7 +417,7 @@ export default function GraphExplorePage() {
         {/* 左侧：图谱视图 */}
         <div className="space-y-4">
           <Tabs
-            defaultValue="force"
+            value={viewMode}
             onValueChange={(v) => setViewMode(v as 'force' | 'tree')}
           >
             <div className="flex items-center justify-between">
