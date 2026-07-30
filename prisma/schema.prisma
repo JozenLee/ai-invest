@@ -576,6 +576,13 @@ model GraphNode {
   sentimentScore Float?                   // -1~+1 情感得分
   lastNewsAt     DateTime?                // 最后一条新闻时间
 
+  // 评分系统字段
+  subGraphId       String?   // 所属子图ID
+  scoreComponents  String?   // JSON: {marketFundamental, newsSentiment, graphStructure}
+  totalScore       Float     @default(0)  // 综合评分 0-100
+  scoreUpdatedAt   DateTime?
+  trendIndicator   String?   // up/down/stable
+
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 
@@ -586,6 +593,8 @@ model GraphNode {
   stocks      GraphStock[]
   changeLogs  GraphChangeLog[]
   newsLinks   NewsGraphLink[]
+  scoreHistory     NodeScoreHistory[]
+  signals          InvestmentSignal[]
 
   @@index([type])
   @@index([parentId])
@@ -604,6 +613,7 @@ model GraphEdge {
   confidence  Float    // 0~1
   evidence    String?  // JSON: 支撑证据
   description String?
+  isCrossGraph Boolean @default(false)  // 标记跨行业边
 
   source      GraphNode @relation("SourceNode", fields: [sourceId], references: [id])
   target      GraphNode @relation("TargetNode", fields: [targetId], references: [id])
@@ -652,6 +662,66 @@ model GraphChangeLog {
 
   @@index([nodeId])
   @@index([createdAt])
+}
+
+// ==================== 子图定义 ====================
+
+model SubGraph {
+  id          String   @id  // ai_compute, new_energy_vehicle, consumer, etc.
+  name        String        // AI算力、新能源汽车、消费等
+  description String?
+  category    String        // tech/manufacturing/consumer等
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  // 统计字段（缓存）
+  nodeCount   Int     @default(0)
+  avgScore    Float   @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+}
+
+// ==================== 评分历史 ====================
+
+model NodeScoreHistory {
+  id          String   @id @default(cuid())
+  nodeId      String
+  date        DateTime @default(now())
+  totalScore  Float
+  components  String   // JSON: 评分明细
+
+  node        GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, date])
+  @@index([nodeId, date])
+}
+
+// ==================== 投资信号 ====================
+
+model InvestmentSignal {
+  id              String   @id @default(cuid())
+  type            String   // strong_attention/sustained_hot/cooling_warning/cross_sector
+  nodeId          String
+  subGraphId      String
+  triggeredAt     DateTime @default(now())
+  currentScore    Float
+  scoreChange     Float
+  previousScore   Float?
+  suggestedAction String
+  relatedETFs     String?  // JSON array
+
+  status          String   @default("active")  // active/confirmed/dismissed
+  userNote        String?
+  dismissedAt     DateTime?
+
+  node            GraphNode @relation(fields: [nodeId], references: [id])
+
+  @@index([status, triggeredAt])
+  @@index([nodeId])
+  @@index([type])
 }
 
 // ==================== 新闻图谱关联 ====================
