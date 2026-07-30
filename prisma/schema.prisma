@@ -268,6 +268,7 @@ model NewsArticle {
   categoryRef NewsCategory? @relation(fields: [categoryId], references: [id])
   domain      Domain?       @relation(fields: [domainId], references: [id])
   sourceRef   DataSource?   @relation(fields: [sourceId], references: [id])
+  graphLinks  NewsGraphLink[]
 
   @@index([publishTime])
   @@index([category])
@@ -554,6 +555,13 @@ model GraphNode {
   cyclePos    String?  // upturn/peak/downturn/trough
   momentum    Float?   // -100 ~ +100
   metadata    String?  // JSON: 扩展数据（含trackingETFs、迭代元数据）
+
+  // Phase 2: 新闻关联统计字段
+  newsCount7d    Int      @default(0)     // 7天内新闻数量
+  newsCount30d   Int      @default(0)     // 30天内新闻数量
+  sentimentScore Float?                   // -1~+1 情感得分
+  lastNewsAt     DateTime?                // 最后一条新闻时间
+
   updatedAt   DateTime @updatedAt
   createdAt   DateTime @default(now())
 
@@ -563,10 +571,12 @@ model GraphNode {
   targetEdges GraphEdge[] @relation("TargetNode")
   stocks      GraphStock[]
   changeLogs  GraphChangeLog[]
+  newsLinks   NewsGraphLink[]
 
   @@index([type])
   @@index([parentId])
   @@index([level])
+  @@index([lastNewsAt])
 }
 
 model GraphEdge {
@@ -619,6 +629,26 @@ model GraphChangeLog {
 
   @@index([nodeId])
   @@index([createdAt])
+}
+
+// ==================== 新闻图谱关联 ====================
+
+model NewsGraphLink {
+  id          String   @id @default(cuid())
+  newsId      String
+  nodeId      String
+  relevance   Float    // 0-1 相关度
+  sentiment   String   // positive, neutral, negative
+  impactType  String   // direct, indirect
+  keyMentions String?  // JSON: 关键提及片段
+  createdAt   DateTime @default(now())
+
+  news        NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  node        GraphNode   @relation(fields: [nodeId], references: [id])
+
+  @@unique([newsId, nodeId])
+  @@index([nodeId, createdAt])
+  @@index([newsId])
 }
 
 // ==================== 图谱构建系统 ====================

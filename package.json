@@ -58,6 +58,8 @@
   "devDependencies": {
     "@playwright/test": "^1.62.0",
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/bcryptjs": "^2.4.6",
     "@types/d3": "^7.4.3",
     "@types/jest": "^30.0.0",
@@ -69,6 +71,7 @@
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "jsdom": "^29.1.1",
     "puppeteer": "^24.43.1",
     "tailwindcss": "^4",
     "tsx": "^4.23.0",
