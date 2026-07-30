@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from '@jest/globals'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { ScoreCalculatorService } from '../score-calculator.service'
 
 describe('ScoreCalculatorService', () => {
