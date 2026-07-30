@@ -241,6 +241,117 @@ async function main() {
   }
   console.log('✅ 子图数据创建完成')
 
+  // ==================== 更新AI算力子图节点 ====================
+  console.log('开始更新AI算力子图节点...')
+
+  // Update existing AI compute nodes with subGraphId
+  const aiComputeTypes = [
+    'chip_design', 'memory', 'server', 'ai_application', 'cpo',
+    'optical_module', 'cooling', 'power_supply', 'hbm'
+  ]
+
+  await prisma.graphNode.updateMany({
+    where: {
+      type: { in: aiComputeTypes }
+    },
+    data: {
+      subGraphId: 'ai_compute'
+    }
+  })
+
+  console.log('✅ AI算力子图节点更新完成')
+
+  // ==================== 创建新能源汽车子图节点 ====================
+  console.log('开始创建新能源汽车子图节点...')
+
+  const nevNodes = [
+    // Level 0: Root
+    { id: 'nev_root', type: 'nev_index', name: '新能源汽车', level: 0, subGraphId: 'new_energy_vehicle', description: '新能源汽车产业链总览' },
+
+    // Level 1: Core segments
+    { id: 'nev_vehicle', type: 'nev_l1', name: '整车制造', level: 1, parentId: 'nev_root', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_battery', type: 'nev_l1', name: '动力电池', level: 1, parentId: 'nev_root', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_autonomous', type: 'nev_l1', name: '智能驾驶', level: 1, parentId: 'nev_root', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_charging', type: 'nev_l1', name: '充电桩', level: 1, parentId: 'nev_root', subGraphId: 'new_energy_vehicle' },
+
+    // Level 2: Battery components
+    { id: 'nev_cathode', type: 'nev_l2', name: '正极材料', level: 2, parentId: 'nev_battery', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_anode', type: 'nev_l2', name: '负极材料', level: 2, parentId: 'nev_battery', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_electrolyte', type: 'nev_l2', name: '电解液', level: 2, parentId: 'nev_battery', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_separator', type: 'nev_l2', name: '隔膜', level: 2, parentId: 'nev_battery', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_bms', type: 'nev_l2', name: '电池管理系统', level: 2, parentId: 'nev_battery', subGraphId: 'new_energy_vehicle' },
+
+    // Level 2: Vehicle segments
+    { id: 'nev_passenger', type: 'nev_l2', name: '乘用车', level: 2, parentId: 'nev_vehicle', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_commercial', type: 'nev_l2', name: '商用车', level: 2, parentId: 'nev_vehicle', subGraphId: 'new_energy_vehicle' },
+
+    // Level 2: Autonomous driving
+    { id: 'nev_perception', type: 'nev_l2', name: '感知系统', level: 2, parentId: 'nev_autonomous', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_compute', type: 'nev_l2', name: '计算平台', level: 2, parentId: 'nev_autonomous', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_lidar', type: 'nev_l2', name: '激光雷达', level: 2, parentId: 'nev_autonomous', subGraphId: 'new_energy_vehicle' },
+
+    // Level 2: Charging
+    { id: 'nev_dc_charger', type: 'nev_l2', name: '直流充电桩', level: 2, parentId: 'nev_charging', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_ac_charger', type: 'nev_l2', name: '交流充电桩', level: 2, parentId: 'nev_charging', subGraphId: 'new_energy_vehicle' },
+
+    // Level 3: Material details
+    { id: 'nev_ncm', type: 'nev_l3', name: '三元材料(NCM)', level: 3, parentId: 'nev_cathode', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_lfp', type: 'nev_l3', name: '磷酸铁锂(LFP)', level: 3, parentId: 'nev_cathode', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_graphite', type: 'nev_l3', name: '石墨', level: 3, parentId: 'nev_anode', subGraphId: 'new_energy_vehicle' },
+    { id: 'nev_silicon', type: 'nev_l3', name: '硅基负极', level: 3, parentId: 'nev_anode', subGraphId: 'new_energy_vehicle' },
+  ]
+
+  for (const node of nevNodes) {
+    await prisma.graphNode.upsert({
+      where: { id: node.id },
+      update: {},
+      create: node,
+    })
+  }
+
+  console.log('✅ 新能源汽车子图节点创建完成 (21节点)')
+
+  // ==================== 创建消费子图节点 ====================
+  console.log('开始创建消费子图节点...')
+
+  const consumerNodes = [
+    // Level 0: Root
+    { id: 'consumer_root', type: 'consumer_index', name: '消费', level: 0, subGraphId: 'consumer', description: '消费产业链总览' },
+
+    // Level 1: Core segments
+    { id: 'consumer_food', type: 'consumer_l1', name: '食品饮料', level: 1, parentId: 'consumer_root', subGraphId: 'consumer' },
+    { id: 'consumer_retail', type: 'consumer_l1', name: '零售', level: 1, parentId: 'consumer_root', subGraphId: 'consumer' },
+    { id: 'consumer_service', type: 'consumer_l1', name: '餐饮服务', level: 1, parentId: 'consumer_root', subGraphId: 'consumer' },
+    { id: 'consumer_apparel', type: 'consumer_l1', name: '服饰美妆', level: 1, parentId: 'consumer_root', subGraphId: 'consumer' },
+
+    // Level 2: Food & Beverage
+    { id: 'consumer_liquor', type: 'consumer_l2', name: '白酒', level: 2, parentId: 'consumer_food', subGraphId: 'consumer' },
+    { id: 'consumer_beer', type: 'consumer_l2', name: '啤酒', level: 2, parentId: 'consumer_food', subGraphId: 'consumer' },
+    { id: 'consumer_dairy', type: 'consumer_l2', name: '乳制品', level: 2, parentId: 'consumer_food', subGraphId: 'consumer' },
+    { id: 'consumer_condiment', type: 'consumer_l2', name: '调味品', level: 2, parentId: 'consumer_food', subGraphId: 'consumer' },
+    { id: 'consumer_snack', type: 'consumer_l2', name: '休闲食品', level: 2, parentId: 'consumer_food', subGraphId: 'consumer' },
+
+    // Level 2: Retail
+    { id: 'consumer_supermarket', type: 'consumer_l2', name: '超市', level: 2, parentId: 'consumer_retail', subGraphId: 'consumer' },
+    { id: 'consumer_ecommerce', type: 'consumer_l2', name: '电商平台', level: 2, parentId: 'consumer_retail', subGraphId: 'consumer' },
+    { id: 'consumer_specialty', type: 'consumer_l2', name: '专业零售', level: 2, parentId: 'consumer_retail', subGraphId: 'consumer' },
+
+    // Level 2: Service
+    { id: 'consumer_catering', type: 'consumer_l2', name: '连锁餐饮', level: 2, parentId: 'consumer_service', subGraphId: 'consumer' },
+    { id: 'consumer_hotel', type: 'consumer_l2', name: '酒店', level: 2, parentId: 'consumer_service', subGraphId: 'consumer' },
+    { id: 'consumer_tourism', type: 'consumer_l2', name: '旅游', level: 2, parentId: 'consumer_service', subGraphId: 'consumer' },
+  ]
+
+  for (const node of consumerNodes) {
+    await prisma.graphNode.upsert({
+      where: { id: node.id },
+      update: {},
+      create: node,
+    })
+  }
+
+  console.log('✅ 消费子图节点创建完成 (16节点)')
+
   // ==================== 创建用户 ====================
   const user = await prisma.user.upsert({
     where: { email: 'demo@example.com' },
@@ -517,10 +628,67 @@ async function main() {
   ]
 
   for (const stock of stocks) {
-    await prisma.graphStock.create({ data: stock })
+    await prisma.graphStock.upsert({
+      where: { stockCode: stock.stockCode },
+      update: {},
+      create: stock,
+    })
   }
 
   console.log('知识图谱创建完成')
+
+  // ==================== 创建跨行业边 ====================
+  console.log('开始创建跨行业边...')
+
+  const crossGraphEdges = [
+    {
+      id: 'edge_cross_1',
+      sourceId: chainNodes[0].id, // AI芯片
+      targetId: 'nev_compute',  // 智驾计算平台
+      relation: 'demand_driver',
+      weight: 0.8,
+      direction: 'positive',
+      lag: '短期',
+      confidence: 0.85,
+      description: 'AI芯片需求驱动智能驾驶计算平台',
+      isCrossGraph: true,
+    },
+    {
+      id: 'edge_cross_2',
+      sourceId: 'nev_battery', // 动力电池
+      targetId: 'nev_charging', // 充电桩
+      relation: 'complement',
+      weight: 0.9,
+      direction: 'positive',
+      lag: '短期',
+      confidence: 0.9,
+      description: '电池技术进步推动充电桩需求',
+      isCrossGraph: false, // Same subgraph but different L1
+    },
+    {
+      id: 'edge_cross_3',
+      sourceId: 'consumer_ecommerce', // 电商平台
+      targetId: 'consumer_food',      // 食品饮料
+      relation: 'demand_driver',
+      weight: 0.7,
+      direction: 'positive',
+      lag: '即时',
+      confidence: 0.8,
+      description: '电商平台流量驱动食品饮料销售',
+      isCrossGraph: false, // Same subgraph
+    },
+  ]
+
+  for (const edge of crossGraphEdges) {
+    await prisma.graphEdge.upsert({
+      where: { id: edge.id },
+      update: {},
+      create: edge,
+    })
+  }
+
+  console.log('✅ 跨行业边创建完成')
+
   console.log('种子数据初始化完成!')
 }
 
