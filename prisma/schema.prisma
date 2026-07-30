@@ -132,6 +132,20 @@ model ETFDaily {
   @@index([ticker, date])
 }
 
+model ETFHolding {
+  id          String   @id @default(cuid())
+  etfCode     String   // ETF代码
+  stockCode   String   // 股票代码
+  stockName   String   // 股票名称
+  weight      Float    // 持仓权重 (%)
+  shares      BigInt?  // 持有股数
+  marketValue Float?   // 市值(万元)
+  updateDate  DateTime @default(now())
+
+  @@unique([etfCode, stockCode])
+  @@index([etfCode])
+}
+
 // ==================== 板块资金流向 ====================
 
 model SectorCapitalFlow {
