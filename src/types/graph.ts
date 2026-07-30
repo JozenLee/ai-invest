@@ -67,6 +67,8 @@ export interface GraphNode {
   cyclePos?: string
   momentum?: number
   metadata?: string
+  newsCount7d?: number
+  newsCount30d?: number
   updatedAt: string
   createdAt: string
 

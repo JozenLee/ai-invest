@@ -6,7 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ForceGraph, TreeView } from '@/components/graph'
+import { GraphFilters } from '@/components/graph/GraphFilters'
 import type { GraphNode, GraphEdge } from '@/types/graph'
+import type { GraphFilters as GraphFiltersType } from '@/components/graph/GraphFilters'
 import {
   GitBranch,
   RefreshCw,
@@ -17,6 +19,7 @@ import {
   Network,
   List,
   Info,
+  Filter,
 } from 'lucide-react'
 
 // --------------- 常量 ---------------
@@ -164,6 +167,14 @@ export default function GraphExplorePage() {
   const [graphDimensions, setGraphDimensions] = useState({ width: 800, height: 560 })
   const graphDimensionsRef = useRef({ width: 800, height: 560 })
   const graphAreaRef = useRef<HTMLDivElement>(null)
+  const [filters, setFilters] = useState<GraphFiltersType>({
+    nodeTypes: [],
+    momentumRange: [-100, 100],
+    cyclePositions: [],
+    hasRecentNews: false,
+    minNewsCount: 0
+  })
+  const [showFilters, setShowFilters] = useState(false)
 
   // ---------- 节点点击回调（稳定引用） ----------
   // ForceGraph 传入 GraphNode，TreeView 传入 TreeNode（结构兼容，详情面板只读共享字段）
@@ -215,31 +226,49 @@ export default function GraphExplorePage() {
     return () => observer.disconnect()
   }, [isLoading])
 
-  // ---------- 过滤节点（memoize 避免每次渲染创建新数组引用） ----------
-  const filteredNodes = useMemo(
-    () =>
-      searchQuery
-        ? nodes.filter(
-            (n) =>
-              n.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-              n.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-              (n.description && n.description.toLowerCase().includes(searchQuery.toLowerCase()))
-          )
-        : nodes,
-    [nodes, searchQuery]
-  )
+  // ---------- 应用筛选器 ----------
+  const filteredNodesByFilter = useMemo(() => {
+    return nodes.filter(node => {
+      // 节点类型筛选
+      if (filters.nodeTypes.length > 0 && !filters.nodeTypes.includes(node.type)) {
+        return false
+      }
+      // 动量范围筛选
+      if (node.momentum !== undefined) {
+        if (node.momentum < filters.momentumRange[0] || node.momentum > filters.momentumRange[1]) {
+          return false
+        }
+      }
+      // 周期位置筛选
+      if (filters.cyclePositions.length > 0 && node.cyclePos && !filters.cyclePositions.includes(node.cyclePos)) {
+        return false
+      }
+      // 有最近新闻筛选
+      if (filters.hasRecentNews && (!node.newsCount7d || node.newsCount7d === 0)) {
+        return false
+      }
+      // 最少新闻数筛选
+      if (node.newsCount7d !== undefined && node.newsCount7d < filters.minNewsCount) {
+        return false
+      }
+      return true
+    })
+  }, [nodes, filters])
 
-  const filteredEdges = useMemo(
-    () =>
-      searchQuery
-        ? edges.filter(
-            (e) =>
-              filteredNodes.some((n) => n.id === e.sourceId) &&
-              filteredNodes.some((n) => n.id === e.targetId)
-          )
-        : edges,
-    [edges, searchQuery, filteredNodes]
-  )
+  // ---------- 组合搜索和筛选 ----------
+  const filteredNodes = useMemo(() => {
+    return filteredNodesByFilter.filter(n =>
+      !searchQuery ||
+      n.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      n.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (n.description && n.description.toLowerCase().includes(searchQuery.toLowerCase()))
+    )
+  }, [filteredNodesByFilter, searchQuery])
+
+  const filteredEdges = useMemo(() => {
+    const nodeIds = new Set(filteredNodes.map(n => n.id))
+    return edges.filter(e => nodeIds.has(e.sourceId) && nodeIds.has(e.targetId))
+  }, [edges, filteredNodes])
 
   // ---------- 树形数据 ----------
   const treeData = useMemo(
@@ -326,6 +355,39 @@ export default function GraphExplorePage() {
           onChange={(e) => setSearchQuery(e.target.value)}
         />
       </div>
+
+      {/* 筛选工具栏 */}
+      <div className="flex items-center gap-3">
+        <Button
+          variant={showFilters ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setShowFilters(!showFilters)}
+        >
+          <Filter className="mr-2 h-4 w-4" />
+          {showFilters ? '隐藏筛选' : '显示筛选'}
+        </Button>
+        {filteredNodes.length < nodes.length && (
+          <span className="text-sm text-muted-foreground">
+            已筛选: {filteredNodes.length}/{nodes.length} 节点
+          </span>
+        )}
+      </div>
+
+      {/* 筛选面板 */}
+      {showFilters && (
+        <GraphFilters
+          filters={filters}
+          onChange={setFilters}
+          onReset={() => setFilters({
+            nodeTypes: [],
+            momentumRange: [-100, 100],
+            cyclePositions: [],
+            hasRecentNews: false,
+            minNewsCount: 0
+          })}
+          availableTypes={Array.from(new Set(nodes.map(n => n.type)))}
+        />
+      )}
 
       <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
         {/* 左侧：图谱视图 */}
