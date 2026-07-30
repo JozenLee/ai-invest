@@ -156,6 +156,91 @@ async function main() {
   }
   console.log('✅ 默认数据源创建完成')
 
+  // ==================== 创建子图数据 ====================
+  console.log('开始初始化子图数据...')
+
+  const subGraphs = [
+    {
+      id: 'ai_compute',
+      name: 'AI算力',
+      description: 'AI芯片、服务器、数据中心产业链',
+      category: 'tech',
+      sortOrder: 1,
+    },
+    {
+      id: 'new_energy_vehicle',
+      name: '新能源汽车',
+      description: '整车、动力电池、智能驾驶产业链',
+      category: 'manufacturing',
+      sortOrder: 2,
+    },
+    {
+      id: 'biotech_medical',
+      name: '创新药/医疗器械',
+      description: 'CXO、创新药、医疗设备产业链',
+      category: 'healthcare',
+      sortOrder: 3,
+    },
+    {
+      id: 'consumer_electronics',
+      name: '消费电子',
+      description: '手机、AR/VR、消费芯片产业链',
+      category: 'tech',
+      sortOrder: 4,
+    },
+    {
+      id: 'defense_aerospace',
+      name: '军工航天',
+      description: '军工电子、航空航天、北斗产业链',
+      category: 'defense',
+      sortOrder: 5,
+    },
+    {
+      id: 'energy_storage',
+      name: '储能/电力设备',
+      description: '储能系统、特高压、电网产业链',
+      category: 'energy',
+      sortOrder: 6,
+    },
+    {
+      id: 'robotics',
+      name: '机器人/自动化',
+      description: '工业机器人、人形机器人、减速器产业链',
+      category: 'manufacturing',
+      sortOrder: 7,
+    },
+    {
+      id: 'digital_economy',
+      name: '数字经济',
+      description: '云计算、网络安全、数据中心产业链',
+      category: 'tech',
+      sortOrder: 8,
+    },
+    {
+      id: 'advanced_materials',
+      name: '先进材料',
+      description: '第三代半导体、新材料、特种化工产业链',
+      category: 'materials',
+      sortOrder: 9,
+    },
+    {
+      id: 'consumer',
+      name: '消费',
+      description: '食品饮料、零售、服务产业链',
+      category: 'consumer',
+      sortOrder: 10,
+    },
+  ]
+
+  for (const subGraph of subGraphs) {
+    await prisma.subGraph.upsert({
+      where: { id: subGraph.id },
+      update: {},
+      create: subGraph,
+    })
+  }
+  console.log('✅ 子图数据创建完成')
+
   // ==================== 创建用户 ====================
   const user = await prisma.user.upsert({
     where: { email: 'demo@example.com' },
@@ -422,13 +507,13 @@ async function main() {
 
   // 关联个股
   const stocks = [
-    { nodeId: subNodes[0].id, ticker: '600584', market: 'A', name: '长电科技', relevance: 0.95, role: 'direct' },
-    { nodeId: subNodes[0].id, ticker: '002156', market: 'A', name: '通富微电', relevance: 0.85, role: 'direct' },
-    { nodeId: subNodes[1].id, ticker: '002371', market: 'A', name: '北方华创', relevance: 0.9, role: 'direct' },
-    { nodeId: subNodes[1].id, ticker: '688012', market: 'A', name: '中微公司', relevance: 0.85, role: 'direct' },
-    { nodeId: subNodes[2].id, ticker: '300308', market: 'A', name: '中际旭创', relevance: 0.95, role: 'direct' },
-    { nodeId: subNodes[2].id, ticker: '300502', market: 'A', name: '新易盛', relevance: 0.9, role: 'direct' },
-    { nodeId: chainNodes[3].id, ticker: '002837', market: 'A', name: '英维克', relevance: 0.9, role: 'direct' },
+    { nodeId: subNodes[0].id, stockCode: '600584', stockName: '长电科技' },
+    { nodeId: subNodes[0].id, stockCode: '002156', stockName: '通富微电' },
+    { nodeId: subNodes[1].id, stockCode: '002371', stockName: '北方华创' },
+    { nodeId: subNodes[1].id, stockCode: '688012', stockName: '中微公司' },
+    { nodeId: subNodes[2].id, stockCode: '300308', stockName: '中际旭创' },
+    { nodeId: subNodes[2].id, stockCode: '300502', stockName: '新易盛' },
+    { nodeId: chainNodes[3].id, stockCode: '002837', stockName: '英维克' },
   ]
 
   for (const stock of stocks) {
