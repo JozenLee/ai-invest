@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from '@jest/globals'
 import { ScoreUpdaterService } from '../score-updater.service'
+import { prisma } from '@/lib/db/client'
 
 describe('ScoreUpdaterService', () => {
   let service: ScoreUpdaterService
@@ -13,7 +14,24 @@ describe('ScoreUpdaterService', () => {
       await service.updateNodeScore('test_node', 'manual')
 
       // Verify node was updated
-      // This is an integration test - needs real DB
+      const node = await prisma.graphNode.findUnique({
+        where: { id: 'test_node' },
+      })
+
+      expect(node).toBeDefined()
+      expect(node!.totalScore).toBeGreaterThan(0)
+      expect(node!.scoreComponents).toBeDefined()
+      expect(node!.trendIndicator).toBeDefined()
+      expect(node!.scoreUpdatedAt).toBeDefined()
+
+      // Verify NodeScoreHistory record was created
+      const history = await prisma.nodeScoreHistory.findFirst({
+        where: { nodeId: 'test_node' },
+        orderBy: { date: 'desc' },
+      })
+
+      expect(history).toBeDefined()
+      expect(history!.totalScore).toBe(node!.totalScore)
     })
 
     it('should only recalculate triggered dimension', async () => {
@@ -29,6 +47,18 @@ describe('ScoreUpdaterService', () => {
       await service.batchUpdateScores(nodeIds, 'market')
 
       // Verify all nodes updated
+      const nodes = await prisma.graphNode.findMany({
+        where: {
+          id: { in: nodeIds },
+        },
+      })
+
+      expect(nodes).toHaveLength(3)
+      nodes.forEach((node) => {
+        expect(node.totalScore).toBeGreaterThan(0)
+        expect(node.scoreComponents).toBeDefined()
+        expect(node.scoreUpdatedAt).toBeDefined()
+      })
     })
   })
 
@@ -43,6 +73,20 @@ describe('ScoreUpdaterService', () => {
       await service.saveScoreSnapshot('test_node', components)
 
       // Verify NodeScoreHistory record created
+      const history = await prisma.nodeScoreHistory.findFirst({
+        where: { nodeId: 'test_node' },
+        orderBy: { date: 'desc' },
+      })
+
+      expect(history).toBeDefined()
+      expect(history!.nodeId).toBe('test_node')
+      expect(history!.totalScore).toBe(50) // 25 + 15 + 10
+      expect(history!.components).toBeDefined()
+
+      const savedComponents = JSON.parse(history!.components)
+      expect(savedComponents.marketFundamental).toBe(25)
+      expect(savedComponents.newsSentiment).toBe(15)
+      expect(savedComponents.graphStructure).toBe(10)
     })
   })
 
