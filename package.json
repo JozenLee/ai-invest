@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit",
     "cleanup:news": "tsx scripts/cleanup-news.ts",
     "cron:news": "tsx scripts/fetch-news.ts",
-    "cron:cleanup": "tsx scripts/cleanup-news.ts"
+    "cron:cleanup": "tsx scripts/cleanup-news.ts",
+    "calc-scores": "tsx scripts/calculate-initial-scores.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
