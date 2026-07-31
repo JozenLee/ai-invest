@@ -63,6 +63,17 @@ curl -X POST http://localhost:3000/api/graph/extract \
 
 详见：[大V管理增强功能使用指南](./docs/INFLUENCER_ENHANCEMENT_GUIDE.md)
 
+## 评分系统 (Phase 1)
+
+跨行业知识图谱评分系统，覆盖10个热门行业方向：
+
+- **三维评分**: 市场基本面(50%) + 新闻舆情(30%) + 图谱结构(20%)
+- **增量更新**: 根据新闻、市场、结构变化自动更新
+- **Dashboard集成**: 热度TOP10、子图健康度可视化
+- **API接口**: 节点评分、排行榜、洞察数据
+
+详见 [评分系统使用指南](docs/scoring-system-usage.md)
+
 ## 文档
 
 - [项目说明](CLAUDE.md) - 项目概览和常用命令

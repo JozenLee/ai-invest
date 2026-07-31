@@ -7,8 +7,10 @@ from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime, timedelta
 
 from services.data_service import data_service
+from providers.etf_provider import ETFProvider
 
 router = APIRouter()
+etf_provider = ETFProvider()
 
 # MVP阶段的ETF池
 ETF_POOL = {
@@ -130,6 +132,40 @@ async def get_etf_detail(ticker: str):
                 "history": history,
             },
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{ticker}/holdings")
+async def get_etf_holdings(ticker: str):
+    """获取ETF持仓明细
+
+    注意：当前AKShare未提供ETF持仓明细的公开接口
+    建议使用定期报告或付费数据源获取持仓数据
+    """
+    try:
+        holdings = await etf_provider.get_holdings(ticker)
+
+        # 即使返回空列表，也是成功的（表示数据源不可用，而非错误）
+        return {
+            "success": True,
+            "data": holdings,
+            "message": "当前数据源暂不支持持仓明细查询，建议使用基金季报或付费API" if not holdings else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/{ticker}/info")
+async def get_etf_info(ticker: str):
+    """获取ETF基本信息"""
+    try:
+        info = await etf_provider.get_etf_info(ticker)
+        if not info:
+            raise HTTPException(status_code=404, detail=f"未找到ETF {ticker} 的基本信息")
+        return {"success": True, "data": info}
     except HTTPException:
         raise
     except Exception as e:
