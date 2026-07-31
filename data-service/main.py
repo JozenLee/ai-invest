@@ -46,14 +46,31 @@ async def lifespan(app: FastAPI):
     # 启动定时任务调度器
     await scheduler_service.start()
 
-    # 从数据库同步调度任务（启用 + 错误容错）
-    try:
-        sync_stats = await scheduler_service.sync_schedulers_from_database()
-        logger.info(f"✅ 调度任务同步成功: {sync_stats}")
-    except Exception as e:
-        # 记录错误但不阻塞服务启动，确保服务可用性
-        logger.error(f"⚠️ 调度任务同步失败，服务继续运行: {e}")
-        logger.error(f"可以稍后通过API手动触发采集任务")
+    # 从数据库同步调度任务（启用 + 错误容错 + 重试机制）
+    max_retries = 3
+    retry_delay = 1  # 秒
+
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"尝试同步调度任务 (第 {attempt + 1}/{max_retries} 次)...")
+            sync_stats = await scheduler_service.sync_schedulers_from_database()
+
+            if sync_stats['loaded'] > 0 or sync_stats['skipped'] > 0:
+                logger.info(f"✅ 调度任务同步成功: {sync_stats}")
+                break
+            else:
+                logger.warning(f"⚠️ 同步返回0个任务，可能数据库尚未就绪")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # 指数退避
+        except Exception as e:
+            logger.error(f"⚠️ 调度任务同步失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                # 最后一次失败后记录错误但不阻塞服务启动
+                logger.error(f"可以稍后通过API手动触发采集任务")
 
     # 注册财联社新闻采集任务（每小时执行一次）
     # DISABLED: 暂时禁用自动采集任务，避免AI API故障阻塞服务启动

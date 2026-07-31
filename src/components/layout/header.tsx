@@ -33,21 +33,7 @@ export function Header() {
   useEffect(() => {
     const segments = pathname.split('/').filter(Boolean)
 
-    // 检查是否是大V详情页 /events/influencers/[id]
-    if (segments.length === 3 && segments[0] === 'events' && segments[1] === 'influencers') {
-      const influencerId = segments[2]
-      // 检查是否为 ID 格式 (inf_ 开头或纯数字)
-      if (influencerId.startsWith('inf_') || /^\d+$/.test(influencerId)) {
-        fetch(`/api/influencers/${influencerId}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data?.name) {
-              setDynamicNames(prev => ({ ...prev, [influencerId]: data.name }))
-            }
-          })
-          .catch(err => console.error('Failed to fetch influencer name:', err))
-      }
-    }
+    // 可以在这里添加其他动态路由的名称加载逻辑
   }, [pathname])
 
   return (
@@ -140,7 +126,6 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
     feed: '资讯流',
     analysis: '事件分析',
     trends: '领域趋势',
-    influencers: '大V监控',
     graph: '知识图谱',
     explore: '图谱探索',
     propagation: '传导路径',
@@ -166,11 +151,6 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
   const domain = getDomainByCode(segment)
   if (domain) {
     return domain.name
-  }
-
-  // 如果是ID格式（inf_开头或纯数字），显示"详情"而不是ID
-  if (segment.startsWith('inf_') || /^\d+$/.test(segment)) {
-    return '详情'
   }
 
   // 默认返回原始segment

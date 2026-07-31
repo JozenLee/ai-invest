@@ -5,7 +5,9 @@
 from fastapi import APIRouter, HTTPException
 from datetime import datetime
 from typing import List, Dict, Any
+import logging
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["schedulers"])
 
 
@@ -64,6 +66,46 @@ async def get_scheduler_health():
             detail={
                 "success": False,
                 "error": "获取调度器状态失败",
+                "message": str(e)
+            }
+        )
+
+
+@router.post("/sync")
+async def sync_scheduler_jobs():
+    """
+    手动同步数据库中的调度任务
+    从数据库读取所有启用的SchedulerJob并注册到APScheduler
+
+    Returns:
+        同步结果统计
+    """
+    try:
+        from services.scheduler_service import scheduler_service
+
+        logger.info("开始手动同步调度任务...")
+
+        # 调用同步方法
+        stats = await scheduler_service.sync_schedulers_from_database()
+
+        logger.info(f"调度任务同步完成: {stats}")
+
+        return {
+            "success": True,
+            "data": {
+                "stats": stats,
+                "timestamp": datetime.now().isoformat()
+            },
+            "message": f"同步完成: 加载{stats['loaded']}个, 失败{stats['failed']}个, 跳过{stats['skipped']}个"
+        }
+
+    except Exception as e:
+        logger.error(f"同步调度任务失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "success": False,
+                "error": "同步调度任务失败",
                 "message": str(e)
             }
         )

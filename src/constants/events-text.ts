@@ -143,59 +143,6 @@ export const EVENTS_TEXT = {
     },
   },
 
-  // 大V监控页
-  influencers: {
-    title: '大V监控',
-    description: '跟踪意见领袖动态',
-    stats: {
-      totalInfluencers: '关注大V',
-      todayPosts: '今日动态',
-      platforms: '平台覆盖',
-      lastUpdate: '最新采集',
-    },
-    filter: {
-      searchPlaceholder: '搜索大V名称或简介...',
-      platformAll: '全部平台',
-      platformWeibo: '微博',
-      platformTwitter: '推特',
-      platformWechat: '微信公众号',
-      platformXueqiu: '雪球',
-      platformOther: '其他',
-      domainAll: '全部领域',
-      domainAI: 'AI芯片',
-      domainHardware: '智能硬件',
-      domainCloud: '云计算',
-      domainSemiconductor: '半导体',
-      domainOther: '其他',
-    },
-    card: {
-      followers: '粉丝',
-      posts: '动态',
-      avgSentiment: '平均情感',
-      lastPost: '最新发布',
-      domain: '领域',
-      influence: '影响力',
-      viewProfile: '查看主页',
-      viewPosts: '查看动态',
-      unfollow: '取消关注',
-    },
-    influence: {
-      high: '高影响力',
-      medium: '中等影响力',
-      low: '低影响力',
-    },
-    empty: {
-      title: '暂无关注的大V',
-      description: '还没有添加任何意见领袖',
-      action: '添加大V',
-    },
-    error: {
-      title: '数据加载失败',
-      description: '无法获取大V监控数据',
-      action: '重新加载',
-    },
-  },
-
   // 领域趋势页
   trends: {
     title: '领域趋势',
@@ -311,5 +258,4 @@ export type EventsTextKey = keyof typeof EVENTS_TEXT;
 export type CommonTextKey = keyof typeof EVENTS_TEXT.common;
 export type FeedTextKey = keyof typeof EVENTS_TEXT.feed;
 export type SourcesTextKey = keyof typeof EVENTS_TEXT.sources;
-export type InfluencersTextKey = keyof typeof EVENTS_TEXT.influencers;
 export type TrendsTextKey = keyof typeof EVENTS_TEXT.trends;

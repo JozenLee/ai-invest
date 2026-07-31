@@ -133,28 +133,3 @@ export interface DataSource {
   isActive: boolean
   lastFetchAt?: string
 }
-
-export interface Influencer {
-  id: string
-  name: string
-  platform: 'weibo' | 'bilibili' | 'xiaohongshu' | 'zhihu'
-  accountId: string
-  profileUrl?: string
-  avatarUrl?: string
-  category?: string
-  tags: string[]
-  isActive: boolean
-  postCount?: number
-  latestPostTime?: string
-}
-
-export interface InfluencerPost {
-  id: string
-  influencerId: string
-  content: string
-  originalUrl?: string
-  publishTime: string
-  sentiment?: number
-  extractedTopics: string[]
-  relatedDomains: string[]
-}

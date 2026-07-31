@@ -2,12 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
-import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity, Users } from 'lucide-react'
+import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react'
 import { TrendHeader } from '@/components/trends/TrendHeader'
 import { AIInsightSection } from '@/components/trends/AIInsightSection'
 import { RelatedDomainsSection } from '@/components/trends/RelatedDomainsSection'
 import { RelatedNewsSection } from '@/components/trends/RelatedNewsSection'
-import { KOLOpinionsSection } from '@/components/trends/KOLOpinionsSection'
 import { ContentSection } from '@/components/events/ContentSection'
 import { StatCardGrid } from '@/components/events/StatCardGrid'
 import { StatCard } from '@/components/events/StatCard'
@@ -260,10 +259,6 @@ export default function TrendDetailPage() {
           <TabsTrigger value="news">实时新闻</TabsTrigger>
           <TabsTrigger value="analysis">趋势分析</TabsTrigger>
           <TabsTrigger value="ai">AI解读</TabsTrigger>
-          <TabsTrigger value="kol">
-            <Users className="h-4 w-4 mr-1" />
-            大V观点
-          </TabsTrigger>
         </TabsList>
 
         {/* News Tab */}
@@ -283,11 +278,6 @@ export default function TrendDetailPage() {
             onGenerateAI={handleGenerateAI}
             isGenerating={isGeneratingAI}
           />
-        </TabsContent>
-
-        {/* KOL Opinions Tab */}
-        <TabsContent value="kol" className="mt-6">
-          <KOLOpinionsSection domain={domain} />
         </TabsContent>
       </Tabs>
     </div>

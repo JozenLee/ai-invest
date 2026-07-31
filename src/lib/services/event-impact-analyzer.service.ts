@@ -282,7 +282,7 @@ export class EventImpactAnalyzerService {
     }
 
     // 组装结果
-    return evaluations.map((eval: any, index: number) => {
+    return evaluations.map((evaluation: any, index: number) => {
       const originalPath = paths[index]
       const finalNodeId = originalPath.path[originalPath.path.length - 1]
       const finalNode = nodeMap.get(finalNodeId)
@@ -297,9 +297,9 @@ export class EventImpactAnalyzerService {
         finalImpact: {
           nodeId: finalNodeId,
           nodeName: finalNode?.name || 'Unknown',
-          impactScore: eval.impactScore || 0,
-          confidence: eval.confidence || 0.5,
-          reasoning: eval.reasoning || ''
+          impactScore: evaluation.impactScore || 0,
+          confidence: evaluation.confidence || 0.5,
+          reasoning: evaluation.reasoning || ''
         }
       }
     })

@@ -27,7 +27,6 @@ const navigation = [
     children: [
       { name: '资讯流', href: '/events/feed' },
       { name: '领域趋势', href: '/events/trends' },
-      { name: '大V监控', href: '/events/influencers' },
       { name: '数据源', href: '/events/sources' },
     ],
   },

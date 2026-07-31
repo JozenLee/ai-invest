@@ -165,7 +165,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
       console.warn('[MarketContext] 数据获取失败:', errorMessage)
 
       // Silent fail on timeout - don't show error to user
-      // Market data is not critical for all pages (e.g., influencer management)
+      // Market data is not critical for all pages
       if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
         console.warn('[MarketContext] 请求超时，将在下次刷新时重试')
         // Don't set error - fail silently
