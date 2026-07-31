@@ -31,7 +31,7 @@ export class ScoreCalculatorService {
       },
     })
 
-    // Baseline 20-30 range, modulated by connectivity
+    // Baseline 25-30 range, modulated by connectivity
     const baseline = 25
     const connectivityBonus = Math.min(edgeCount, 10) * 0.5
 
