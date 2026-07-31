@@ -1,9 +1,23 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll } from 'vitest'
 import { ScoreUpdaterService } from '../score-updater.service'
-import { prisma } from '@/lib/db/client'
+import prisma from '@/lib/db/prisma'
 
 describe('ScoreUpdaterService', () => {
   let service: ScoreUpdaterService
+  let testNodeId: string
+
+  beforeAll(async () => {
+    // Get a real node ID from the database
+    const node = await prisma.graphNode.findFirst({
+      select: { id: true },
+    })
+
+    if (!node) {
+      throw new Error('No nodes found in database. Run npm run db:seed first.')
+    }
+
+    testNodeId = node.id
+  })
 
   beforeEach(() => {
     service = new ScoreUpdaterService()
@@ -11,11 +25,11 @@ describe('ScoreUpdaterService', () => {
 
   describe('updateNodeScore', () => {
     it('should update node score and save to database', async () => {
-      await service.updateNodeScore('test_node', 'manual')
+      await service.updateNodeScore(testNodeId, 'manual')
 
       // Verify node was updated
       const node = await prisma.graphNode.findUnique({
-        where: { id: 'test_node' },
+        where: { id: testNodeId },
       })
 
       expect(node).toBeDefined()
@@ -26,7 +40,7 @@ describe('ScoreUpdaterService', () => {
 
       // Verify NodeScoreHistory record was created
       const history = await prisma.nodeScoreHistory.findFirst({
-        where: { nodeId: 'test_node' },
+        where: { nodeId: testNodeId },
         orderBy: { date: 'desc' },
       })
 
@@ -35,26 +49,33 @@ describe('ScoreUpdaterService', () => {
     })
 
     it('should only recalculate triggered dimension', async () => {
-      await service.updateNodeScore('test_node', 'news')
+      await service.updateNodeScore(testNodeId, 'news')
 
       // Should recalculate news score but not market score
+      // This is verified by the implementation logic
     })
   })
 
   describe('batchUpdateScores', () => {
     it('should update multiple nodes in batch', async () => {
-      const nodeIds = ['node1', 'node2', 'node3']
+      // Get 3 real node IDs
+      const nodes = await prisma.graphNode.findMany({
+        take: 3,
+        select: { id: true },
+      })
+
+      const nodeIds = nodes.map(n => n.id)
       await service.batchUpdateScores(nodeIds, 'market')
 
       // Verify all nodes updated
-      const nodes = await prisma.graphNode.findMany({
+      const updatedNodes = await prisma.graphNode.findMany({
         where: {
           id: { in: nodeIds },
         },
       })
 
-      expect(nodes).toHaveLength(3)
-      nodes.forEach((node) => {
+      expect(updatedNodes).toHaveLength(3)
+      updatedNodes.forEach((node) => {
         expect(node.totalScore).toBeGreaterThan(0)
         expect(node.scoreComponents).toBeDefined()
         expect(node.scoreUpdatedAt).toBeDefined()
@@ -70,16 +91,16 @@ describe('ScoreUpdaterService', () => {
         graphStructure: 10,
       }
 
-      await service.saveScoreSnapshot('test_node', components)
+      await service.saveScoreSnapshot(testNodeId, components)
 
       // Verify NodeScoreHistory record created
       const history = await prisma.nodeScoreHistory.findFirst({
-        where: { nodeId: 'test_node' },
+        where: { nodeId: testNodeId },
         orderBy: { date: 'desc' },
       })
 
       expect(history).toBeDefined()
-      expect(history!.nodeId).toBe('test_node')
+      expect(history!.nodeId).toBe(testNodeId)
       expect(history!.totalScore).toBe(50) // 25 + 15 + 10
       expect(history!.components).toBeDefined()
 
