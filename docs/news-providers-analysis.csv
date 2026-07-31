@@ -1,8 +1,0 @@
-provider,has_get_news,is_implemented,api_available,test_success,sample_count,error,status,notes
-AKShare,True,True,True,True,10,,✅ 可用,成功获取10条数据，缺少字段: ['来源']
-雪球,True,True,True,True,3,,✅ 可用,成功获取3条数据
-新浪,True,False,False,False,0,,❌ 不支持,方法未实现（抛NotImplementedError）
-Tushare,True,False,False,False,0,,❌ 不支持,方法未实现（抛NotImplementedError）
-微博,False,False,False,False,0,,❌ 不支持,未实现get_news方法，仅支持fetch_user_posts
-B站,False,False,False,False,0,,❌ 不支持,未实现get_news方法，仅支持fetch_user_videos
-小红书,False,False,False,False,0,,❌ 不支持,未实现get_news方法，仅支持fetch_user_notes

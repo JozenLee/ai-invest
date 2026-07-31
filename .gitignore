@@ -46,10 +46,32 @@ next-env.d.ts
 
 # database
 *.db
+*.db-journal
 
 # python data service
 data-service/.next/
 data-service/.cache/
 data-service/__pycache__/
+*.pid
+*.log
+
+# temporary and test files
+test-*.py
+test_*.py
+debug-*.py
+debug_*.py
+configure-*.py
+*.tmp
+
+# IDE and system files
+.vscode/
+.idea/
+.DS_Store
+
+# temporary directories
+.agents/
+.superpowers/
+.cache/
+.env-backups/
 
 /src/generated/prisma
