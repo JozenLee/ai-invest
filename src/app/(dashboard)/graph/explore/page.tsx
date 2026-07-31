@@ -226,6 +226,13 @@ export default function GraphExplorePage() {
     fetchGraph()
   }, [fetchGraph])
 
+  // ---------- 初始化默认视图 ----------
+  useEffect(() => {
+    // Load the initial view settings
+    handleViewChange(currentView)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // ---------- 响应式宽度（仅跟踪宽度，高度固定，避免 ResizeObserver 循环） ----------
   useEffect(() => {
     const el = graphAreaRef.current
