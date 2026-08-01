@@ -178,6 +178,89 @@ model MarketCapitalFlow {
   blockTradeCount Int      // 大宗交易笔数
 }
 
+// ==================== 统一标签体系 ====================
+
+model Tag {
+  id          String   @id @default(cuid())
+  name        String   // 标签名称（如：AI算力、GPU、英伟达）
+  code        String   @unique // 英文代码
+  type        String   // domain/tech/company/concept
+  level       Int      // 层级：1=一级领域，2=二级细分，3=三级技术，4=公司/概念
+  parentId    String?  // 父标签ID
+  description String?
+  keywords    String?  // JSON: 关键词用于AI匹配
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  parent      Tag?     @relation("TagTree", fields: [parentId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  children    Tag[]    @relation("TagTree")
+
+  newsArticles NewsArticleTag[]
+  graphNodes   GraphNodeTag[]
+  domains      DomainTag[]
+
+  @@index([parentId])
+  @@index([type, level])
+  @@index([isActive, sortOrder])
+}
+
+model NewsArticleTag {
+  newsId     String
+  tagId      String
+  confidence Float    @default(1.0) // AI分类置信度
+  createdAt  DateTime @default(now())
+
+  news NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  tag  Tag         @relation(fields: [tagId], references: [id])
+
+  @@id([newsId, tagId])
+  @@index([tagId, createdAt])
+}
+
+model GraphNodeTag {
+  nodeId    String
+  tagId     String
+  relevance Float    @default(1.0) // 相关度
+  createdAt DateTime @default(now())
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  tag  Tag       @relation(fields: [tagId], references: [id])
+
+  @@id([nodeId, tagId])
+  @@index([tagId])
+}
+
+model DomainTag {
+  domainId String
+  tagId    String
+
+  domain Domain @relation(fields: [domainId], references: [id])
+  tag    Tag    @relation(fields: [tagId], references: [id])
+
+  @@id([domainId, tagId])
+}
+
+model GraphNodeETF {
+  id          String   @id @default(cuid())
+  nodeId      String
+  etfCode     String   // ETF代码（如：515790）
+  etfName     String   // ETF名称
+  bindType    String   @default("tracking") // tracking=跟踪型, thematic=主题型
+  weight      Float    @default(1.0) // 权重/相关度
+  description String?  // 绑定说明
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, etfCode])
+  @@index([etfCode])
+  @@index([nodeId])
+}
+
 // ==================== 事件与资讯 ====================
 
 model NewsCategory {
@@ -208,6 +291,7 @@ model Domain {
 
   articles     NewsArticle[]
   influencers  DomainInfluencer[]
+  tags         DomainTag[]
 }
 
 model DataSource {
@@ -283,6 +367,7 @@ model NewsArticle {
   domain      Domain?       @relation(fields: [domainId], references: [id])
   sourceRef   DataSource?   @relation(fields: [sourceId], references: [id])
   graphLinks  NewsGraphLink[]
+  tags        NewsArticleTag[]
 
   @@index([publishTime])
   @@index([category])
@@ -595,6 +680,8 @@ model GraphNode {
   newsLinks   NewsGraphLink[]
   scoreHistory     NodeScoreHistory[]
   signals          InvestmentSignal[]
+  tags         GraphNodeTag[]
+  etfBindings  GraphNodeETF[]
 
   @@index([type])
   @@index([parentId])
