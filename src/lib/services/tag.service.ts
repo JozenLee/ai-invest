@@ -98,7 +98,7 @@ export class TagService {
       throw new Error(`Tag code already exists: ${data.code}`)
     }
 
-    return prisma.tag.create({
+    const tag = await prisma.tag.create({
       data: {
         name: data.name,
         code: data.code,
@@ -111,6 +111,12 @@ export class TagService {
         isActive: true
       }
     })
+
+    // 清除缓存
+    const { tagCacheService } = await import('./tag-cache.service')
+    await tagCacheService.invalidateTagCache()
+
+    return tag
   }
 
   /**
@@ -122,10 +128,16 @@ export class TagService {
       throw new Error(`Tag not found: ${id}`)
     }
 
-    return prisma.tag.update({
+    const tag = await prisma.tag.update({
       where: { id },
       data
     })
+
+    // 清除缓存
+    const { tagCacheService } = await import('./tag-cache.service')
+    await tagCacheService.invalidateTagCache()
+
+    return tag
   }
 
   /**
@@ -150,6 +162,10 @@ export class TagService {
       where: { id },
       data: { isActive: false }
     })
+
+    // 清除缓存
+    const { tagCacheService } = await import('./tag-cache.service')
+    await tagCacheService.invalidateTagCache()
   }
 
   /**
