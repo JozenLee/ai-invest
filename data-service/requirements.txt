@@ -28,3 +28,6 @@ prisma>=0.13.0
 
 # SSE推送
 sse-starlette>=1.6.0
+
+# 知识图谱
+neo4j>=5.15.0
