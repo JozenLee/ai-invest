@@ -29,23 +29,23 @@ model User {
 model UserSetting {
   id            String @id @default(cuid())
   userId        String @unique
-  riskProfile   String @default("moderate")    // conservative/moderate/aggressive
-  investHorizon String @default("medium")      // short/medium/long
+  riskProfile   String @default("moderate") // conservative/moderate/aggressive
+  investHorizon String @default("medium") // short/medium/long
   totalAssets   Float  @default(0)
   cashRatio     Float  @default(0.2)
   user          User   @relation(fields: [userId], references: [id])
 }
 
 model UserPreferences {
-  id                  String   @id @default(cuid())
-  userId              String?  @unique
+  id     String  @id @default(cuid())
+  userId String? @unique
 
-  showEstimatedData   Boolean  @default(true)
+  showEstimatedData    Boolean @default(true)
   showDataQualityBadge Boolean @default(true)
-  autoRefreshInterval Int      @default(300000)
+  autoRefreshInterval  Int     @default(300000)
 
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("user_preferences")
 }
@@ -53,12 +53,12 @@ model UserPreferences {
 // ==================== 投资组合 ====================
 
 model Portfolio {
-  id        String    @id @default(cuid())
+  id        String   @id @default(cuid())
   userId    String
   name      String
-  isDefault Boolean   @default(false)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user     User      @relation(fields: [userId], references: [id])
   holdings Holding[]
@@ -67,12 +67,12 @@ model Portfolio {
 model Holding {
   id           String   @id @default(cuid())
   portfolioId  String
-  ticker       String   // ETF代码
-  market       String   // A（MVP仅支持A股ETF）
-  name         String   // ETF名称
-  quantity     Int      // 持有份额
-  avgCost      Float    // 平均成本
-  currentPrice Float?   // 当前价格(缓存)
+  ticker       String // ETF代码
+  market       String // A（MVP仅支持A股ETF）
+  name         String // ETF名称
+  quantity     Int // 持有份额
+  avgCost      Float // 平均成本
+  currentPrice Float? // 当前价格(缓存)
   updatedAt    DateTime @updatedAt
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id])
@@ -90,23 +90,23 @@ model StockDaily {
   low    Float
   close  Float
   volume BigInt
-  amount Float?   // 成交额
+  amount Float? // 成交额
 
   @@unique([ticker, date])
   @@index([ticker, date])
 }
 
 model IndexDaily {
-  id       String   @id @default(cuid())
-  code     String   // 指数代码
-  name     String
-  date     DateTime
-  open     Float
-  high     Float
-  low      Float
-  close    Float
-  volume   BigInt
-  changePct Float?  // 涨跌幅
+  id        String   @id @default(cuid())
+  code      String // 指数代码
+  name      String
+  date      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    BigInt
+  changePct Float? // 涨跌幅
 
   @@unique([code, date])
 }
@@ -115,7 +115,7 @@ model IndexDaily {
 
 model ETFDaily {
   id      String   @id @default(cuid())
-  ticker  String   // ETF代码
+  ticker  String // ETF代码
   name    String
   date    DateTime
   open    Float
@@ -123,10 +123,10 @@ model ETFDaily {
   low     Float
   close   Float
   volume  BigInt
-  amount  Float?   // 成交额
-  nav     Float?   // 净值
-  shares  BigInt?  // 份额（万份）
-  premium Float?   // 溢折价率（%）
+  amount  Float? // 成交额
+  nav     Float? // 净值
+  shares  BigInt? // 份额（万份）
+  premium Float? // 溢折价率（%）
 
   @@unique([ticker, date])
   @@index([ticker, date])
@@ -134,12 +134,12 @@ model ETFDaily {
 
 model ETFHolding {
   id          String   @id @default(cuid())
-  etfCode     String   // ETF代码
-  stockCode   String   // 股票代码
-  stockName   String   // 股票名称
-  weight      Float    // 持仓权重 (%)
-  shares      BigInt?  // 持有股数
-  marketValue Float?   // 市值(万元)
+  etfCode     String // ETF代码
+  stockCode   String // 股票代码
+  stockName   String // 股票名称
+  weight      Float // 持仓权重 (%)
+  shares      BigInt? // 持有股数
+  marketValue Float? // 市值(万元)
   updateDate  DateTime @default(now())
 
   @@unique([etfCode, stockCode])
@@ -151,13 +151,13 @@ model ETFHolding {
 model SectorCapitalFlow {
   id              String   @id @default(cuid())
   date            DateTime
-  sector          String   // 板块名称
-  sectorLevel     String   // L1/L2/sub
-  mainForceNet    Float    // 主力净流入（万元）
-  retailNet       Float    // 散户净流入（万元）
-  totalVolume     Float    // 总成交额
-  changePct       Float?   // 涨跌幅
-  consecutiveDays Int?     // 连续流入/流出天数
+  sector          String // 板块名称
+  sectorLevel     String // L1/L2/sub
+  mainForceNet    Float // 主力净流入（万元）
+  retailNet       Float // 散户净流入（万元）
+  totalVolume     Float // 总成交额
+  changePct       Float? // 涨跌幅
+  consecutiveDays Int? // 连续流入/流出天数
 
   @@unique([date, sector])
   @@index([date])
@@ -168,34 +168,34 @@ model SectorCapitalFlow {
 model MarketCapitalFlow {
   id              String   @id @default(cuid())
   date            DateTime @unique
-  totalMainNet    Float    // 沪深两市主力净流入（亿元）
-  retailNet       Float    // 散户净流入（亿元）
-  sentiment       Float    // 资金情绪指数 -100~+100
-  turnoverRate    Float?   // 全市场换手率
-  northboundNet   Float    // 北向净买入（亿元）
-  marginBalance   Float    // 融资余额（亿元）
-  marginChange    Float    // 融资余额变化（亿元）
-  blockTradeCount Int      // 大宗交易笔数
+  totalMainNet    Float // 沪深两市主力净流入（亿元）
+  retailNet       Float // 散户净流入（亿元）
+  sentiment       Float // 资金情绪指数 -100~+100
+  turnoverRate    Float? // 全市场换手率
+  northboundNet   Float // 北向净买入（亿元）
+  marginBalance   Float // 融资余额（亿元）
+  marginChange    Float // 融资余额变化（亿元）
+  blockTradeCount Int // 大宗交易笔数
 }
 
 // ==================== 统一标签体系 ====================
 
 model Tag {
   id          String   @id @default(cuid())
-  name        String   // 标签名称（如：AI算力、GPU、英伟达）
+  name        String // 标签名称（如：AI算力、GPU、英伟达）
   code        String   @unique // 英文代码
-  type        String   // domain/tech/company/concept
-  level       Int      // 层级：1=一级领域，2=二级细分，3=三级技术，4=公司/概念
-  parentId    String?  // 父标签ID
+  type        String // domain/tech/company/concept
+  level       Int // 层级：1=一级领域，2=二级细分，3=三级技术，4=公司/概念
+  parentId    String? // 父标签ID
   description String?
-  keywords    String?  // JSON: 关键词用于AI匹配
+  keywords    String? // JSON: 关键词用于AI匹配
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  parent      Tag?     @relation("TagTree", fields: [parentId], references: [id], onUpdate: NoAction, onDelete: NoAction)
-  children    Tag[]    @relation("TagTree")
+  parent   Tag?  @relation("TagTree", fields: [parentId], references: [id], onUpdate: NoAction, onDelete: NoAction)
+  children Tag[] @relation("TagTree")
 
   newsArticles NewsArticleTag[]
   graphNodes   GraphNodeTag[]
@@ -245,11 +245,11 @@ model DomainTag {
 model GraphNodeETF {
   id          String   @id @default(cuid())
   nodeId      String
-  etfCode     String   // ETF代码（如：515790）
-  etfName     String   // ETF名称
+  etfCode     String // ETF代码（如：515790）
+  etfName     String // ETF名称
   bindType    String   @default("tracking") // tracking=跟踪型, thematic=主题型
   weight      Float    @default(1.0) // 权重/相关度
-  description String?  // 绑定说明
+  description String? // 绑定说明
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -265,9 +265,9 @@ model GraphNodeETF {
 
 model NewsCategory {
   id        String   @id @default(cuid())
-  name      String   // 中文名称（如：科技、政治）
+  name      String // 中文名称（如：科技、政治）
   code      String   @unique // 英文代码（如：tech、politics）
-  parentId  String?  // 父分类ID，null为一级分类
+  parentId  String? // 父分类ID，null为一级分类
   sortOrder Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -281,35 +281,35 @@ model NewsCategory {
 
 model Domain {
   id          String   @id @default(cuid())
-  name        String   // 领域名称（如：AI算力、新能源、医药）
+  name        String // 领域名称（如：AI算力、新能源、医药）
   code        String   @unique // 英文代码
   description String?
-  keywords    String?  // JSON: 关键词列表
-  graphNodes  String?  // JSON: 关联的知识图谱节点ID
+  keywords    String? // JSON: 关键词列表
+  graphNodes  String? // JSON: 关联的知识图谱节点ID
   isActive    Boolean  @default(true)
   createdAt   DateTime @default(now())
 
-  articles     NewsArticle[]
-  influencers  DomainInfluencer[]
-  tags         DomainTag[]
+  articles    NewsArticle[]
+  influencers DomainInfluencer[]
+  tags        DomainTag[]
 }
 
 model DataSource {
-  id              String   @id @default(cuid())
-  name            String   // 数据源名称
-  type            String   // 类型：financial/social/video/custom
-  driverType      String   @default("api") // 驱动类型：api/crawler/rss/social
-  provider        String   // 提供商标识
-  category        String   @default("综合财经媒体") // 数据源分类
-  config          String   // JSON: 配置信息（URL、API key等）
-  configSchema    String?  // JSON Schema: 用于UI动态生成表单
-  updateFrequency Int      @default(60) // 更新频率（分钟）
-  isActive        Boolean  @default(true)
+  id              String    @id @default(cuid())
+  name            String // 数据源名称
+  type            String // 类型：financial/social/video/custom
+  driverType      String    @default("api") // 驱动类型：api/crawler/rss/social
+  provider        String // 提供商标识
+  category        String    @default("综合财经媒体") // 数据源分类
+  config          String // JSON: 配置信息（URL、API key等）
+  configSchema    String? // JSON Schema: 用于UI动态生成表单
+  updateFrequency Int       @default(60) // 更新频率（分钟）
+  isActive        Boolean   @default(true)
   lastFetchAt     DateTime?
-  lastFetchStatus String?  // 最后采集状态：success/failed/running
-  errorMessage    String?  // 最后错误信息
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @default(now()) @updatedAt
+  lastFetchStatus String? // 最后采集状态：success/failed/running
+  errorMessage    String? // 最后错误信息
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
 
   articles      NewsArticle[]
   logs          DataSourceLog[]
@@ -319,14 +319,14 @@ model DataSource {
 model DataSourceLog {
   id             String   @id @default(cuid())
   sourceId       String
-  jobId          String?  // 关联调度任务ID
-  status         String   // success/failed/running
+  jobId          String? // 关联调度任务ID
+  status         String // success/failed/running
   message        String?
   fetchedCount   Int      @default(0)
   processedCount Int      @default(0) // AI处理成功数量
   failedCount    Int      @default(0) // 处理失败数量
-  duration       Int?     // 耗时（毫秒）
-  errorDetail    String?  // 详细错误信息
+  duration       Int? // 耗时（毫秒）
+  errorDetail    String? // 详细错误信息
   createdAt      DateTime @default(now())
 
   source DataSource @relation(fields: [sourceId], references: [id])
@@ -340,32 +340,32 @@ model NewsArticle {
   id                  String    @id @default(cuid())
   title               String
   content             String
-  summary             String?   // AI生成摘要
+  summary             String? // AI生成摘要
   source              String
   url                 String?   @unique
   publishTime         DateTime
-  category            String    // 保留旧字段兼容，后续迁移
-  categoryId          String?   // 关联新分类表
+  category            String // 保留旧字段兼容，后续迁移
+  categoryId          String? // 关联新分类表
   categoryConfidence  Float?    @default(0) // 分类置信度
-  domainId            String?   // 关联领域
-  domainIds           String?   // JSON: 多领域支持
-  sourceId            String?   // 关联数据源
-  sentiment           Float?    // -1 ~ +1
-  sentimentLabel      String?   // bullish/neutral/bearish
+  domainId            String? // 关联领域
+  domainIds           String? // JSON: 多领域支持
+  sourceId            String? // 关联数据源
+  sentiment           Float? // -1 ~ +1
+  sentimentLabel      String? // bullish/neutral/bearish
   sentimentConfidence Float?    @default(0) // 情感置信度
-  impact              Int?      // 1~5
-  entities            String?   // JSON: 关联实体
-  keywords            String?   // JSON: 提取的关键词
-  sectors             String?   // JSON: 关联板块
+  impact              Int? // 1~5
+  entities            String? // JSON: 关联实体
+  keywords            String? // JSON: 提取的关键词
+  sectors             String? // JSON: 关联板块
   aiProcessed         Boolean   @default(false) // 是否已AI处理
   aiProcessedAt       DateTime? // AI处理时间
-  aiError             String?   // AI处理错误
+  aiError             String? // AI处理错误
   expiresAt           DateTime? // 过期时间
   createdAt           DateTime  @default(now())
 
-  categoryRef NewsCategory? @relation(fields: [categoryId], references: [id])
-  domain      Domain?       @relation(fields: [domainId], references: [id])
-  sourceRef   DataSource?   @relation(fields: [sourceId], references: [id])
+  categoryRef NewsCategory?    @relation(fields: [categoryId], references: [id])
+  domain      Domain?          @relation(fields: [domainId], references: [id])
+  sourceRef   DataSource?      @relation(fields: [sourceId], references: [id])
   graphLinks  NewsGraphLink[]
   tags        NewsArticleTag[]
 
@@ -383,9 +383,9 @@ model NewsArticle {
 
 model SchedulerJob {
   id             String    @id @default(cuid())
-  sourceId       String    // 关联数据源
-  scheduleType   String    // cron/interval/webhook
-  scheduleConfig String    // JSON: 调度配置 (cron表达式、interval分钟数等)
+  sourceId       String // 关联数据源
+  scheduleType   String // cron/interval/webhook
+  scheduleConfig String // JSON: 调度配置 (cron表达式、interval分钟数等)
   isEnabled      Boolean   @default(true)
   lastRunAt      DateTime?
   nextRunAt      DateTime?
@@ -402,9 +402,9 @@ model SchedulerJob {
 
 model FilterRule {
   id          String   @id @default(cuid())
-  name        String   // 规则名称
-  description String?  // 规则描述
-  config      String   // JSON: 筛选配置
+  name        String // 规则名称
+  description String? // 规则描述
+  config      String // JSON: 筛选配置
   isActive    Boolean  @default(true)
   priority    Int      @default(0) // 优先级，数值越大优先级越高
   createdAt   DateTime @default(now())
@@ -415,10 +415,10 @@ model FilterRule {
 
 model StorageConfig {
   id               String    @id @default(cuid())
-  retentionDays    Int       @default(7)    // 数据保留天数
+  retentionDays    Int       @default(7) // 数据保留天数
   maxArticles      Int       @default(10000) // 最大文章数
   archiveEnabled   Boolean   @default(false) // 是否启用归档
-  archiveAfterDays Int       @default(30)    // 归档天数
+  archiveAfterDays Int       @default(30) // 归档天数
   cleanupSchedule  String    @default("0 2 * * *") // 清理调度Cron表达式
   lastCleanupAt    DateTime? // 最后清理时间
   createdAt        DateTime  @default(now())
@@ -428,30 +428,30 @@ model StorageConfig {
 // ==================== 大V监控 ====================
 
 model Influencer {
-  id           String   @id @default(cuid())
-  name         String
-  platform     String
-  accountId    String
-  profileUrl   String?
-  avatarUrl    String?
-  category     String?
-  tags         String?
-  priority     String   @default("medium")
-  fetchInterval Int     @default(60)
-  driverType   String   @default("api")
-  providerConfig String?
-  isActive     Boolean  @default(true)
-  lastFetchAt  DateTime?
+  id              String    @id @default(cuid())
+  name            String
+  platform        String
+  accountId       String
+  profileUrl      String?
+  avatarUrl       String?
+  category        String?
+  tags            String?
+  priority        String    @default("medium")
+  fetchInterval   Int       @default(60)
+  driverType      String    @default("api")
+  providerConfig  String?
+  isActive        Boolean   @default(true)
+  lastFetchAt     DateTime?
   lastFetchStatus String?
-  lastFetchError String?
+  lastFetchError  String?
 
   // 调度配置字段
-  scheduleType      String   @default("polling")
+  scheduleType      String  @default("polling")
   dailyFetchTimes   String?
-  dataRetentionDays Int      @default(30)
+  dataRetentionDays Int     @default(30)
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   posts   InfluencerPost[]
   domains DomainInfluencer[]
@@ -462,42 +462,42 @@ model Influencer {
 }
 
 model InfluencerPost {
-  id              String    @id @default(cuid())
-  influencerId    String
-  content         String
-  originalUrl     String?
-  publishTime     DateTime
-  mediaType       String    @default("text")
-  mediaUrls       String?
-  engagement      String?
+  id           String   @id @default(cuid())
+  influencerId String
+  content      String
+  originalUrl  String?
+  publishTime  DateTime
+  mediaType    String   @default("text")
+  mediaUrls    String?
+  engagement   String?
 
-  aiProcessed     Boolean   @default(false)
-  aiProcessedAt   DateTime?
-  aiError         String?
+  aiProcessed   Boolean   @default(false)
+  aiProcessedAt DateTime?
+  aiError       String?
 
-  opinionSummary  String?
-  opinionStance   String?
+  opinionSummary    String?
+  opinionStance     String?
   opinionConfidence Float?  @default(0)
-  mainPoints      String?
+  mainPoints        String?
 
-  arguments       String?
-  credibilityScore Float?   @default(0)
+  arguments        String?
+  credibilityScore Float?  @default(0)
 
-  primaryDomain   String?
+  primaryDomain    String?
   secondaryDomains String?
-  domainScores    String?
+  domainScores     String?
 
-  sentiment       Float?
+  sentiment        Float?
   sentimentAspects String?
 
-  risks           String?
+  risks                  String?
   investmentImplications String?
 
   consistencyChecked Boolean @default(false)
   consistencyData    String?
 
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   influencer Influencer @relation(fields: [influencerId], references: [id], onDelete: Cascade)
 
@@ -516,7 +516,7 @@ model InfluencerPost {
 model DomainInfluencer {
   domainId     String
   influencerId String
-  relevance    Float @default(1.0)
+  relevance    Float  @default(1.0)
 
   domain     Domain     @relation(fields: [domainId], references: [id])
   influencer Influencer @relation(fields: [influencerId], references: [id])
@@ -528,83 +528,83 @@ model DomainInfluencer {
 
 // 小红书动态扩展
 model XiaohongshuPostExtra {
-  id            String   @id @default(cuid())
-  postId        String   @unique
-  noteType      String   // 'image' | 'video'
-  tags          String   // JSON array
-  collects      Int      @default(0)
-  hasGoodsLink  Boolean  @default(false)
-  topicIds      String?  // JSON array
+  id           String  @id @default(cuid())
+  postId       String  @unique
+  noteType     String // 'image' | 'video'
+  tags         String // JSON array
+  collects     Int     @default(0)
+  hasGoodsLink Boolean @default(false)
+  topicIds     String? // JSON array
 
-  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  post      InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([postId])
 }
 
 // 知乎内容扩展
 model ZhihuPostExtra {
-  id            String   @id @default(cuid())
-  postId        String   @unique
-  contentType   String   // 'answer' | 'article' | 'pin' | 'video'
+  id            String  @id @default(cuid())
+  postId        String  @unique
+  contentType   String // 'answer' | 'article' | 'pin' | 'video'
   questionId    String?
   questionTitle String?
-  voteupCount   Int      @default(0)
-  votedownCount Int      @default(0)
-  isFeatured    Boolean  @default(false)
+  voteupCount   Int     @default(0)
+  votedownCount Int     @default(0)
+  isFeatured    Boolean @default(false)
 
-  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  post      InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([postId])
 }
 
 // 抖音视频扩展
 model DouyinPostExtra {
-  id            String   @id @default(cuid())
-  postId        String   @unique
-  videoDuration Int      // 秒
+  id            String  @id @default(cuid())
+  postId        String  @unique
+  videoDuration Int // 秒
   musicId       String?
   musicTitle    String?
   musicAuthor   String?
-  challengeTags String?  // JSON array
-  isAd          Boolean  @default(false)
+  challengeTags String? // JSON array
+  isAd          Boolean @default(false)
 
-  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  post      InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([postId])
 }
 
 // 支付宝生活号文章扩展
 model AlipayPostExtra {
-  id            String   @id @default(cuid())
-  postId        String   @unique
-  articleType   String   // 'news' | 'service' | 'promotion'
-  category      String?
-  serviceId     String?  // 关联的服务ID
-  hasService    Boolean  @default(false)
+  id          String  @id @default(cuid())
+  postId      String  @unique
+  articleType String // 'news' | 'service' | 'promotion'
+  category    String?
+  serviceId   String? // 关联的服务ID
+  hasService  Boolean @default(false)
 
-  post          InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  post      InfluencerPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
 
   @@index([postId])
 }
 
 model InfluencerFetchLog {
-  id             String   @id @default(cuid())
-  influencerId   String
-  platform       String
-  status         String
-  postsFetched   Int      @default(0)
-  postsNew       Int      @default(0)
-  durationMs     Int
-  errorMessage   String?
-  createdAt      DateTime @default(now())
+  id           String   @id @default(cuid())
+  influencerId String
+  platform     String
+  status       String
+  postsFetched Int      @default(0)
+  postsNew     Int      @default(0)
+  durationMs   Int
+  errorMessage String?
+  createdAt    DateTime @default(now())
 
   @@index([influencerId])
   @@index([createdAt])
@@ -612,14 +612,14 @@ model InfluencerFetchLog {
 }
 
 model InfluencerAnalysisLog {
-  id             String   @id @default(cuid())
-  postId         String
-  influencerId   String
-  status         String
-  durationMs     Int
-  tokensUsed     Int      @default(0)
-  errorMessage   String?
-  createdAt      DateTime @default(now())
+  id           String   @id @default(cuid())
+  postId       String
+  influencerId String
+  status       String
+  durationMs   Int
+  tokensUsed   Int      @default(0)
+  errorMessage String?
+  createdAt    DateTime @default(now())
 
   @@index([postId])
   @@index([createdAt])
@@ -627,16 +627,16 @@ model InfluencerAnalysisLog {
 
 // Platform configuration for influencer providers
 model PlatformConfig {
-  id             String   @id @default(cuid())
-  platform       String   @unique  // bilibili/weibo/douyin/xiaohongshu
-  displayName    String             // 平台显示名称
-  configData     String             // JSON: 平台配置数据（cookies等）
-  isActive       Boolean  @default(true)
-  lastUpdatedAt  DateTime @default(now())
-  expiresAt      DateTime?          // Cookie过期时间
-  autoRefresh    Boolean  @default(false)  // 是否支持自动刷新
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id            String    @id @default(cuid())
+  platform      String    @unique // bilibili/weibo/douyin/xiaohongshu
+  displayName   String // 平台显示名称
+  configData    String // JSON: 平台配置数据（cookies等）
+  isActive      Boolean   @default(true)
+  lastUpdatedAt DateTime  @default(now())
+  expiresAt     DateTime? // Cookie过期时间
+  autoRefresh   Boolean   @default(false) // 是否支持自动刷新
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   @@index([platform])
   @@index([isActive])
@@ -644,42 +644,80 @@ model PlatformConfig {
 
 // ==================== 知识图谱 ====================
 
-model GraphNode {
-  id          String   @id @default(cuid())
-  type        String   // index/industry_l1/industry_l2/sub_sector/stock/chip_design/...
+model KGDomain {
+  id          Int      @id @default(autoincrement())
+  code        String   @unique
   name        String
   description String?
-  parentId    String?  // 父节点ID（层级树形关系）
-  level       Int      @default(0)  // 层级深度: 0=指数, 1=L1, 2=L2, 3=细分, 4=个股
-  cyclePos    String?  // upturn/peak/downturn/trough
-  momentum    Float?   // -100 ~ +100
-  metadata    String?  // JSON: 扩展数据（含trackingETFs、迭代元数据）
+  version     String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  newsLinks KGNewsLink[]
+
+  @@map("kg_domains")
+}
+
+model KGNewsLink {
+  id         Int      @id @default(autoincrement())
+  domainCode String
+  domain     KGDomain @relation(fields: [domainCode], references: [code], onDelete: Cascade)
+
+  url         String
+  title       String
+  publishedAt DateTime
+  source      String
+
+  extracted     Boolean   @default(false)
+  extractedAt   DateTime?
+  entityCount   Int       @default(0)
+  relationCount Int       @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([domainCode, url])
+  @@index([domainCode, extracted])
+  @@index([publishedAt])
+  @@map("kg_news_links")
+}
+
+model GraphNode {
+  id          String  @id @default(cuid())
+  type        String // index/industry_l1/industry_l2/sub_sector/stock/chip_design/...
+  name        String
+  description String?
+  parentId    String? // 父节点ID（层级树形关系）
+  level       Int     @default(0) // 层级深度: 0=指数, 1=L1, 2=L2, 3=细分, 4=个股
+  cyclePos    String? // upturn/peak/downturn/trough
+  momentum    Float? // -100 ~ +100
+  metadata    String? // JSON: 扩展数据（含trackingETFs、迭代元数据）
 
   // Phase 2: 新闻关联统计字段
-  newsCount7d    Int      @default(0)     // 7天内新闻数量
-  newsCount30d   Int      @default(0)     // 30天内新闻数量
-  sentimentScore Float?                   // -1~+1 情感得分
-  lastNewsAt     DateTime?                // 最后一条新闻时间
+  newsCount7d    Int       @default(0) // 7天内新闻数量
+  newsCount30d   Int       @default(0) // 30天内新闻数量
+  sentimentScore Float? // -1~+1 情感得分
+  lastNewsAt     DateTime? // 最后一条新闻时间
 
   // 评分系统字段
-  subGraphId       String?   // 所属子图ID
-  scoreComponents  String?   // JSON: {marketFundamental, newsSentiment, graphStructure}
-  totalScore       Float     @default(0)  // 综合评分 0-100
-  scoreUpdatedAt   DateTime?
-  trendIndicator   String?   // up/down/stable
+  subGraphId      String? // 所属子图ID
+  scoreComponents String? // JSON: {marketFundamental, newsSentiment, graphStructure}
+  totalScore      Float     @default(0) // 综合评分 0-100
+  scoreUpdatedAt  DateTime?
+  trendIndicator  String? // up/down/stable
 
-  updatedAt   DateTime @updatedAt
-  createdAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
 
-  parent      GraphNode?  @relation("TreeNode", fields: [parentId], references: [id])
-  children    GraphNode[] @relation("TreeNode")
-  sourceEdges GraphEdge[] @relation("SourceNode")
-  targetEdges GraphEdge[] @relation("TargetNode")
-  stocks      GraphStock[]
-  changeLogs  GraphChangeLog[]
-  newsLinks   NewsGraphLink[]
-  scoreHistory     NodeScoreHistory[]
-  signals          InvestmentSignal[]
+  parent       GraphNode?         @relation("TreeNode", fields: [parentId], references: [id])
+  children     GraphNode[]        @relation("TreeNode")
+  sourceEdges  GraphEdge[]        @relation("SourceNode")
+  targetEdges  GraphEdge[]        @relation("TargetNode")
+  stocks       GraphStock[]
+  changeLogs   GraphChangeLog[]
+  newsLinks    NewsGraphLink[]
+  scoreHistory NodeScoreHistory[]
+  signals      InvestmentSignal[]
   tags         GraphNodeTag[]
   etfBindings  GraphNodeETF[]
 
@@ -690,43 +728,43 @@ model GraphNode {
 }
 
 model GraphEdge {
-  id          String   @id @default(cuid())
-  sourceId    String
-  targetId    String
-  relation    String   // supply_chain/demand_driver/...
-  weight      Float    // 0~1
-  direction   String   // positive/negative
-  lag         String?  // 传导滞后
-  confidence  Float    // 0~1
-  evidence    String?  // JSON: 支撑证据
-  description String?
-  isCrossGraph Boolean @default(false)  // 标记跨行业边
+  id           String  @id @default(cuid())
+  sourceId     String
+  targetId     String
+  relation     String // supply_chain/demand_driver/...
+  weight       Float // 0~1
+  direction    String // positive/negative
+  lag          String? // 传导滞后
+  confidence   Float // 0~1
+  evidence     String? // JSON: 支撑证据
+  description  String?
+  isCrossGraph Boolean @default(false) // 标记跨行业边
 
-  source      GraphNode @relation("SourceNode", fields: [sourceId], references: [id])
-  target      GraphNode @relation("TargetNode", fields: [targetId], references: [id])
+  source GraphNode @relation("SourceNode", fields: [sourceId], references: [id])
+  target GraphNode @relation("TargetNode", fields: [targetId], references: [id])
 
   @@index([sourceId])
   @@index([targetId])
 }
 
 model GraphStock {
-  id          String   @id @default(cuid())
+  id String @id @default(cuid())
 
   // 个股信息
-  stockCode   String   @unique
-  stockName   String
+  stockCode String @unique
+  stockName String
 
   // 图谱映射
-  nodeId      String
-  node        GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  nodeId String
+  node   GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
 
   // 映射元数据
-  relevance   Float    @default(1.0)
+  relevance   Float   @default(1.0)
   category    String?
   description String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([nodeId])
   @@index([stockCode])
@@ -736,12 +774,12 @@ model GraphChangeLog {
   id         String   @id @default(cuid())
   nodeId     String?
   edgeId     String?
-  action     String   // add_node/update_node/delete_node/add_edge/update_edge/delete_edge
-  before     String?  // JSON: 变更前数据快照
-  after      String?  // JSON: 变更后数据
-  reason     String?  // 变更原因
-  source     String   // manual/ai_suggested/data_driven
-  approved   Boolean  @default(true)  // 手动编辑默认已审核
+  action     String // add_node/update_node/delete_node/add_edge/update_edge/delete_edge
+  before     String? // JSON: 变更前数据快照
+  after      String? // JSON: 变更后数据
+  reason     String? // 变更原因
+  source     String // manual/ai_suggested/data_driven
+  approved   Boolean  @default(true) // 手动编辑默认已审核
   approvedBy String?
   createdAt  DateTime @default(now())
 
@@ -754,19 +792,19 @@ model GraphChangeLog {
 // ==================== 子图定义 ====================
 
 model SubGraph {
-  id          String   @id  // ai_compute, new_energy_vehicle, consumer, etc.
-  name        String        // AI算力、新能源汽车、消费等
+  id          String  @id // ai_compute, new_energy_vehicle, consumer, etc.
+  name        String // AI算力、新能源汽车、消费等
   description String?
-  category    String        // tech/manufacturing/consumer等
+  category    String // tech/manufacturing/consumer等
   sortOrder   Int     @default(0)
   isActive    Boolean @default(true)
 
   // 统计字段（缓存）
-  nodeCount   Int     @default(0)
-  avgScore    Float   @default(0)
+  nodeCount Int   @default(0)
+  avgScore  Float @default(0)
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([isActive, sortOrder])
 }
@@ -774,13 +812,13 @@ model SubGraph {
 // ==================== 评分历史 ====================
 
 model NodeScoreHistory {
-  id          String   @id @default(cuid())
-  nodeId      String
-  date        DateTime @default(now())
-  totalScore  Float
-  components  String   // JSON: 评分明细
+  id         String   @id @default(cuid())
+  nodeId     String
+  date       DateTime @default(now())
+  totalScore Float
+  components String // JSON: 评分明细
 
-  node        GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
 
   @@unique([nodeId, date])
   @@index([nodeId, date])
@@ -790,7 +828,7 @@ model NodeScoreHistory {
 
 model InvestmentSignal {
   id              String   @id @default(cuid())
-  type            String   // strong_attention/sustained_hot/cooling_warning/cross_sector
+  type            String // strong_attention/sustained_hot/cooling_warning/cross_sector
   nodeId          String
   subGraphId      String
   triggeredAt     DateTime @default(now())
@@ -798,13 +836,13 @@ model InvestmentSignal {
   scoreChange     Float
   previousScore   Float?
   suggestedAction String
-  relatedETFs     String?  // JSON array
+  relatedETFs     String? // JSON array
 
-  status          String   @default("active")  // active/confirmed/dismissed
-  userNote        String?
-  dismissedAt     DateTime?
+  status      String    @default("active") // active/confirmed/dismissed
+  userNote    String?
+  dismissedAt DateTime?
 
-  node            GraphNode @relation(fields: [nodeId], references: [id])
+  node GraphNode @relation(fields: [nodeId], references: [id])
 
   @@index([status, triggeredAt])
   @@index([nodeId])
@@ -817,14 +855,14 @@ model NewsGraphLink {
   id          String   @id @default(cuid())
   newsId      String
   nodeId      String
-  relevance   Float    // 0-1 相关度
-  sentiment   String   // positive, neutral, negative
-  impactType  String   // direct, indirect
-  keyMentions String?  // JSON: 关键提及片段
+  relevance   Float // 0-1 相关度
+  sentiment   String // positive, neutral, negative
+  impactType  String // direct, indirect
+  keyMentions String? // JSON: 关键提及片段
   createdAt   DateTime @default(now())
 
-  news        NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
-  node        GraphNode   @relation(fields: [nodeId], references: [id])
+  news NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
+  node GraphNode   @relation(fields: [nodeId], references: [id])
 
   @@unique([newsId, nodeId])
   @@index([nodeId, createdAt])
@@ -834,27 +872,27 @@ model NewsGraphLink {
 // ==================== 图谱构建系统 ====================
 
 model GraphSuggestion {
-  id          String   @id @default(cuid())
-  type        String   // add_node, update_node, add_edge, update_edge, delete_node, delete_edge
-  targetType  String   // node, edge
-  targetId    String?  // 如果是update/delete，关联已有ID
+  id         String  @id @default(cuid())
+  type       String // add_node, update_node, add_edge, update_edge, delete_node, delete_edge
+  targetType String // node, edge
+  targetId   String? // 如果是update/delete，关联已有ID
 
-  data        String   // JSON: 建议的数据内容
-  confidence  Float    // 0-1
+  data       String // JSON: 建议的数据内容
+  confidence Float // 0-1
 
-  source      String   // ai_extraction, rule_inference, market_data
-  sourceRef   String?  // 来源引用（如新闻ID、报告URL）
-  evidence    String?  // JSON: 支撑证据数组
+  source    String // ai_extraction, rule_inference, market_data
+  sourceRef String? // 来源引用（如新闻ID、报告URL）
+  evidence  String? // JSON: 支撑证据数组
 
-  status      String   @default("pending")  // pending, approved, rejected, applied
-  reviewedBy  String?
-  reviewedAt  DateTime?
-  reviewNote  String?  // 审核备注
+  status     String    @default("pending") // pending, approved, rejected, applied
+  reviewedBy String?
+  reviewedAt DateTime?
+  reviewNote String? // 审核备注
 
-  appliedAt   DateTime?
+  appliedAt DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([status, createdAt])
   @@index([source, status])
@@ -862,24 +900,24 @@ model GraphSuggestion {
 }
 
 model GraphExtractionJob {
-  id            String   @id @default(cuid())
-  sourceType    String   // report, news, article, manual
-  sourceId      String?  // 关联的新闻ID、报告ID等
-  sourceUrl     String?
-  sourceText    String?  // 截取的文本片段（前500字）
+  id         String  @id @default(cuid())
+  sourceType String // report, news, article, manual
+  sourceId   String? // 关联的新闻ID、报告ID等
+  sourceUrl  String?
+  sourceText String? // 截取的文本片段（前500字）
 
-  status        String   @default("pending")  // pending, processing, completed, failed
+  status String @default("pending") // pending, processing, completed, failed
 
-  extractedData String?  // JSON: 完整抽取结果
-  suggestionsCreated Int @default(0)  // 创建的建议数量
+  extractedData      String? // JSON: 完整抽取结果
+  suggestionsCreated Int     @default(0) // 创建的建议数量
 
-  tokensUsed    Int?     // Claude API token使用量
-  durationMs    Int?     // 处理耗时（毫秒）
-  errorMessage  String?  // 错误信息
+  tokensUsed   Int? // Claude API token使用量
+  durationMs   Int? // 处理耗时（毫秒）
+  errorMessage String? // 错误信息
 
-  createdAt     DateTime @default(now())
-  completedAt   DateTime?
-  updatedAt     DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+  updatedAt   DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([sourceType, sourceId])
@@ -890,12 +928,12 @@ model GraphExtractionJob {
 model Analysis {
   id        String   @id @default(cuid())
   userId    String
-  type      String   // stock/sector/portfolio
-  target    String   // 分析目标(ticker/sector名)
-  input     String?  // JSON: 输入参数
-  result    String   // JSON: 分析结果
-  score     Float?   // 综合评分
-  rating    String?  // 评级
+  type      String // stock/sector/portfolio
+  target    String // 分析目标(ticker/sector名)
+  input     String? // JSON: 输入参数
+  result    String // JSON: 分析结果
+  score     Float? // 综合评分
+  rating    String? // 评级
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
