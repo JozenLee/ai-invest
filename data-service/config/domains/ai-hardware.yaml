@@ -1,0 +1,71 @@
+domain:
+  code: ai-hardware
+  name: AI算力硬件
+  description: AI芯片、GPU、加速器及供应链
+  version: "1.0"
+
+entities:
+  - type: hardware_company
+    label: 硬件公司
+    description: AI芯片和硬件制造商
+    properties:
+      - name: name
+        type: string
+        required: true
+      - name: ticker
+        type: string
+        description: 股票代码
+      - name: country
+        type: string
+      - name: market_cap
+        type: float
+      - name: founded_year
+        type: integer
+
+  - type: hardware_product
+    label: 硬件产品
+    description: GPU、TPU等AI加速器产品
+    properties:
+      - name: model
+        type: string
+        required: true
+      - name: product_type
+        type: string
+        description: GPU/TPU/NPU/ASIC/FPGA
+        required: true
+      - name: launch_date
+        type: string
+      - name: process_node
+        type: string
+      - name: memory_gb
+        type: integer
+      - name: compute_fp16_tflops
+        type: float
+      - name: tdp_watts
+        type: integer
+
+relationships:
+  - type: MANUFACTURES
+    label: 生产
+    from: hardware_company
+    to: hardware_product
+
+  - type: COMPETES_WITH
+    label: 竞争
+    from: hardware_product
+    to: hardware_product
+    bidirectional: true
+
+data_sources:
+  - name: openbb
+    type: api
+    enabled: true
+    schedule: "0 2 * * *"
+    config:
+      companies:
+        - ticker: NVDA
+          name: NVIDIA
+        - ticker: AMD
+          name: AMD
+        - ticker: INTC
+          name: Intel
