@@ -155,7 +155,7 @@ async def run_exploration_task(
             error=str(e)
         )
 
-async def run_filling_task(task_id: str, structure: any):
+async def run_filling_task(task_id: str, structure: dict):
     """后台任务：第二轮填充"""
     try:
         task_manager.update_task(

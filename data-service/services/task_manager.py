@@ -1,7 +1,6 @@
 # data-service/services/task_manager.py
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from models.industry_models import ExplorationTask
-import asyncio
 
 class TaskManager:
     """后台任务管理器"""
@@ -30,8 +29,8 @@ class TaskManager:
         status: Optional[str] = None,
         progress: Optional[int] = None,
         current_step: Optional[str] = None,
-        structure: Optional[any] = None,
-        result: Optional[any] = None,
+        structure: Optional[Any] = None,
+        result: Optional[Any] = None,
         error: Optional[str] = None
     ) -> None:
         """更新任务状态"""
