@@ -31,5 +31,6 @@ sse-starlette>=1.6.0
 
 # 知识图谱
 neo4j>=5.15.0
+tavily-python>=0.3.0
 PyYAML>=6.0.0
 feedparser>=6.0.10
