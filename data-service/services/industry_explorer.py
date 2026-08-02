@@ -10,7 +10,11 @@ from models.industry_models import (
     IndustryStructure,
     IndustryInfo,
     StageInfo,
-    SegmentInfo
+    SegmentInfo,
+    CompanyInfo,
+    RelationshipInfo,
+    SegmentDetail,
+    ExplorationResult
 )
 
 class IndustryExplorerService:
@@ -209,6 +213,215 @@ structure:
                 ),
                 structure=[]
             )
+
+    async def fill_companies(self, structure: IndustryStructure) -> ExplorationResult:
+        """
+        第二轮：填充企业和关系
+
+        Args:
+            structure: 第一轮探索的产业链骨架
+
+        Returns:
+            ExplorationResult: 完整探索结果
+        """
+        details = {}
+
+        # 为每个segment并行填充
+        tasks = []
+        for stage in structure.structure:
+            for segment in stage.segments:
+                task = self._fill_segment(
+                    industry_name=structure.industry.name,
+                    stage_name=stage.stage,
+                    segment=segment
+                )
+                tasks.append((segment.code, task))
+
+        # 并行执行
+        results = await asyncio.gather(*[task for _, task in tasks], return_exceptions=True)
+
+        # 组织结果
+        for (segment_code, _), result in zip(tasks, results):
+            if isinstance(result, Exception):
+                print(f"填充 {segment_code} 失败: {result}")
+                details[segment_code] = SegmentDetail(companies=[], relationships=[])
+            else:
+                details[segment_code] = result
+
+        return ExplorationResult(
+            structure=structure,
+            details=details,
+            metadata={
+                "total_companies": sum(len(d.companies) for d in details.values()),
+                "total_relationships": sum(len(d.relationships) for d in details.values())
+            }
+        )
+
+    async def _fill_segment(
+        self,
+        industry_name: str,
+        stage_name: str,
+        segment: SegmentInfo
+    ) -> SegmentDetail:
+        """填充单个segment的企业信息"""
+
+        # 1. 搜索该segment的关键企业
+        search_query = f"{segment.name} 上市公司 龙头企业 股票代码 {industry_name}"
+        search_context = await self._search_segment_companies(search_query)
+
+        # 2. 生成填充Prompt
+        prompt = self._build_company_prompt(
+            industry_name=industry_name,
+            stage_name=stage_name,
+            segment=segment,
+            context=search_context
+        )
+
+        # 3. 调用Claude提取
+        response = await self._call_claude_for_companies(prompt)
+
+        # 4. 解析响应
+        detail = self._parse_company_response(response, segment.code)
+
+        return detail
+
+    async def _search_segment_companies(self, query: str) -> str:
+        """搜索环节企业信息"""
+        try:
+            result = self.tavily.search(
+                query=query,
+                search_depth="basic",
+                max_results=5
+            )
+
+            context_parts = []
+            for item in result.get("results", []):
+                context_parts.append(
+                    f"{item.get('title', '')}\n{item.get('content', '')[:400]}"
+                )
+
+            return "\n\n".join(context_parts)
+        except Exception as e:
+            print(f"搜索企业失败: {e}")
+            return ""
+
+    def _build_company_prompt(
+        self,
+        industry_name: str,
+        stage_name: str,
+        segment: SegmentInfo,
+        context: str
+    ) -> str:
+        """构建企业填充Prompt"""
+        prompt = f"""你是一位专业的产业研究员。请为「{segment.name}」环节填充详细信息。
+
+**背景：**
+- 产业：{industry_name}
+- 阶段：{stage_name}
+- 环节：{segment.name}
+- 功能：{segment.description}
+- 核心类别：{', '.join(segment.key_categories)}
+
+**参考资料：**
+{context}
+
+**任务：**
+1. 识别该环节的全球和中国关键企业（上市公司优先）
+2. 提取企业基本信息
+3. 识别企业间的供应/竞争关系
+
+**输出格式（JSON）：**
+```json
+{{
+  "companies": [
+    {{
+      "name": "企业中文名称",
+      "name_en": "English Name",
+      "ticker": "股票代码（如：NVDA, 000001.SZ）",
+      "exchange": "交易所（NASDAQ/NYSE/SSE/SZSE/HKEX）",
+      "country": "国家",
+      "market_position": "leader/major/emerging",
+      "key_products": ["产品1", "产品2"],
+      "description": "一句话描述企业"
+    }}
+  ],
+  "relationships": [
+    {{
+      "type": "SUPPLIES",
+      "from": "企业A名称",
+      "to": "企业B名称",
+      "description": "供应关系描述",
+      "confidence": 0.9
+    }},
+    {{
+      "type": "COMPETES_WITH",
+      "from": "企业C名称",
+      "to": "企业D名称",
+      "description": "竞争描述",
+      "confidence": 0.85
+    }}
+  ]
+}}
+```
+
+**要求：**
+- 企业信息要准确（股票代码、交易所）
+- 优先选择市值较大、影响力强的企业（5-10家）
+- 关系要有明确依据
+- 置信度基于信息来源可靠性
+- 只输出JSON，不要其他解释
+
+请输出JSON：
+"""
+        return prompt
+
+    async def _call_claude_for_companies(self, prompt: str) -> str:
+        """调用Claude API提取企业信息"""
+        message = await self.anthropic.messages.create(
+            model=self.model,
+            max_tokens=4096,
+            temperature=0.3,
+            messages=[{
+                "role": "user",
+                "content": prompt
+            }]
+        )
+
+        response_text = message.content[0].text
+
+        # 提取JSON
+        if "```json" in response_text:
+            json_start = response_text.find("```json") + 7
+            json_end = response_text.find("```", json_start)
+            response_text = response_text[json_start:json_end].strip()
+        elif "```" in response_text:
+            json_start = response_text.find("```") + 3
+            json_end = response_text.find("```", json_start)
+            response_text = response_text[json_start:json_end].strip()
+
+        return response_text
+
+    def _parse_company_response(self, json_text: str, segment_code: str) -> SegmentDetail:
+        """解析JSON响应"""
+        try:
+            data = json.loads(json_text)
+
+            # 补充segment_code
+            for company in data.get("companies", []):
+                company["segment_code"] = segment_code
+
+            # 使用Pydantic验证
+            companies = [CompanyInfo(**c) for c in data.get("companies", [])]
+            relationships = [RelationshipInfo(**r) for r in data.get("relationships", [])]
+
+            return SegmentDetail(
+                companies=companies,
+                relationships=relationships
+            )
+        except Exception as e:
+            print(f"解析企业JSON失败: {e}")
+            print(f"原始内容: {json_text}")
+            return SegmentDetail(companies=[], relationships=[])
 
 # 全局实例
 _explorer_service: Optional[IndustryExplorerService] = None

@@ -165,17 +165,24 @@ async def run_filling_task(task_id: str, structure: dict):
             current_step="正在并行填充各环节企业..."
         )
 
-        # TODO: 实现第二轮填充（Task 9）
-        # from services.industry_explorer import get_explorer_service
-        # explorer = get_explorer_service()
-        # result = await explorer.fill_companies(structure)
+        # 实现第二轮填充
+        from services.industry_explorer import get_explorer_service
+        from models.industry_models import IndustryStructure
 
-        # 暂时标记为完成
+        explorer = get_explorer_service()
+
+        # 如果structure是dict，转换为IndustryStructure
+        if isinstance(structure, dict):
+            structure = IndustryStructure(**structure)
+
+        result = await explorer.fill_companies(structure)
+
         task_manager.update_task(
             task_id,
             status="completed",
             progress=100,
-            current_step="探索完成"
+            current_step="探索完成",
+            result=result
         )
 
     except Exception as e:
