@@ -110,35 +110,10 @@ async def run_exploration_task(
             current_step="正在搜索产业资料..."
         )
 
-        # TODO: 实现第一轮探索（Task 5）
-        # from services.industry_explorer import get_explorer_service
-        # explorer = get_explorer_service()
-        # structure = await explorer.explore_structure(industry_name)
-
-        # 暂时使用模拟数据
-        from models.industry_models import IndustryStructure, IndustryInfo, StageInfo, SegmentInfo
-        structure = IndustryStructure(
-            industry=IndustryInfo(
-                name=industry_name,
-                code=industry_name.lower().replace(" ", "_"),
-                description=description
-            ),
-            structure=[
-                StageInfo(
-                    stage="上游",
-                    stage_code="upstream",
-                    description="上游环节",
-                    segments=[
-                        SegmentInfo(
-                            name="示例环节",
-                            code="example_segment",
-                            description="这是一个示例环节",
-                            key_categories=["类别1", "类别2"]
-                        )
-                    ]
-                )
-            ]
-        )
+        # 第一轮探索：使用AI分析产业链结构
+        from services.industry_explorer import get_explorer_service
+        explorer = get_explorer_service()
+        structure = await explorer.explore_structure(industry_name)
 
         task_manager.update_task(
             task_id,
