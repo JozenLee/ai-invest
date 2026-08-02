@@ -35,6 +35,7 @@ const navigation = [
     href: '/graph',
     icon: GitBranch,
     children: [
+      { name: '产业图谱', href: '/graph/create' },
       { name: '图谱探索', href: '/graph/explore' },
       { name: '传导路径', href: '/graph/propagation' },
       { name: '周期分析', href: '/graph/cycles' },

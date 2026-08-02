@@ -155,7 +155,7 @@ async def run_exploration_task(
             error=str(e)
         )
 
-async def run_filling_task(task_id: str, structure: any):
+async def run_filling_task(task_id: str, structure: dict):
     """后台任务：第二轮填充"""
     try:
         task_manager.update_task(
@@ -165,17 +165,41 @@ async def run_filling_task(task_id: str, structure: any):
             current_step="正在并行填充各环节企业..."
         )
 
-        # TODO: 实现第二轮填充（Task 9）
-        # from services.industry_explorer import get_explorer_service
-        # explorer = get_explorer_service()
-        # result = await explorer.fill_companies(structure)
+        # 实现第二轮填充
+        from services.industry_explorer import get_explorer_service
+        from services.graph_writer import write_graph_to_neo4j
+        from services.neo4j_service import get_neo4j_service
+        from models.industry_models import IndustryStructure
 
-        # 暂时标记为完成
+        explorer = get_explorer_service()
+
+        # 如果structure是dict，转换为IndustryStructure
+        if isinstance(structure, dict):
+            structure = IndustryStructure(**structure)
+
+        result = await explorer.fill_companies(structure)
+
+        # 写入Neo4j
+        task_manager.update_task(
+            task_id,
+            status="writing_to_graph",
+            progress=80,
+            current_step="正在写入图数据库..."
+        )
+
+        neo4j_service = get_neo4j_service()
+        stats = await write_graph_to_neo4j(result, neo4j_service)
+
+        # 关闭Neo4j连接
+        await neo4j_service.close()
+
         task_manager.update_task(
             task_id,
             status="completed",
             progress=100,
-            current_step="探索完成"
+            current_step="探索完成",
+            result=result,
+            graph_stats=stats
         )
 
     except Exception as e:

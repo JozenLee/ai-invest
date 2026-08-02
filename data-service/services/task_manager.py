@@ -1,7 +1,6 @@
 # data-service/services/task_manager.py
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from models.industry_models import ExplorationTask
-import asyncio
 
 class TaskManager:
     """后台任务管理器"""
@@ -30,9 +29,10 @@ class TaskManager:
         status: Optional[str] = None,
         progress: Optional[int] = None,
         current_step: Optional[str] = None,
-        structure: Optional[any] = None,
-        result: Optional[any] = None,
-        error: Optional[str] = None
+        structure: Optional[Any] = None,
+        result: Optional[Any] = None,
+        error: Optional[str] = None,
+        graph_stats: Optional[Dict[str, int]] = None
     ) -> None:
         """更新任务状态"""
         task = self._tasks.get(task_id)
@@ -51,6 +51,9 @@ class TaskManager:
             task.result = result
         if error:
             task.error = error
+        if graph_stats:
+            # 将graph_stats存储到task的metadata中
+            task.metadata['graph_stats'] = graph_stats
 
     def delete_task(self, task_id: str) -> None:
         """删除任务"""
