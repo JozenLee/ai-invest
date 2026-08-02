@@ -831,3 +831,41 @@ model Watchlist {
 
   @@unique([userId, ticker])
 }
+
+// ==================== AI知识图谱审核 ====================
+
+model GraphUpdateReview {
+  id            String   @id @default(cuid())
+  industryId    String   // Neo4j中的Industry节点ID
+  industryName  String
+  oldVersion    String
+  newVersion    String
+  changesJson   String   // JSON: 完整的diff数据
+  status        String   @default("pending") // pending, approved, rejected, partial
+  createdAt     DateTime @default(now())
+  reviewedAt    DateTime?
+  reviewedBy    String?
+  reviewNotes   String?
+
+  approvals GraphChangeApproval[]
+
+  @@index([status, createdAt])
+  @@index([industryId])
+  @@map("graph_update_reviews")
+}
+
+model GraphChangeApproval {
+  id         String   @id @default(cuid())
+  reviewId   String
+  changeId   String   // Change.id from diff
+  changeType String   // node_added, node_removed, etc.
+  status     String   @default("pending") // approved, rejected, pending
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  review GraphUpdateReview @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+  @@index([changeId])
+  @@map("graph_change_approvals")
+}
