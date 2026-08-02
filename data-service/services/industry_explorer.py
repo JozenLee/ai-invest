@@ -150,7 +150,7 @@ structure:
             "创新药": "innovative_drug",
             "半导体": "semiconductor"
         }
-        return mapping.get(industry_name, "industry_" + str(hash(industry_name))[:8])
+        return mapping.get(industry_name, f"industry_{abs(hash(industry_name)) % 100000000}")
 
     async def _call_claude_for_structure(self, prompt: str) -> str:
         """调用Claude API进行结构分析"""
