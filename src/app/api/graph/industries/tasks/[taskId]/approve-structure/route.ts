@@ -9,10 +9,10 @@ const approveSchema = z.object({
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { taskId: string } }
+  { params }: { params: Promise<{ taskId: string }> }
 ) {
   try {
-    const { taskId } = params
+    const { taskId } = await params
     const body = await request.json()
     const { approved, modifiedStructure } = approveSchema.parse(body)
 

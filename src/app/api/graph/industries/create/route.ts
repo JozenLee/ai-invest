@@ -14,17 +14,23 @@ export async function POST(request: NextRequest) {
 
     // 调用Python数据服务
     const dataServiceUrl = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
+    console.log('[创建产业] 调用数据服务:', dataServiceUrl, { name, description })
+
     const response = await fetch(`${dataServiceUrl}/api/v1/industry-graph/explore`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, description })
+      body: JSON.stringify({ name, description }),
+      signal: AbortSignal.timeout(30000) // 30秒超时
     })
 
     if (!response.ok) {
-      throw new Error('数据服务调用失败')
+      const errorText = await response.text()
+      console.error('[创建产业] 数据服务返回错误:', response.status, errorText)
+      throw new Error(`数据服务调用失败: ${response.status}`)
     }
 
     const data = await response.json()
+    console.log('[创建产业] 数据服务返回:', data)
 
     return NextResponse.json({
       success: true,
@@ -36,7 +42,7 @@ export async function POST(request: NextRequest) {
       }
     })
   } catch (error) {
-    console.error('创建产业失败:', error)
+    console.error('[创建产业] 错误:', error)
     return NextResponse.json(
       {
         success: false,
