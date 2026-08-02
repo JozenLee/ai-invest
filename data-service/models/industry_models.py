@@ -81,12 +81,13 @@ class ExplorationTask(BaseModel):
     industry_name: str
     status: str = Field(
         "pending",
-        description="pending/exploring_structure/structure_ready/exploring_details/completed/failed"
+        description="pending/exploring_structure/structure_ready/exploring_details/writing_to_graph/completed/failed"
     )
     progress: int = Field(0, ge=0, le=100)
     current_step: Optional[str] = None
     structure: Optional[IndustryStructure] = None
     result: Optional[ExplorationResult] = None
+    graph_stats: Optional[Dict[str, int]] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)

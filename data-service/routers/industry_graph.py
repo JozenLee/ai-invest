@@ -55,6 +55,8 @@ async def get_task_status(task_id: str):
         "progress": task.progress,
         "current_step": task.current_step,
         "structure": task.structure.dict() if task.structure else None,
+        "result": task.result.dict() if task.result else None,
+        "graph_stats": task.graph_stats,
         "error": task.error
     }
 
