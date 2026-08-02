@@ -252,18 +252,59 @@ class AKShareProvider(DataProvider):
 
 
     async def get_index_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """获取指数日K数据"""
-        df = await self._call(ak.stock_zh_index_daily, symbol=code)
-        if not df.empty:
-            df["date"] = pd.to_datetime(df["date"])
-            df = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
-        return df
+        """获取指数日K数据
+
+        支持格式：
+        - 上证/深证: sh000001, sz399001 等
+        - 中证指数: 930713, 931865 等 (6位纯数字)
+        """
+        try:
+            # 使用 index_zh_a_hist 获取A股指数历史数据
+            df = await self._call(
+                ak.index_zh_a_hist,
+                symbol=code,
+                period='daily',
+                start_date=start_date,
+                end_date=end_date
+            )
+
+            if not df.empty and '日期' in df.columns:
+                # 标准化列名
+                df = df.rename(columns={
+                    '日期': 'date',
+                    '开盘': 'open',
+                    '收盘': 'close',
+                    '最高': 'high',
+                    '最低': 'low',
+                    '成交量': 'volume',
+                    '成交额': 'amount',
+                    '涨跌幅': 'pct_chg',
+                    '涨跌额': 'change',
+                    '振幅': 'amplitude',
+                    '换手率': 'turnover',
+                })
+
+                df['date'] = pd.to_datetime(df['date'])
+
+            return df
+
+        except Exception as e:
+            print(f"[AKShare] 获取指数 {code} 日K失败: {e}")
+            return pd.DataFrame()
 
     async def get_index_realtime(self, symbols: List[str]) -> pd.DataFrame:
         """获取指定指数实时行情"""
         df = await self.get_index_spot()
         if not df.empty:
             df = df[df["代码"].isin(symbols)]
+        return df
+
+    async def get_index_list(self) -> pd.DataFrame:
+        """获取A股市场所有指数列表
+
+        返回所有可用的市场指数，包括主要指数、行业指数、概念指数等
+        """
+        df = await self.get_index_spot()
         return df
 
     # ==================== 个股数据 ====================
@@ -307,6 +348,14 @@ class AKShareProvider(DataProvider):
         if not df.empty:
             return df.to_dict("records")[0]
         return {}
+
+    async def get_etf_list(self) -> pd.DataFrame:
+        """获取全市场ETF列表（从新浪财经）
+
+        返回所有上市交易的ETF，包含代码、名称、最新价、涨跌幅等信息
+        """
+        df = await self._call(ak.fund_etf_category_sina, symbol="ETF基金")
+        return df
 
     # ==================== 资金流向 ====================
 

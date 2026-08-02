@@ -1,0 +1,245 @@
+// 生成模拟市场数据用于演示
+import { PrismaClient } from '@prisma/client';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import path from 'path';
+
+const dbPath = path.resolve(__dirname, '../prisma/dev.db');
+const adapter = new PrismaBetterSqlite3({ url: `file:${dbPath}` });
+const prisma = new PrismaClient({ adapter });
+
+async function main() {
+  console.log('=== 生成模拟市场数据 ===\n');
+
+  // 1. 生成IndexDaily数据（过去30天）
+  console.log('1. 生成指数日线数据...');
+
+  const indices = [
+    { code: '930713', name: '中证人工智能主题指数', basePrice: 1200 },
+    { code: '931865', name: '中证全指半导体指数', basePrice: 3500 },
+    { code: '931160', name: '中证全指通信设备指数', basePrice: 2800 },
+  ];
+
+  let indexCount = 0;
+  for (const index of indices) {
+    for (let i = 29; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+
+      // 生成价格走势（随机波动）
+      const dayChange = (Math.random() - 0.48) * 0.03; // -1.5% ~ +1.5%
+      const price = index.basePrice * (1 + dayChange * (30 - i) / 30);
+      const open = price * (1 + (Math.random() - 0.5) * 0.01);
+      const close = price * (1 + (Math.random() - 0.5) * 0.01);
+      const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+      const low = Math.min(open, close) * (1 - Math.random() * 0.01);
+      const changePct = ((close - open) / open) * 100;
+
+      await prisma.indexDaily.create({
+        data: {
+          code: index.code,
+          name: index.name,
+          date,
+          open,
+          high,
+          low,
+          close,
+          volume: BigInt(Math.floor(100000000 + Math.random() * 50000000)),
+          changePct,
+        }
+      });
+      indexCount++;
+    }
+    console.log(`   ✅ ${index.name}: 30天数据`);
+  }
+
+  // 2. 生成ETFDaily数据
+  console.log('\n2. 生成ETF日线数据...');
+
+  const etfs = [
+    { ticker: '515070', name: 'AI ETF', basePrice: 1.2 },
+    { ticker: '512480', name: '半导体ETF', basePrice: 2.5 },
+    { ticker: '159995', name: '芯片ETF', basePrice: 1.8 },
+    { ticker: '515880', name: '通信ETF', basePrice: 1.5 },
+  ];
+
+  let etfCount = 0;
+  for (const etf of etfs) {
+    for (let i = 29; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+
+      const dayChange = (Math.random() - 0.48) * 0.03;
+      const price = etf.basePrice * (1 + dayChange * (30 - i) / 30);
+      const open = price * (1 + (Math.random() - 0.5) * 0.01);
+      const close = price * (1 + (Math.random() - 0.5) * 0.01);
+      const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+      const low = Math.min(open, close) * (1 - Math.random() * 0.01);
+      const nav = close * (1 + (Math.random() - 0.5) * 0.002);
+      const premium = ((close - nav) / nav) * 100;
+
+      await prisma.eTFDaily.create({
+        data: {
+          ticker: etf.ticker,
+          name: etf.name,
+          date,
+          open,
+          high,
+          low,
+          close,
+          volume: BigInt(Math.floor(50000000 + Math.random() * 30000000)),
+          amount: close * 50000000,
+          nav,
+          shares: BigInt(Math.floor(1000000 + Math.random() * 500000)),
+          premium,
+        }
+      });
+      etfCount++;
+    }
+    console.log(`   ✅ ${etf.name}: 30天数据`);
+  }
+
+  // 3. 生成SectorCapitalFlow数据
+  console.log('\n3. 生成板块资金流向数据...');
+
+  const sectors = [
+    '芯片',
+    '存储芯片',
+    '服务器',
+    '散热',
+    '数据中心',
+    '光模块',
+    '通信设备',
+  ];
+
+  let flowCount = 0;
+  for (const sector of sectors) {
+    for (let i = 29; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      date.setHours(0, 0, 0, 0);
+
+      const mainForceNet = (Math.random() - 0.5) * 100000; // -50000 ~ +50000万
+      const retailNet = -mainForceNet * 0.8; // 散户与主力相反
+      const changePct = (Math.random() - 0.48) * 3; // -1.5% ~ +1.5%
+
+      // 计算连续天数
+      let consecutiveDays = 0;
+      if (mainForceNet > 0) {
+        consecutiveDays = Math.floor(Math.random() * 5) + 1;
+      } else if (mainForceNet < 0) {
+        consecutiveDays = -Math.floor(Math.random() * 5) - 1;
+      }
+
+      await prisma.sectorCapitalFlow.create({
+        data: {
+          date,
+          sector,
+          sectorLevel: 'L2',
+          mainForceNet,
+          retailNet,
+          totalVolume: Math.abs(mainForceNet) + Math.abs(retailNet),
+          changePct,
+          consecutiveDays,
+        }
+      });
+      flowCount++;
+    }
+    console.log(`   ✅ ${sector}: 30天数据`);
+  }
+
+  // 4. 生成NewsGraphLink数据（需要先有新闻）
+  console.log('\n4. 生成新闻关联数据...');
+
+  // 检查是否有新闻
+  const newsCount = await prisma.newsArticle.count();
+  let linkCount = 0;
+
+  if (newsCount > 0) {
+    const news = await prisma.newsArticle.findMany({
+      take: 50,
+      orderBy: { publishTime: 'desc' }
+    });
+
+    const aiNodes = await prisma.graphNode.findMany({
+      where: { type: { in: ['ai_index', 'ai_l1', 'ai_l2'] } }
+    });
+
+    // 为每条新闻随机关联1-3个AI节点
+    for (const article of news) {
+      const numLinks = Math.floor(Math.random() * 3) + 1;
+      const selectedNodes = aiNodes.sort(() => 0.5 - Math.random()).slice(0, numLinks);
+
+      for (const node of selectedNodes) {
+        try {
+          await prisma.newsGraphLink.create({
+            data: {
+              newsId: article.id,
+              nodeId: node.id,
+              relevance: 0.5 + Math.random() * 0.5, // 0.5 ~ 1.0
+              sentiment: article.sentimentLabel === 'bullish' ? 'positive' :
+                         article.sentimentLabel === 'bearish' ? 'negative' : 'neutral',
+              impactType: Math.random() > 0.5 ? 'direct' : 'indirect',
+            }
+          });
+          linkCount++;
+        } catch (e) {
+          // 跳过重复的链接
+        }
+      }
+    }
+    console.log(`   ✅ 创建了 ${linkCount} 条新闻-节点关联`);
+  } else {
+    console.log(`   ⚠️  数据库中没有新闻，跳过新闻关联`);
+  }
+
+  // 5. 更新GraphNode的newsCount字段
+  console.log('\n5. 更新节点新闻统计...');
+
+  const aiNodes = await prisma.graphNode.findMany({
+    where: { type: { in: ['ai_index', 'ai_l1', 'ai_l2'] } }
+  });
+
+  for (const node of aiNodes) {
+    const now = new Date();
+    const date7d = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const date30d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const count7d = await prisma.newsGraphLink.count({
+      where: {
+        nodeId: node.id,
+        createdAt: { gte: date7d }
+      }
+    });
+
+    const count30d = await prisma.newsGraphLink.count({
+      where: {
+        nodeId: node.id,
+        createdAt: { gte: date30d }
+      }
+    });
+
+    await prisma.graphNode.update({
+      where: { id: node.id },
+      data: {
+        newsCount7d: count7d,
+        newsCount30d: count30d,
+      }
+    });
+  }
+  console.log(`   ✅ 更新了 ${aiNodes.length} 个节点的新闻统计`);
+
+  // 总结
+  console.log('\n=== 生成完成 ===\n');
+  console.log(`指数日线数据: ${indexCount} 条`);
+  console.log(`ETF日线数据: ${etfCount} 条`);
+  console.log(`资金流向数据: ${flowCount} 条`);
+  console.log(`新闻关联: ${linkCount} 条`);
+
+  console.log('\n✅ 模拟市场数据已生成！现在可以在图谱中查看市场数据了。');
+
+  await prisma.$disconnect();
+}
+
+main();

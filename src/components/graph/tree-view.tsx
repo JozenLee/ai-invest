@@ -34,34 +34,66 @@ export interface TreeViewProps {
 // --------------- 颜色映射 ---------------
 
 const NODE_COLORS: Record<string, string> = {
+  // 层级
   index: '#3b82f6',
   industry_l1: '#22c55e',
   industry_l2: '#84cc16',
   sub_sector: '#a855f7',
   stock: '#64748b',
+  // 产业链 - 更新颜色避免重复
   chip_design: '#ef4444',
-  wafer_foundry: '#f97316',
-  packaging: '#f59e0b',
-  equipment: '#eab308',
-  material: '#d97706',
-  eda: '#b45309',
+  wafer_foundry: '#f472b6',
+  packaging: '#e879f9',
+  equipment: '#fbbf24',
+  material: '#facc15',
+  eda: '#bef264',
   memory: '#fb923c',
   server: '#06b6d4',
   cooling: '#14b8a6',
-  power: '#10b981',
+  power: '#34d399',
   pcb: '#6b7280',
   networking: '#8b5cf6',
-  data_center: '#7c3aed',
-  cloud: '#6366f1',
+  data_center: '#6366f1',
+  cloud: '#0ea5e9',
   ai_application: '#ec4899',
-  terminal_device: '#f43f5e',
-  optical_comm: '#0ea5e9',
-  cpo: '#2563eb',
-  optical_module: '#1d4ed8',
+  terminal_device: '#f87171',
+  optical_comm: '#38bdf8',
+  cpo: '#a78bfa',
+  optical_module: '#22d3ee',
+  // 外部驱动
   policy: '#a3a3a3',
-  macro: '#78716c',
-  technology: '#d6d3d1',
-  demand: '#fef08a',
+  macro: '#d4d4d4',
+  technology: '#e5e5e5',
+  demand: '#fde047',
+  // 子图谱节点类型
+  biotech_index: '#db2777',
+  biotech_l1: '#f472b6',
+  biotech_l2: '#fb7185',
+  ce_index: '#7c3aed',
+  ce_l1: '#a78bfa',
+  ce_l2: '#c4b5fd',
+  defense_index: '#475569',
+  defense_l1: '#94a3b8',
+  defense_l2: '#cbd5e1',
+  energy_index: '#059669',
+  energy_l1: '#34d399',
+  energy_l2: '#6ee7b7',
+  robotics_index: '#ea580c',
+  robotics_l1: '#fbbf24',
+  robotics_l2: '#fcd34d',
+  digital_index: '#0284c7',
+  digital_l1: '#22d3ee',
+  digital_l2: '#67e8f9',
+  materials_index: '#57534e',
+  materials_l1: '#a8a29e',
+  materials_l2: '#d6d3d1',
+  nev_index: '#16a34a',
+  nev_l1: '#4ade80',
+  nev_l2: '#86efac',
+  nev_l3: '#bbf7d0',
+  consumer_index: '#dc2626',
+  consumer_l1: '#fb7185',
+  consumer_l2: '#fda4af',
 }
 
 const NODE_TYPE_LABELS: Record<string, string> = {
@@ -160,7 +192,7 @@ export function TreeView({
       }
     })
 
-    const treemap = d3.tree<TreeNode>().size([innerHeight, innerWidth])
+    const treemap = d3.tree<TreeNode>().size([innerHeight, innerWidth]).nodeSize([30, 200])
 
     // ---------- Zoom 容器 ----------
     const container = svg
@@ -243,7 +275,7 @@ export function TreeView({
         .attr('fill', '#e2e8f0')
         .style('text-shadow', '0 1px 3px rgba(0,0,0,0.8)')
 
-      // 类型标签
+      // 类型标签 - 只显示有中文映射的类型
       nodeEnter
         .append('text')
         .attr('class', 'type-label')
@@ -252,9 +284,11 @@ export function TreeView({
         .attr('text-anchor', (d) =>
           d.children || (d as TreeNodeDatum)._children ? 'end' : 'start'
         )
-        .text((d) =>
-          d.data.id === '__root__' ? '' : NODE_TYPE_LABELS[d.data.type] || d.data.type
-        )
+        .text((d) => {
+          if (d.data.id === '__root__') return ''
+          const label = NODE_TYPE_LABELS[d.data.type]
+          return label || '' // 如果没有中文映射，不显示
+        })
         .attr('font-size', 9)
         .attr('fill', '#94a3b8')
 
@@ -439,13 +473,15 @@ export function TreeView({
           }}
         >
           <div className="mb-1 font-semibold">{hoveredNode.name}</div>
-          <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block h-2 w-2 rounded-full"
-              style={{ backgroundColor: getNodeColor(hoveredNode.type) }}
-            />
-            <span>{NODE_TYPE_LABELS[hoveredNode.type] || hoveredNode.type}</span>
-          </div>
+          {NODE_TYPE_LABELS[hoveredNode.type] && (
+            <div className="flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ backgroundColor: getNodeColor(hoveredNode.type) }}
+              />
+              <span>{NODE_TYPE_LABELS[hoveredNode.type]}</span>
+            </div>
+          )}
           {hoveredNode.description && (
             <div className="mt-1 max-w-[220px] text-[11px] leading-tight opacity-80">
               {hoveredNode.description.length > 80
@@ -454,7 +490,7 @@ export function TreeView({
             </div>
           )}
           <div className="mt-1 flex gap-3 text-[11px] opacity-70">
-            <span>层级 L{hoveredNode.level}</span>
+            <span>层级 {hoveredNode.level}</span>
             {hoveredNode.momentum !== undefined && <span>动量 {hoveredNode.momentum}</span>}
           </div>
         </div>

@@ -22,7 +22,8 @@ async function recalculateNodeStats() {
   const nodes = await prisma.graphNode.findMany({
     select: {
       id: true,
-      name: true
+      name: true,
+      metadata: true
     }
   })
 
@@ -42,7 +43,7 @@ async function recalculateNodeStats() {
         include: {
           news: {
             select: {
-              publishedAt: true,
+              publishTime: true,
               createdAt: true
             }
           }
@@ -53,7 +54,7 @@ async function recalculateNodeStats() {
 
       // 最近30天新闻数
       const recentNewsCount = newsLinks.filter(link => {
-        const date = link.news.publishedAt || link.news.createdAt
+        const date = link.news.publishTime || link.news.createdAt
         return date >= thirtyDaysAgo
       }).length
 
@@ -62,7 +63,7 @@ async function recalculateNodeStats() {
 
       // 最新新闻日期
       const latestNews = newsLinks
-        .map(link => link.news.publishedAt || link.news.createdAt)
+        .map(link => link.news.publishTime || link.news.createdAt)
         .sort((a, b) => b.getTime() - a.getTime())[0] || null
 
       // 更新节点metadata

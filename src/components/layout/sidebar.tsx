@@ -62,6 +62,15 @@ const navigation = [
       { name: '风险分析', href: '/portfolio/risk' },
     ],
   },
+  {
+    name: '设置',
+    href: '/settings',
+    icon: Settings,
+    children: [
+      { name: '标签管理', href: '/settings/tags' },
+      { name: '系统偏好', href: '/settings' },
+    ],
+  },
 ]
 
 export function Sidebar() {
@@ -116,21 +125,7 @@ export function Sidebar() {
         </ul>
       </nav>
 
-      {/* Footer */}
-      <div className="border-t p-4">
-        <Link
-          href="/settings"
-          className={cn(
-            'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground',
-            pathname === '/settings'
-              ? 'bg-accent text-accent-foreground'
-              : 'text-muted-foreground'
-          )}
-        >
-          <Settings className="h-4 w-4" />
-          设置
-        </Link>
-      </div>
+      {/* Footer - 移除，设置已在导航中 */}
     </div>
   )
 }

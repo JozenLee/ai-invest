@@ -158,6 +158,14 @@ export class EventService {
             categoryRef: true,
             domain: true,
             sourceRef: true,
+            tags: {
+              include: {
+                tag: true,
+              },
+              orderBy: {
+                confidence: 'desc',
+              },
+            },
           },
         }),
       ])
@@ -200,6 +208,7 @@ export class EventService {
               sectors: a.sectors ? JSON.parse(a.sectors as string) : undefined,
               keywords: a.keywords ? JSON.parse(a.keywords as string) : undefined,
               aiProcessed: a.aiProcessed || false,
+              tags: a.tags || [],
             }
           }),
         }

@@ -31,6 +31,7 @@ import { MultiSelect } from '@/components/events/MultiSelect'
 import { formatLocalTimeString } from '@/lib/time-utils'
 import { useNewsStream } from '@/hooks/useNewsStream'
 import { ETF_DOMAINS, getDomainByCode } from '@/config/etf-domains'
+import { NewsTags } from '@/components/news/NewsTags'
 
 interface NewsArticle {
   id: string
@@ -51,6 +52,16 @@ interface NewsArticle {
   sentimentLabel?: string | null
   impact?: number
   sectors?: string[]
+  tags?: Array<{
+    id: string
+    confidence: number
+    tag: {
+      id: string
+      name: string
+      code: string
+      type: string
+    }
+  }>
 }
 
 interface DataSource {
@@ -702,6 +713,11 @@ export default function EventsFeedPage() {
                           <Badge variant="default">重大影响</Badge>
                         )}
                       </div>
+
+                      {/* AI提取的标签 */}
+                      {article.tags && article.tags.length > 0 && (
+                        <NewsTags tags={article.tags} maxDisplay={5} />
+                      )}
 
                       {/* 发布时间 - 单独一行 */}
                       <div className="text-xs text-muted-foreground">

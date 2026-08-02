@@ -7,9 +7,10 @@ import { graphSuggestionService } from '@/lib/services/graph-suggestion.service'
  */
 export async function PATCH(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { id } = await params
     const body = await request.json()
 
     if (!body.action || !['approve', 'reject'].includes(body.action)) {
@@ -27,10 +28,10 @@ export async function PATCH(
     }
 
     if (body.action === 'approve') {
-      await graphSuggestionService.approveSuggestion(params.id, body.reviewedBy)
+      await graphSuggestionService.approveSuggestion(id, body.reviewedBy)
     } else {
       await graphSuggestionService.rejectSuggestion(
-        params.id,
+        id,
         body.reviewedBy,
         body.note
       )
@@ -38,7 +39,7 @@ export async function PATCH(
 
     return NextResponse.json({
       success: true,
-      data: { id: params.id, action: body.action }
+      data: { id, action: body.action }
     })
   } catch (error) {
     console.error('Review suggestion error:', error)

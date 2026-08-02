@@ -3,10 +3,10 @@ import { prisma } from '@/lib/db/prisma'
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string; etfCode: string } }
+  { params }: { params: Promise<{ id: string; etfCode: string }> }
 ) {
   try {
-    const { id: nodeId, etfCode } = params
+    const { id: nodeId, etfCode } = await params
 
     // 查找绑定
     const binding = await prisma.graphNodeETF.findUnique({

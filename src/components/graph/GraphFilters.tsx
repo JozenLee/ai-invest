@@ -192,7 +192,7 @@ export function GraphFilters({
             max={20}
             step={1}
             value={[filters.minNewsCount]}
-            onValueChange={(value) => updateFilter('minNewsCount', value[0])}
+            onValueChange={(value) => updateFilter('minNewsCount', Array.isArray(value) ? value[0] : value)}
             className="w-full"
           />
         </div>

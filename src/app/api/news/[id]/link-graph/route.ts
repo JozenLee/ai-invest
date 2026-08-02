@@ -7,10 +7,10 @@ import { newsGraphLinkerService } from '@/lib/services/news-graph-linker.service
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const newsId = params.id
+    const { id: newsId } = await params
 
     if (!newsId) {
       return NextResponse.json(

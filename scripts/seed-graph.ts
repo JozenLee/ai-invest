@@ -637,7 +637,15 @@ async function main() {
   ]
 
   for (const stock of stocks) {
-    await prisma.graphStock.create({ data: stock })
+    await prisma.graphStock.create({
+      data: {
+        stockCode: stock.ticker,
+        stockName: stock.name,
+        nodeId: stock.nodeId,
+        relevance: stock.relevance,
+        category: stock.role
+      }
+    })
   }
 
   // ==================== 创建变更日志 ====================

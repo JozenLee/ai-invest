@@ -93,16 +93,14 @@ async function batchTagHistoricalNews(options: BatchOptions = {}) {
 
         // 保存节点关联
         if (analysis.relatedNodes.length > 0) {
-          await prisma.newsArticle.update({
-            where: { id: news.id },
-            data: {
-              graphLinks: {
-                create: analysis.relatedNodes.map(node => ({
-                  nodeId: node.nodeId,
-                  relevance: node.relevance
-                }))
-              }
-            }
+          await prisma.newsGraphLink.createMany({
+            data: analysis.relatedNodes.map(node => ({
+              newsId: news.id,
+              nodeId: node.nodeId,
+              relevance: node.relevance,
+              sentiment: analysis.sentimentLabel || 'neutral',
+              impactType: 'direct'
+            }))
           })
         }
 

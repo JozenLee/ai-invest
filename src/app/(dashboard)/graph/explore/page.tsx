@@ -8,8 +8,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ForceGraph, TreeView } from '@/components/graph'
 import { GraphFilters } from '@/components/graph/GraphFilters'
 import { ViewSwitcher } from '@/components/graph/ViewSwitcher'
+import { MarketDataPanel } from '@/components/graph/MarketDataPanel'
+import { InvestmentSignals } from '@/components/graph/InvestmentSignals'
 import type { GraphNode, GraphEdge } from '@/types/graph'
 import type { GraphFilters as GraphFiltersType } from '@/components/graph/GraphFilters'
+import type { MarketDataEnhancement } from '@/lib/services/graph-market-data.service'
 import {
   GitBranch,
   RefreshCw,
@@ -21,6 +24,9 @@ import {
   List,
   Info,
   Filter,
+  BarChart3,
+  Newspaper,
+  DollarSign,
 } from 'lucide-react'
 
 // --------------- 常量 ---------------
@@ -63,20 +69,41 @@ const NODE_TYPE_COLORS: Record<string, string> = {
   sub_sector: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
   stock: 'bg-slate-100 text-slate-800 dark:bg-slate-900 dark:text-slate-200',
   chip_design: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+  wafer_foundry: 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
+  packaging: 'bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900 dark:text-fuchsia-200',
+  equipment: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  material: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+  eda: 'bg-lime-100 text-lime-800 dark:bg-lime-900 dark:text-lime-200',
   memory: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200',
   server: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   cooling: 'bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-200',
-  optical_module: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  cpo: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  power: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
   pcb: 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200',
   networking: 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
-  data_center: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
-  cloud: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  data_center: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900 dark:text-indigo-200',
+  cloud: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200',
   ai_application: 'bg-pink-100 text-pink-800 dark:bg-pink-900 dark:text-pink-200',
+  terminal_device: 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200',
+  optical_comm: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
+  cpo: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200',
+  optical_module: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200',
   policy: 'bg-stone-100 text-stone-800 dark:bg-stone-900 dark:text-stone-200',
-  macro: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  macro: 'bg-neutral-100 text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200',
   technology: 'bg-zinc-100 text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200',
   demand: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
+}
+
+const EDGE_RELATION_LABELS: Record<string, string> = {
+  contain: '包含',
+  supply_chain: '供应链',
+  demand_driver: '需求驱动',
+  technology_driver: '技术驱动',
+  policy_impact: '政策影响',
+  market_correlation: '市场相关',
+  competitive: '竞争',
+  complementary: '互补',
+  upstream: '上游',
+  downstream: '下游',
 }
 
 // --------------- 树形数据转换 ---------------
@@ -162,11 +189,13 @@ export default function GraphExplorePage() {
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
-  const [viewMode, setViewMode] = useState<'force' | 'tree'>('force')
+  const [selectedNodeMarketData, setSelectedNodeMarketData] = useState<MarketDataEnhancement | null>(null)
+  const [loadingMarketData, setLoadingMarketData] = useState(false)
+  const [viewMode, setViewMode] = useState<'force' | 'tree'>('tree')
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [graphDimensions, setGraphDimensions] = useState({ width: 800, height: 560 })
-  const graphDimensionsRef = useRef({ width: 800, height: 560 })
+  const [graphDimensions, setGraphDimensions] = useState({ width: 900, height: 600 })
+  const graphDimensionsRef = useRef({ width: 900, height: 600 })
   const graphAreaRef = useRef<HTMLDivElement>(null)
   const [filters, setFilters] = useState<GraphFiltersType>({
     nodeTypes: [],
@@ -177,13 +206,31 @@ export default function GraphExplorePage() {
   })
   const [showFilters, setShowFilters] = useState(false)
   const [currentView, setCurrentView] = useState<string>('panorama')
+  const [showMarketData, setShowMarketData] = useState(true)
 
   // ---------- 节点点击回调（稳定引用） ----------
   // ForceGraph 传入 GraphNode，TreeView 传入 TreeNode（结构兼容，详情面板只读共享字段）
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleNodeClick = useCallback((node: any) => {
+  const handleNodeClick = useCallback(async (node: any) => {
     setSelectedNode(node as GraphNode | null)
-  }, [])
+
+    // 加载市场数据
+    if (node?.id && showMarketData) {
+      setLoadingMarketData(true)
+      setSelectedNodeMarketData(null)
+      try {
+        const response = await fetch(`/api/graph/nodes/${node.id}/market-data`)
+        const result = await response.json()
+        if (result.success && result.data?.marketData) {
+          setSelectedNodeMarketData(result.data.marketData)
+        }
+      } catch (error) {
+        console.error('加载市场数据失败:', error)
+      } finally {
+        setLoadingMarketData(false)
+      }
+    }
+  }, [showMarketData])
 
   // ---------- 视角切换逻辑 ----------
   const handleViewChange = useCallback(async (viewId: string) => {
@@ -233,25 +280,30 @@ export default function GraphExplorePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---------- 响应式宽度（仅跟踪宽度，高度固定，避免 ResizeObserver 循环） ----------
+  // ---------- 响应式宽度（跟踪容器宽度，高度固定） ----------
   useEffect(() => {
     const el = graphAreaRef.current
     if (!el) return
 
-    const updateWidth = () => {
-      const w = el.getBoundingClientRect().width
-      if (w > 0 && Math.floor(w) !== graphDimensionsRef.current.width) {
-        graphDimensionsRef.current = { ...graphDimensionsRef.current, width: Math.floor(w) }
-        setGraphDimensions(graphDimensionsRef.current)
+    const updateDimensions = () => {
+      const rect = el.getBoundingClientRect()
+      const w = Math.floor(rect.width)
+      const h = 600 // 固定高度
+
+      if (w > 0 && (w !== graphDimensionsRef.current.width || h !== graphDimensionsRef.current.height)) {
+        graphDimensionsRef.current = { width: w, height: h }
+        setGraphDimensions({ width: w, height: h })
       }
     }
 
-    updateWidth()
+    // 初始化时更新
+    updateDimensions()
 
-    const observer = new ResizeObserver(() => updateWidth())
+    const observer = new ResizeObserver(() => updateDimensions())
     observer.observe(el)
+
     return () => observer.disconnect()
-  }, [isLoading])
+  }, [viewMode, isLoading])
 
   // ---------- 应用筛选器 ----------
   const filteredNodesByFilter = useMemo(() => {
@@ -362,6 +414,15 @@ export default function GraphExplorePage() {
           <p className="text-muted-foreground">
             AI硬件产业链结构化知识图谱 -- 力导向图与树形图可视化
           </p>
+          <div className="mt-2 flex items-center gap-2">
+            <Badge variant="outline" className="text-xs">
+              <BarChart3 className="mr-1 h-3 w-3" />
+              市场数据来源: AKShare (真实数据)
+            </Badge>
+            <Badge variant="secondary" className="text-xs">
+              数据更新: 每日交易日收盘后
+            </Badge>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={fetchGraph} disabled={isLoading}>
@@ -397,6 +458,14 @@ export default function GraphExplorePage() {
           <Filter className="mr-2 h-4 w-4" />
           {showFilters ? '隐藏筛选' : '显示筛选'}
         </Button>
+        <Button
+          variant={showMarketData ? 'default' : 'outline'}
+          size="sm"
+          onClick={() => setShowMarketData(!showMarketData)}
+        >
+          <BarChart3 className="mr-2 h-4 w-4" />
+          {showMarketData ? '隐藏市场数据' : '显示市场数据'}
+        </Button>
         {filteredNodes.length < nodes.length && (
           <span className="text-sm text-muted-foreground">
             已筛选: {filteredNodes.length}/{nodes.length} 节点
@@ -420,8 +489,8 @@ export default function GraphExplorePage() {
         />
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        {/* 左侧：图谱视图 */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+        {/* 左侧：知识图谱视图 */}
         <div className="space-y-4">
           <Tabs
             value={viewMode}
@@ -429,13 +498,13 @@ export default function GraphExplorePage() {
           >
             <div className="flex items-center justify-between">
               <TabsList>
-                <TabsTrigger value="force" className="gap-1.5">
-                  <Network className="h-4 w-4" />
-                  力导向图
-                </TabsTrigger>
                 <TabsTrigger value="tree" className="gap-1.5">
                   <List className="h-4 w-4" />
                   树形图
+                </TabsTrigger>
+                <TabsTrigger value="force" className="gap-1.5">
+                  <Network className="h-4 w-4" />
+                  力导向图
                 </TabsTrigger>
               </TabsList>
 
@@ -447,6 +516,39 @@ export default function GraphExplorePage() {
               )}
             </div>
 
+            <TabsContent value="tree">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <List className="h-4 w-4" />
+                    树形图 -- 点击节点展开/折叠
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div ref={graphAreaRef} className="min-h-[600px]">
+                    {isLoading ? (
+                      <div className="flex h-[600px] items-center justify-center">
+                        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : treeData.length === 0 ? (
+                      <div className="flex h-[600px] flex-col items-center justify-center text-muted-foreground">
+                        <GitBranch className="mb-4 h-12 w-12" />
+                        <p>暂无图谱数据</p>
+                      </div>
+                    ) : (
+                      <TreeView
+                        data={treeData}
+                        width={graphDimensions.width}
+                        height={graphDimensions.height}
+                        onNodeClick={handleNodeClick}
+                        selectedNodeId={selectedNode?.id}
+                      />
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             <TabsContent value="force">
               <Card>
                 <CardHeader className="pb-2">
@@ -456,13 +558,13 @@ export default function GraphExplorePage() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div ref={graphAreaRef} className="min-h-[460px]">
+                  <div className="min-h-[600px]">
                     {isLoading ? (
-                      <div className="flex h-[460px] items-center justify-center">
+                      <div className="flex h-[600px] items-center justify-center">
                         <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
                       </div>
                     ) : filteredNodes.length === 0 ? (
-                      <div className="flex h-[460px] flex-col items-center justify-center text-muted-foreground">
+                      <div className="flex h-[600px] flex-col items-center justify-center text-muted-foreground">
                         <GitBranch className="mb-4 h-12 w-12" />
                         <p>暂无图谱数据</p>
                       </div>
@@ -480,205 +582,367 @@ export default function GraphExplorePage() {
                 </CardContent>
               </Card>
             </TabsContent>
-
-            <TabsContent value="tree">
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <List className="h-4 w-4" />
-                    树形图 -- 点击节点展开/折叠
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="min-h-[460px]">
-                    {isLoading ? (
-                      <div className="flex h-[460px] items-center justify-center">
-                        <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : treeData.length === 0 ? (
-                      <div className="flex h-[460px] flex-col items-center justify-center text-muted-foreground">
-                        <GitBranch className="mb-4 h-12 w-12" />
-                        <p>暂无图谱数据</p>
-                      </div>
-                    ) : (
-                      <TreeView
-                        data={treeData}
-                        width={graphDimensions.width}
-                        height={graphDimensions.height}
-                        onNodeClick={handleNodeClick}
-                        selectedNodeId={selectedNode?.id}
-                      />
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
           </Tabs>
         </div>
 
-        {/* 右侧：节点详情 + 统计 */}
+        {/* 右侧：节点详情和市场数据 */}
         <div className="space-y-4">
-          {/* 节点详情 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Info className="h-4 w-4" />
-                节点详情
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {selectedNode ? (
-                <div className="space-y-4">
-                  {/* 名称和类型 */}
-                  <div>
-                    <h3 className="text-lg font-bold">{selectedNode.name}</h3>
-                    <Badge
-                      className={NODE_TYPE_COLORS[selectedNode.type] || 'bg-gray-100 text-gray-800'}
-                    >
-                      {NODE_TYPE_LABELS[selectedNode.type] || selectedNode.type}
-                    </Badge>
-                  </div>
+          {selectedNode ? (
+            <>
+              {/* 第一行：基本信息和关联节点 */}
+              <div className="grid gap-4 grid-cols-2">
+                {/* 左侧：基本信息和关联关系 */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Info className="h-4 w-4" />
+                      节点详情
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {/* 名称和类型 */}
+                    <div>
+                      <h3 className="text-base font-bold">{selectedNode.name}</h3>
+                      {NODE_TYPE_LABELS[selectedNode.type] && (
+                        <Badge
+                          className={NODE_TYPE_COLORS[selectedNode.type] || 'bg-gray-100 text-gray-800'}
+                        >
+                          {NODE_TYPE_LABELS[selectedNode.type]}
+                        </Badge>
+                      )}
+                    </div>
 
-                  {/* 描述 */}
-                  {selectedNode.description && (
-                    <p className="text-sm text-muted-foreground">{selectedNode.description}</p>
+                    {/* 描述 */}
+                    {selectedNode.description && (
+                      <p className="text-xs text-muted-foreground">{selectedNode.description}</p>
+                    )}
+
+                    {/* 基本属性 */}
+                    <div className="space-y-2 rounded-lg border p-2">
+                      <h4 className="text-xs font-semibold text-muted-foreground">基本属性</h4>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">层级</span>
+                        <span className="text-xs font-medium">{selectedNode.level}</span>
+                      </div>
+
+                      {selectedNode.cyclePos && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">周期</span>
+                          {getCycleBadge(selectedNode.cyclePos)}
+                        </div>
+                      )}
+
+                      {selectedNode.momentum !== undefined && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">动量</span>
+                          <div className="flex items-center gap-1">
+                            {getMomentumIcon(selectedNode.momentum)}
+                            <span className="text-xs font-medium">{selectedNode.momentum}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 关联关系 */}
+                    <div>
+                      <h4 className="mb-1.5 text-xs font-semibold text-muted-foreground">
+                        关联关系 ({getNodeEdges(selectedNode.id).length})
+                      </h4>
+                      <div className="max-h-24 space-y-0.5 overflow-y-auto">
+                        {getNodeEdges(selectedNode.id).slice(0, 5).map((edge) => {
+                          const relatedId =
+                            edge.sourceId === selectedNode.id ? edge.targetId : edge.sourceId
+                          const relatedNode = nodes.find((n) => n.id === relatedId)
+                          const isOutgoing = edge.sourceId === selectedNode.id
+                          const relationLabel = EDGE_RELATION_LABELS[edge.relation]
+                          return (
+                            <div
+                              key={edge.id}
+                              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-xs hover:bg-muted"
+                            >
+                              <span className={isOutgoing ? 'text-green-500' : 'text-blue-500'}>
+                                {isOutgoing ? '→' : '←'}
+                              </span>
+                              <span className="font-medium truncate flex-1 text-[11px]">{relatedNode?.name || relatedId}</span>
+                              {relationLabel && (
+                                <span className="text-muted-foreground text-[10px]">{relationLabel}</span>
+                              )}
+                            </div>
+                          )
+                        })}
+                        {getNodeEdges(selectedNode.id).length > 5 && (
+                          <div className="text-[10px] text-muted-foreground text-center pt-0.5">
+                            +{getNodeEdges(selectedNode.id).length - 5} 更多
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* 右侧：关联节点 */}
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2 text-base">
+                      <Network className="h-4 w-4" />
+                      关联节点
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div>
+                      <h4 className="mb-1.5 text-xs font-semibold text-muted-foreground">
+                        关联节点 ({getRelatedNodes(selectedNode.id).length})
+                      </h4>
+                      <div className="max-h-96 space-y-0.5 overflow-y-auto">
+                        {getRelatedNodes(selectedNode.id).slice(0, 20).map((related) => (
+                          <div
+                            key={related.id}
+                            className="flex cursor-pointer items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-muted"
+                            onClick={() => setSelectedNode(related)}
+                          >
+                            {NODE_TYPE_LABELS[related.type] && (
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0"
+                              >
+                                {NODE_TYPE_LABELS[related.type]}
+                              </Badge>
+                            )}
+                            <span className="text-[11px] truncate">{related.name}</span>
+                          </div>
+                        ))}
+                        {getRelatedNodes(selectedNode.id).length > 20 && (
+                          <div className="text-[10px] text-muted-foreground text-center pt-0.5">
+                            +{getRelatedNodes(selectedNode.id).length - 20} 更多
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* 第二行：新闻热度和投资参考 */}
+              <div className="grid gap-4 lg:grid-cols-2">
+                {/* 左侧：新闻热度 */}
+                {showMarketData && !loadingMarketData && selectedNodeMarketData?.newsHeat && (
+                  <Card>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-sm flex items-center gap-2">
+                        <Newspaper className="h-4 w-4" />
+                        新闻热度
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="text-xs">
+                          <span className="text-muted-foreground block mb-1">7日新闻</span>
+                          <span className="text-lg font-bold">{selectedNodeMarketData.newsHeat.count7d}</span>
+                          {selectedNodeMarketData.newsHeat.trending && (
+                            <Badge variant="destructive" className="ml-2 text-xs">热点</Badge>
+                          )}
+                        </div>
+                        <div className="text-xs">
+                          <span className="text-muted-foreground block mb-1">30日新闻</span>
+                          <span className="text-lg font-bold">{selectedNodeMarketData.newsHeat.count30d}</span>
+                        </div>
+                      </div>
+                      {selectedNodeMarketData.newsHeat.sentimentLabel && (
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">市场情绪</span>
+                          <Badge variant={
+                            selectedNodeMarketData.newsHeat.sentimentLabel === 'bullish' ? 'default' :
+                            selectedNodeMarketData.newsHeat.sentimentLabel === 'bearish' ? 'destructive' : 'secondary'
+                          }>
+                            {selectedNodeMarketData.newsHeat.sentimentLabel === 'bullish' ? '看多' :
+                             selectedNodeMarketData.newsHeat.sentimentLabel === 'bearish' ? '看空' : '中性'}
+                          </Badge>
+                        </div>
+                      )}
+                      {selectedNodeMarketData.newsHeat.topKeywords && selectedNodeMarketData.newsHeat.topKeywords.length > 0 && (
+                        <div className="text-xs">
+                          <span className="text-muted-foreground block mb-1">热词</span>
+                          <div className="flex flex-wrap gap-1">
+                            {selectedNodeMarketData.newsHeat.topKeywords.map((kw, i) => (
+                              <Badge key={i} variant="outline" className="text-xs">
+                                {kw}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* 右侧：投资参考 */}
+                {showMarketData && !loadingMarketData && selectedNodeMarketData && (
+                  <InvestmentSignals
+                    marketData={selectedNodeMarketData}
+                    nodeType={selectedNode.type}
+                    nodeName={selectedNode.name}
+                  />
+                )}
+              </div>
+
+              {/* 第三行：行业指数和ETF */}
+              {showMarketData && !loadingMarketData && selectedNodeMarketData && (
+                <div className="grid gap-4 lg:grid-cols-2">
+                  {/* 左侧：行业指数 */}
+                  {selectedNodeMarketData.indexPerformance && (
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <BarChart3 className="h-4 w-4" />
+                          行业指数表现
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">
+                            {selectedNodeMarketData.indexPerformance.name}
+                          </p>
+                          <div className="grid grid-cols-3 gap-2 text-xs">
+                            <div>
+                              <span className="text-muted-foreground block mb-1">1日</span>
+                              {selectedNodeMarketData.indexPerformance.changePct1d !== undefined && (
+                                selectedNodeMarketData.indexPerformance.changePct1d > 0 ? (
+                                  <span className="text-green-600 flex items-center gap-1">
+                                    <TrendingUp className="h-3 w-3" />
+                                    +{selectedNodeMarketData.indexPerformance.changePct1d.toFixed(2)}%
+                                  </span>
+                                ) : selectedNodeMarketData.indexPerformance.changePct1d < 0 ? (
+                                  <span className="text-red-600 flex items-center gap-1">
+                                    <TrendingDown className="h-3 w-3" />
+                                    {selectedNodeMarketData.indexPerformance.changePct1d.toFixed(2)}%
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600 flex items-center gap-1">
+                                    <Minus className="h-3 w-3" />
+                                    0.00%
+                                  </span>
+                                )
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground block mb-1">5日</span>
+                              {selectedNodeMarketData.indexPerformance.changePct5d !== undefined && (
+                                selectedNodeMarketData.indexPerformance.changePct5d > 0 ? (
+                                  <span className="text-green-600 flex items-center gap-1">
+                                    <TrendingUp className="h-3 w-3" />
+                                    +{selectedNodeMarketData.indexPerformance.changePct5d.toFixed(2)}%
+                                  </span>
+                                ) : selectedNodeMarketData.indexPerformance.changePct5d < 0 ? (
+                                  <span className="text-red-600 flex items-center gap-1">
+                                    <TrendingDown className="h-3 w-3" />
+                                    {selectedNodeMarketData.indexPerformance.changePct5d.toFixed(2)}%
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600 flex items-center gap-1">
+                                    <Minus className="h-3 w-3" />
+                                    0.00%
+                                  </span>
+                                )
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground block mb-1">30日</span>
+                              {selectedNodeMarketData.indexPerformance.changePct30d !== undefined && (
+                                selectedNodeMarketData.indexPerformance.changePct30d > 0 ? (
+                                  <span className="text-green-600 flex items-center gap-1">
+                                    <TrendingUp className="h-3 w-3" />
+                                    +{selectedNodeMarketData.indexPerformance.changePct30d.toFixed(2)}%
+                                  </span>
+                                ) : selectedNodeMarketData.indexPerformance.changePct30d < 0 ? (
+                                  <span className="text-red-600 flex items-center gap-1">
+                                    <TrendingDown className="h-3 w-3" />
+                                    {selectedNodeMarketData.indexPerformance.changePct30d.toFixed(2)}%
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600 flex items-center gap-1">
+                                    <Minus className="h-3 w-3" />
+                                    0.00%
+                                  </span>
+                                )
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
                   )}
 
-                  {/* 属性 */}
-                  <div className="space-y-2 rounded-lg border p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-muted-foreground">层级</span>
-                      <span className="text-sm font-medium">L{selectedNode.level}</span>
-                    </div>
-
-                    {selectedNode.cyclePos && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">周期位置</span>
-                        {getCycleBadge(selectedNode.cyclePos)}
-                      </div>
-                    )}
-
-                    {selectedNode.momentum !== undefined && (
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-muted-foreground">动量指标</span>
-                        <div className="flex items-center gap-2">
-                          {getMomentumIcon(selectedNode.momentum)}
-                          <span className="text-sm font-medium">{selectedNode.momentum}</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* 关联边 */}
-                  <div>
-                    <h4 className="mb-2 text-sm font-medium">
-                      关联关系 ({getNodeEdges(selectedNode.id).length})
-                    </h4>
-                    <div className="max-h-32 space-y-1 overflow-y-auto">
-                      {getNodeEdges(selectedNode.id).map((edge) => {
-                        const relatedId =
-                          edge.sourceId === selectedNode.id ? edge.targetId : edge.sourceId
-                        const relatedNode = nodes.find((n) => n.id === relatedId)
-                        const isOutgoing = edge.sourceId === selectedNode.id
-                        return (
-                          <div
-                            key={edge.id}
-                            className="flex items-center gap-1.5 rounded px-2 py-1 text-xs hover:bg-muted"
-                          >
-                            <span className={isOutgoing ? 'text-green-500' : 'text-blue-500'}>
-                              {isOutgoing ? '→' : '←'}
-                            </span>
-                            <span className="font-medium">{relatedNode?.name || relatedId}</span>
-                            <span className="ml-auto text-muted-foreground">{edge.relation}</span>
+                  {/* 右侧：ETF跟踪 */}
+                  {selectedNodeMarketData.etfTracking && selectedNodeMarketData.etfTracking.length > 0 && (
+                    <Card>
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                          <DollarSign className="h-4 w-4" />
+                          跟踪ETF ({selectedNodeMarketData.etfTracking.length})
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {selectedNodeMarketData.etfTracking.slice(0, 3).map((etf) => (
+                          <div key={etf.ticker} className="rounded-lg border p-2">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-xs font-medium">{etf.name}</span>
+                              <span className="text-xs text-muted-foreground">{etf.ticker}</span>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">5日涨跌</span>
+                              {etf.changePct5d !== undefined && (
+                                etf.changePct5d > 0 ? (
+                                  <span className="text-green-600 flex items-center gap-1">
+                                    <TrendingUp className="h-3 w-3" />
+                                    +{etf.changePct5d.toFixed(2)}%
+                                  </span>
+                                ) : etf.changePct5d < 0 ? (
+                                  <span className="text-red-600 flex items-center gap-1">
+                                    <TrendingDown className="h-3 w-3" />
+                                    {etf.changePct5d.toFixed(2)}%
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-600 flex items-center gap-1">
+                                    <Minus className="h-3 w-3" />
+                                    0.00%
+                                  </span>
+                                )
+                              )}
+                            </div>
+                            {etf.premium !== undefined && (
+                              <div className="flex items-center justify-between text-xs mt-1">
+                                <span className="text-muted-foreground">溢折价率</span>
+                                <span className={etf.premium > 0 ? 'text-red-600' : 'text-green-600'}>
+                                  {etf.premium > 0 ? '+' : ''}{etf.premium.toFixed(2)}%
+                                </span>
+                              </div>
+                            )}
+                            {etf.inflow5d !== undefined && (
+                              <div className="flex items-center justify-between text-xs mt-1">
+                                <span className="text-muted-foreground">5日资金流入</span>
+                                <span className={etf.inflow5d > 0 ? 'text-green-600' : 'text-red-600'}>
+                                  {etf.inflow5d > 0 ? '+' : ''}{etf.inflow5d.toFixed(2)}亿
+                                </span>
+                              </div>
+                            )}
                           </div>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 关联节点 */}
-                  <div>
-                    <h4 className="mb-2 text-sm font-medium">
-                      关联节点 ({getRelatedNodes(selectedNode.id).length})
-                    </h4>
-                    <div className="max-h-40 space-y-1 overflow-y-auto">
-                      {getRelatedNodes(selectedNode.id).map((related) => (
-                        <div
-                          key={related.id}
-                          className="flex cursor-pointer items-center gap-2 rounded p-2 hover:bg-muted"
-                          onClick={() => setSelectedNode(related)}
-                        >
-                          <Badge
-                            variant="outline"
-                            className="text-xs"
-                          >
-                            {NODE_TYPE_LABELS[related.type] || related.type}
-                          </Badge>
-                          <span className="text-sm">{related.name}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
-                  <GitBranch className="mb-4 h-12 w-12" />
-                  <p className="text-sm">点击图谱中的节点查看详情</p>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  )}
                 </div>
               )}
-            </CardContent>
-          </Card>
-
-          {/* 图谱统计 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">图谱统计</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">节点总数</span>
-                  <span className="text-sm font-medium">{nodes.length}</span>
+            </>
+          ) : (
+            <Card>
+              <CardContent className="pt-6">
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                  <GitBranch className="mb-4 h-16 w-16" />
+                  <p className="text-base">点击图谱中的节点查看详情</p>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-muted-foreground">关系总数</span>
-                  <span className="text-sm font-medium">{edges.length}</span>
-                </div>
-
-                <div className="border-t pt-3">
-                  <h4 className="mb-2 text-xs font-medium text-muted-foreground">节点类型分布</h4>
-                  <div className="space-y-1">
-                    {Object.entries(nodeTypeCounts)
-                      .sort(([, a], [, b]) => b - a)
-                      .slice(0, 8)
-                      .map(([type, count]) => (
-                        <div key={type} className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">
-                            {NODE_TYPE_LABELS[type] || type}
-                          </span>
-                          <span className="font-medium">{count}</span>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-
-                <div className="border-t pt-3">
-                  <h4 className="mb-2 text-xs font-medium text-muted-foreground">关系类型分布</h4>
-                  <div className="space-y-1">
-                    {Object.entries(edgeRelationCounts)
-                      .sort(([, a], [, b]) => b - a)
-                      .slice(0, 6)
-                      .map(([relation, count]) => (
-                        <div key={relation} className="flex items-center justify-between text-xs">
-                          <span className="text-muted-foreground">{relation}</span>
-                          <span className="font-medium">{count}</span>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
     </div>

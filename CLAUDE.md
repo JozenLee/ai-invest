@@ -140,3 +140,8 @@ ai-invest/
   - 实施报告: `docs/multi-platform-implementation-report.md`
   - 配置指南: `docs/platform-provider-guide.md`
   - 使用手册: `data-service/core/USAGE.md`
+
+---
+
+## Claude Code工作偏好
+- **不输出任务总结**: 完成任务后无需提供总结或回顾，直接结束即可

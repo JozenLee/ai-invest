@@ -3,10 +3,10 @@ import { prisma } from '@/lib/db/prisma'
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const nodeId = params.id
+    const { id: nodeId } = await params
 
     // 验证节点存在
     const node = await prisma.graphNode.findUnique({
@@ -42,10 +42,10 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const nodeId = params.id
+    const { id: nodeId } = await params
     const body = await request.json()
 
     // 验证节点存在

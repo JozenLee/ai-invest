@@ -47,6 +47,10 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
         sources=["akshare", "tushare", "xueqiu"],
         cache_ttl=30,
     ),
+    "index_list": CategoryConfig(
+        sources=["akshare", "tushare"],
+        cache_ttl=3600,  # 指数列表变化不频繁
+    ),
     # 个股
     "stock_spot": CategoryConfig(
         sources=["akshare", "tushare", "xueqiu"],
@@ -68,6 +72,10 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     "etf_nav": CategoryConfig(
         sources=["akshare", "tushare"],
         cache_ttl=300,
+    ),
+    "etf_list": CategoryConfig(
+        sources=["akshare"],
+        cache_ttl=3600,  # ETF列表变化不频繁
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(

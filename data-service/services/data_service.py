@@ -96,6 +96,19 @@ class DataService:
         )
         return self._ensure_dataframe(result)
 
+    async def get_index_list(self) -> pd.DataFrame:
+        """获取A股市场所有指数列表
+
+        返回所有可用的市场指数，包括主要指数、行业指数、概念指数等
+        """
+        result = await self.registry.fetch(
+            category="index_list",
+            method="get_index_list",
+            cache_key="index_list",
+            cache_ttl=3600,  # 指数列表变化不频繁，缓存1小时
+        )
+        return self._ensure_dataframe(result)
+
     # ==================== 个股数据 ====================
 
     async def get_stock_spot(self, symbols: List[str]) -> pd.DataFrame:
@@ -145,6 +158,19 @@ class DataService:
             ticker=ticker,
         )
         return result if isinstance(result, dict) else {}
+
+    async def get_etf_list(self) -> pd.DataFrame:
+        """获取全市场ETF列表
+
+        返回所有上市交易的ETF，包含代码、名称、最新价、涨跌幅等信息
+        """
+        result = await self.registry.fetch(
+            category="etf_list",
+            method="get_etf_list",
+            cache_key="etf_list",
+            cache_ttl=3600,  # ETF列表变化不频繁，缓存1小时
+        )
+        return self._ensure_dataframe(result)
 
     # ==================== 资金流向 ====================
 

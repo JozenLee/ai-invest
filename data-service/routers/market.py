@@ -147,3 +147,123 @@ async def get_index_data(code: str, days: int = Query(default=30, ge=1, le=365))
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/indices")
+async def get_index_list():
+    """获取A股市场所有指数列表
+
+    返回所有可用的市场指数，包括主要指数、行业指数、概念指数等
+    """
+    try:
+        df = await data_service.get_index_list()
+
+        if df.empty:
+            return {
+                "success": False,
+                "error": "无法获取指数列表，所有数据源均不可用",
+                "data": None,
+            }
+
+        indices = []
+        for _, row in df.iterrows():
+            indices.append({
+                "code": str(row.get("代码", "")),
+                "name": str(row.get("名称", "")),
+                "price": float(row.get("最新价", 0)),
+                "change": float(row.get("涨跌额", 0)),
+                "changePct": float(row.get("涨跌幅", 0)),
+                "volume": float(row.get("成交量", 0)),
+                "amount": float(row.get("成交额", 0)),
+            })
+
+        return {
+            "success": True,
+            "data": {
+                "indices": indices,
+                "total": len(indices),
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/indices/by-domain/{domain_key}")
+async def get_indices_by_domain(domain_key: str):
+    """获取指定领域的指数列表（AI智能分类）
+
+    Args:
+        domain_key: 领域标识，如 ai_computing, new_energy, semiconductor
+
+    支持的领域：
+    - ai_computing: AI算力
+    - semiconductor: 半导体芯片
+    - communication: 通信设备
+    - new_energy: 新能源
+    - new_energy_vehicle: 新能源汽车
+    - consumption: 消费
+    - healthcare: 医药医疗
+    - finance: 金融
+    - real_estate: 地产建筑
+    - electronics: 消费电子
+    - media: 传媒互联网
+    - industrial: 工业制造
+    - military: 国防军工
+    - biotechnology: 生物科技
+    """
+    try:
+        from services.market_classifier_service import market_classifier_service, DOMAIN_CATEGORIES
+
+        # 验证领域
+        if domain_key not in DOMAIN_CATEGORIES:
+            return {
+                "success": False,
+                "error": f"未知的领域: {domain_key}",
+                "available_domains": market_classifier_service.get_available_domains(),
+            }
+
+        # 获取所有指数
+        df = await data_service.get_index_list()
+        if df.empty:
+            return {
+                "success": False,
+                "error": "无法获取指数列表",
+                "data": None,
+            }
+
+        # 转换为字典列表
+        all_indices = []
+        for _, row in df.iterrows():
+            all_indices.append({
+                "code": str(row.get("代码", "")),
+                "name": str(row.get("名称", "")),
+                "price": float(row.get("最新价", 0)),
+                "change": float(row.get("涨跌额", 0)),
+                "changePct": float(row.get("涨跌幅", 0)),
+                "volume": float(row.get("成交量", 0)),
+                "amount": float(row.get("成交额", 0)),
+            })
+
+        # AI分类筛选
+        classified_indices = await market_classifier_service.classify_by_domain(
+            all_indices,
+            domain_key,
+            item_type="指数"
+        )
+
+        return {
+            "success": True,
+            "data": {
+                "domain": {
+                    "key": domain_key,
+                    "name": DOMAIN_CATEGORIES[domain_key]["name"],
+                    "description": DOMAIN_CATEGORIES[domain_key]["description"],
+                },
+                "indices": classified_indices,
+                "total": len(classified_indices),
+                "timestamp": datetime.now().isoformat(),
+            },
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

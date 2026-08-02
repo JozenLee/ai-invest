@@ -2,37 +2,7 @@
 // 提供图谱数据查询、传导路径分析、图谱编辑等功能
 
 import prisma from '@/lib/db/prisma'
-
-export interface GraphNode {
-  id: string
-  type: string
-  name: string
-  description?: string
-  parentId?: string
-  level: number
-  cyclePos?: string
-  momentum?: number
-  metadata?: any
-  children?: GraphNode[]
-  stocks?: any[]
-  sourceEdges?: any[]
-  targetEdges?: any[]
-}
-
-export interface GraphEdge {
-  id: string
-  sourceId: string
-  targetId: string
-  relation: string
-  weight: number
-  direction: string
-  lag?: string
-  confidence: number
-  evidence?: string
-  description?: string
-  source?: GraphNode
-  target?: GraphNode
-}
+import type { GraphNode, GraphEdge } from '@/types/graph'
 
 export interface PropagationPath {
   trigger: {

@@ -48,31 +48,60 @@ const NODE_COLORS: Record<string, string> = {
   industry_l2: '#84cc16',
   sub_sector: '#a855f7',
   stock: '#64748b',
-  // 产业链
+  // 产业链 - 更新颜色避免重复
   chip_design: '#ef4444',
-  wafer_foundry: '#f97316',
-  packaging: '#f59e0b',
-  equipment: '#eab308',
-  material: '#d97706',
-  eda: '#b45309',
+  wafer_foundry: '#f472b6',
+  packaging: '#e879f9',
+  equipment: '#fbbf24',
+  material: '#facc15',
+  eda: '#bef264',
   memory: '#fb923c',
   server: '#06b6d4',
   cooling: '#14b8a6',
-  power: '#10b981',
+  power: '#34d399',
   pcb: '#6b7280',
   networking: '#8b5cf6',
-  data_center: '#7c3aed',
-  cloud: '#6366f1',
+  data_center: '#6366f1',
+  cloud: '#0ea5e9',
   ai_application: '#ec4899',
-  terminal_device: '#f43f5e',
-  optical_comm: '#0ea5e9',
-  cpo: '#2563eb',
-  optical_module: '#1d4ed8',
+  terminal_device: '#f87171',
+  optical_comm: '#38bdf8',
+  cpo: '#a78bfa',
+  optical_module: '#22d3ee',
   // 外部驱动
   policy: '#a3a3a3',
-  macro: '#78716c',
-  technology: '#d6d3d1',
-  demand: '#fef08a',
+  macro: '#d4d4d4',
+  technology: '#e5e5e5',
+  demand: '#fde047',
+  // 子图谱节点类型
+  biotech_index: '#db2777',
+  biotech_l1: '#f472b6',
+  biotech_l2: '#fb7185',
+  ce_index: '#7c3aed',
+  ce_l1: '#a78bfa',
+  ce_l2: '#c4b5fd',
+  defense_index: '#475569',
+  defense_l1: '#94a3b8',
+  defense_l2: '#cbd5e1',
+  energy_index: '#059669',
+  energy_l1: '#34d399',
+  energy_l2: '#6ee7b7',
+  robotics_index: '#ea580c',
+  robotics_l1: '#fbbf24',
+  robotics_l2: '#fcd34d',
+  digital_index: '#0284c7',
+  digital_l1: '#22d3ee',
+  digital_l2: '#67e8f9',
+  materials_index: '#57534e',
+  materials_l1: '#a8a29e',
+  materials_l2: '#d6d3d1',
+  nev_index: '#16a34a',
+  nev_l1: '#4ade80',
+  nev_l2: '#86efac',
+  nev_l3: '#bbf7d0',
+  consumer_index: '#dc2626',
+  consumer_l1: '#fb7185',
+  consumer_l2: '#fda4af',
 }
 
 const DEFAULT_NODE_COLOR = '#94a3b8'
@@ -204,8 +233,48 @@ export function ForceGraph({
     // 清空旧内容
     svg.selectAll('*').remove()
 
-    // ---------- Defs: 箭头 ----------
+    // ---------- Defs: 箭头和渐变 ----------
     const defs = svg.append('defs')
+
+    // 为每种节点类型创建渐变
+    const gradientTypes = Array.from(new Set(d3Nodes.map(n => n.type)))
+    gradientTypes.forEach(type => {
+      const color = getNodeColor(type)
+      const gradient = defs
+        .append('radialGradient')
+        .attr('id', `gradient-${type}`)
+        .attr('cx', '30%')
+        .attr('cy', '30%')
+
+      gradient.append('stop')
+        .attr('offset', '0%')
+        .attr('stop-color', d3.color(color)?.brighter(0.5).toString() || color)
+
+      gradient.append('stop')
+        .attr('offset', '100%')
+        .attr('stop-color', color)
+    })
+
+    // 阴影滤镜
+    const filter = defs.append('filter')
+      .attr('id', 'node-shadow')
+      .attr('x', '-50%')
+      .attr('y', '-50%')
+      .attr('width', '200%')
+      .attr('height', '200%')
+
+    filter.append('feGaussianBlur')
+      .attr('in', 'SourceAlpha')
+      .attr('stdDeviation', 3)
+
+    filter.append('feOffset')
+      .attr('dx', 0)
+      .attr('dy', 2)
+      .attr('result', 'offsetblur')
+
+    const feMerge = filter.append('feMerge')
+    feMerge.append('feMergeNode')
+    feMerge.append('feMergeNode').attr('in', 'SourceGraphic')
 
     // 正向箭头 (绿色)
     defs
@@ -273,10 +342,16 @@ export function ForceGraph({
       .selectAll('line')
       .data(d3Links)
       .join('line')
-      .attr('stroke', (d) => d.relation === 'contain' ? '#64748b' : getEdgeColor(d.direction))
-      .attr('stroke-opacity', (d) => d.relation === 'contain' ? 0.25 : 0.5)
-      .attr('stroke-width', (d) => d.relation === 'contain' ? 1 : Math.max(1, d.weight * 3))
-      .attr('stroke-dasharray', (d) => d.relation === 'contain' ? '4,3' : 'none')
+      .attr('stroke', (d) => {
+        if (d.relation === 'contain') return '#64748b'
+        return d.direction === 'positive' ? '#22c55e' : d.direction === 'negative' ? '#ef4444' : '#94a3b8'
+      })
+      .attr('stroke-opacity', (d) => d.relation === 'contain' ? 0.2 : 0.6)
+      .attr('stroke-width', (d) => {
+        if (d.relation === 'contain') return 1
+        return Math.max(1.5, d.weight * 4)
+      })
+      .attr('stroke-dasharray', (d) => d.relation === 'contain' ? '5,5' : 'none')
       .attr('marker-end', (d) =>
         d.relation === 'contain'
           ? 'none'
@@ -286,6 +361,7 @@ export function ForceGraph({
               ? 'url(#arrow-negative)'
               : 'url(#arrow-default)'
       )
+      .style('transition', 'all 0.3s ease')
 
     // 边标签
     const linkLabelGroup = container.append('g').attr('class', 'link-labels')
@@ -315,10 +391,12 @@ export function ForceGraph({
     node
       .append('circle')
       .attr('r', (d) => getNodeRadius(d.level))
-      .attr('fill', (d) => getNodeColor(d.type))
+      .attr('fill', (d) => `url(#gradient-${d.type})`)
       .attr('stroke', (d) => (d.id === selectedNodeId ? '#fbbf24' : '#1e293b'))
       .attr('stroke-width', (d) => (d.id === selectedNodeId ? 3 : 1.5))
-      .attr('opacity', 0.9)
+      .attr('opacity', 0.95)
+      .attr('filter', 'url(#node-shadow)')
+      .style('transition', 'all 0.3s ease')
 
     // 节点标签
     node
@@ -436,7 +514,7 @@ export function ForceGraph({
         node.selectAll('text').attr('opacity', 1)
       })
 
-    // ---------- 力模拟（仅运行一次计算初始布局，然后停止） ----------
+    // ---------- 力模拟（优化布局，减少重叠） ----------
     const simulation = d3
       .forceSimulation<D3Node>(d3Nodes)
       .force(
@@ -444,19 +522,47 @@ export function ForceGraph({
         d3
           .forceLink<D3Node, D3Link>(d3Links)
           .id((d) => d.id)
-          .distance((d) => d.relation === 'contain' ? 50 + d.weight * 20 : 80 + (1 - d.weight) * 60)
+          .distance((d) => {
+            // 根据层级和关系类型动态调整距离
+            const sourceNode = d.source as D3Node
+            const targetNode = d.target as D3Node
+            const sourceRadius = getNodeRadius(sourceNode.level)
+            const targetRadius = getNodeRadius(targetNode.level)
+            const minDistance = sourceRadius + targetRadius + 40
+
+            if (d.relation === 'contain') {
+              return Math.max(minDistance, 80 + d.weight * 30)
+            }
+            return Math.max(minDistance, 140 + (1 - d.weight) * 80)
+          })
           .strength((d) => d.relation === 'contain' ? 0.6 : 0.4)
       )
-      .force('charge', d3.forceManyBody().strength(-300).distanceMax(400))
+      .force('charge', d3.forceManyBody().strength(-800).distanceMax(600))
       .force('center', d3.forceCenter(0, 0).strength(0.05))
       .force(
         'collision',
-        d3.forceCollide().radius((d) => getNodeRadius((d as D3Node).level) + 8)
+        d3.forceCollide()
+          .radius((d) => {
+            // 更大的碰撞半径，防止节点重叠
+            const nodeRadius = getNodeRadius((d as D3Node).level)
+            // 根据节点名称长度调整碰撞半径
+            const nameLength = (d as D3Node).name.length
+            const textWidth = nameLength * 5
+            return Math.max(nodeRadius + 35, textWidth / 2 + 10)
+          })
+          .strength(1.0) // 强碰撞力
+          .iterations(3) // 多次迭代确保无重叠
       )
+      // 按层级分组，Y轴方向分层
+      .force('y', d3.forceY<D3Node>((d) => {
+        // 根据level调整Y坐标，让相同层级的节点在相近Y位置
+        return (d.level - 2) * 120
+      }).strength(0.25))
+      // X轴轻度约束
       .force('x', d3.forceX(0).strength(0.03))
-      .force('y', d3.forceY(0).strength(0.03))
       .alphaTarget(0)
-      .alphaDecay(0.05)
+      .alphaDecay(0.015) // 更慢的衰减，让布局更充分
+      .velocityDecay(0.4) // 增加速度衰减，让节点更快稳定
 
     simulationRef.current = simulation
 
