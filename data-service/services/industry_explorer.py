@@ -22,12 +22,13 @@ class IndustryExplorerService:
 
     def __init__(self):
         self.anthropic = AsyncAnthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY")
+            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            base_url=os.getenv("ANTHROPIC_BASE_URL")
         )
         self.tavily = TavilyClient(
             api_key=os.getenv("TAVILY_API_KEY")
         )
-        self.model = "claude-3-5-sonnet-20241022"
+        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 
     async def explore_structure(self, industry_name: str) -> IndustryStructure:
         """
