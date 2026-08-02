@@ -1,5 +1,6 @@
 'use client'
 
+import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -32,6 +33,8 @@ export function ExplorationProgress({
   onReset,
   isApproving = false
 }: ExplorationProgressProps) {
+  const router = useRouter()
+
   const getStatusIcon = () => {
     switch (task.status) {
       case 'completed':
@@ -128,7 +131,7 @@ export function ExplorationProgress({
             </div>
             <Button
               className="mt-4 w-full"
-              onClick={() => window.location.href = `/graph/industries/${task.industryId}`}
+              onClick={() => router.push(`/graph/industries/${task.industryId}`)}
             >
               查看产业图谱
             </Button>
