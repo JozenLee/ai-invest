@@ -31,7 +31,8 @@ class TaskManager:
         current_step: Optional[str] = None,
         structure: Optional[Any] = None,
         result: Optional[Any] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        graph_stats: Optional[Dict[str, int]] = None
     ) -> None:
         """更新任务状态"""
         task = self._tasks.get(task_id)
@@ -50,6 +51,9 @@ class TaskManager:
             task.result = result
         if error:
             task.error = error
+        if graph_stats:
+            # 将graph_stats存储到task的metadata中
+            task.metadata['graph_stats'] = graph_stats
 
     def delete_task(self, task_id: str) -> None:
         """删除任务"""
