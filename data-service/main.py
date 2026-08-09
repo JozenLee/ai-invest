@@ -26,11 +26,15 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact
+from routers import stocks, industry_analysis
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# 全局AI分析器实例（用于health检查）
+global_ai_analyzer = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,9 +43,19 @@ async def lifespan(app: FastAPI):
     import asyncio
     from services.data_service import data_service
     from services.scheduler_service import scheduler_service
+    from providers.multi_source_provider import MultiSourceProvider
 
     # 初始化数据源注册
     data_service.initialize()
+
+    # 🔥 预热多数据源缓存（减少首次请求延迟）
+    logger.info("🔥 预热数据缓存...")
+    multi_source = MultiSourceProvider()
+    asyncio.create_task(multi_source.warmup_cache())
+
+    # 初始化全局AI分析器（延迟加载产业细分领域）
+    # 产业细分领域将在服务启动后由后台任务加载
+    logger.info("✅ AI分析器将在服务启动后自动加载产业细分领域")
 
     # 启动定时任务调度器
     await scheduler_service.start()
@@ -71,6 +85,29 @@ async def lifespan(app: FastAPI):
             else:
                 # 最后一次失败后记录错误但不阻塞服务启动
                 logger.error(f"可以稍后通过API手动触发采集任务")
+
+    # 注册后台任务：延迟加载AI分析器的产业细分领域
+    async def load_ai_segments_delayed():
+        """延迟5秒后加载产业细分领域（确保服务已启动）"""
+        global global_ai_analyzer
+        await asyncio.sleep(5)
+        try:
+            from workers.ai_analyzer import AIAnalyzer
+            from services.ai_service import set_global_analyzer
+
+            logger.info("开始加载AI分析器的产业细分领域...")
+            global_ai_analyzer = AIAnalyzer()
+            await global_ai_analyzer.load_industry_segments(max_retries=3, retry_delay=2.0)
+
+            # 注册到ai_service模块，供其他服务使用
+            set_global_analyzer(global_ai_analyzer)
+
+            logger.info(f"✅ AI分析器产业细分领域加载完成，共 {len(global_ai_analyzer.industry_segments)} 个领域")
+        except Exception as e:
+            logger.error(f"❌ AI分析器产业细分领域加载失败: {e}")
+
+    # 启动后台任务
+    asyncio.create_task(load_ai_segments_delayed())
 
     # 注册财联社新闻采集任务（每小时执行一次）
     # DISABLED: 暂时禁用自动采集任务，避免AI API故障阻塞服务启动
@@ -219,20 +256,40 @@ app.include_router(schedulers.router, prefix="/schedulers", tags=["schedulers"])
 app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
 app.include_router(platform_configs.router, prefix="/api/platform-configs", tags=["platform-configs"])
 app.include_router(industry_graph.router)
-<<<<<<< HEAD
-=======
 app.include_router(industry_query.router)
->>>>>>> worktree-ai-industry-graph
+app.include_router(impact.router)
+app.include_router(stocks.router)
+app.include_router(industry_analysis.router, prefix="/api")
 
 @app.get("/health")
 async def health_check():
     from services.scheduler_service import scheduler_service
+
+    # 检查AI分析器状态
+    ai_enabled = os.getenv('ENABLE_AI_ANALYSIS', 'true').lower() == 'true'
+    api_key = os.getenv('ANTHROPIC_API_KEY')
+    api_configured = bool(api_key)
+
+    # 从全局实例获取AI分析器状态
+    ai_ready = False
+    segments_loaded = 0
+
+    if global_ai_analyzer is not None:
+        ai_ready = global_ai_analyzer.claude_client is not None
+        segments_loaded = len(global_ai_analyzer.industry_segments)
+
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
         "scheduler_running": scheduler_service.is_running,
-        "active_jobs": len(scheduler_service.get_all_jobs())
+        "active_jobs": len(scheduler_service.get_all_jobs()),
+        "ai_analyzer": {
+            "enabled": ai_enabled,
+            "ready": ai_ready,
+            "segments_loaded": segments_loaded,
+            "api_configured": api_configured
+        }
     }
 
 @app.get("/")
