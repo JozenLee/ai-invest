@@ -3,38 +3,71 @@
 import { SegmentCard } from './SegmentCard'
 import type { Stage } from '@/types/industry-graph'
 
+interface MatchDetail {
+  nodeId: string
+  nodeName: string
+  etfCount: number
+  indexCount: number
+  success: boolean
+  etfs?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+  indices?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+}
+
 interface StageColumnProps {
   stage: Stage
   onCompanyClick?: (companyId: string) => void
+  matchResults?: Record<string, MatchDetail>
 }
 
-export function StageColumn({ stage, onCompanyClick }: StageColumnProps) {
+export function StageColumn({ stage, onCompanyClick, matchResults = {} }: StageColumnProps) {
   return (
-    <div className="flex-shrink-0 w-[320px] space-y-4">
+    <div className="flex flex-col h-full">
       {/* Stage Header */}
-      <div className="sticky top-0 z-10 bg-background pb-4">
-        <div className="bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-lg p-4 shadow-md">
-          <h3 className="text-lg font-bold mb-1">{stage.name}</h3>
-          {stage.description && (
-            <p className="text-sm text-blue-50 opacity-90">
-              {stage.description}
-            </p>
-          )}
-          <div className="mt-2 text-xs text-blue-100">
-            {stage.segments.length} 个环节
+      <div className="mb-4">
+        <div className="bg-gradient-to-br from-blue-600 via-blue-500 to-indigo-600 text-white rounded-xl p-5 shadow-lg border border-blue-400/20">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h3 className="text-xl font-bold mb-2">{stage.name}</h3>
+              {stage.description && (
+                <p className="text-sm text-blue-50/90 line-clamp-2 leading-relaxed">
+                  {stage.description}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-blue-400/30">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-blue-200"></div>
+              <span className="text-sm text-blue-100 font-medium">
+                {stage.segments.length} 个产业环节
+              </span>
+            </div>
           </div>
         </div>
       </div>
 
       {/* Segments */}
-      <div className="space-y-4">
-        {stage.segments.map((segment) => (
-          <SegmentCard
-            key={segment.id}
-            segment={segment}
-            onCompanyClick={onCompanyClick}
-          />
-        ))}
+      <div className="space-y-3 flex-1">
+        {[...stage.segments]
+          .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+          .map((segment) => (
+            <SegmentCard
+              key={segment.id}
+              segment={segment}
+              onCompanyClick={onCompanyClick}
+              initialMatchResult={matchResults[segment.id]}
+            />
+          ))}
       </div>
     </div>
   )

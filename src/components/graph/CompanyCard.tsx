@@ -70,7 +70,7 @@ export function CompanyCard({ company, onClick }: CompanyCardProps) {
             <span className="text-muted-foreground">主要产品:</span>
             <div className="flex flex-wrap gap-1">
               {company.keyProducts.map((product, idx) => (
-                <Badge key={idx} variant="secondary" className="text-xs">
+                <Badge key={`${company.id}-product-${idx}`} variant="secondary" className="text-xs">
                   {product}
                 </Badge>
               ))}

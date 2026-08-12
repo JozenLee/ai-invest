@@ -6,12 +6,33 @@ import { Loader2, AlertCircle, RefreshCw } from 'lucide-react'
 import { StageColumn } from './StageColumn'
 import type { SwimLaneData } from '@/types/industry-graph'
 
+interface MatchDetail {
+  nodeId: string
+  nodeName: string
+  etfCount: number
+  indexCount: number
+  success: boolean
+  etfs?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+  indices?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+}
+
 interface SwimLaneGraphProps {
   data: SwimLaneData | null
   isLoading: boolean
   error: string | null
   onRefetch?: () => void
   onCompanyClick?: (companyId: string) => void
+  matchResults?: Record<string, MatchDetail>
 }
 
 export function SwimLaneGraph({
@@ -19,7 +40,8 @@ export function SwimLaneGraph({
   isLoading,
   error,
   onRefetch,
-  onCompanyClick
+  onCompanyClick,
+  matchResults = {}
 }: SwimLaneGraphProps) {
   // Loading state
   if (isLoading) {
@@ -84,61 +106,47 @@ export function SwimLaneGraph({
   return (
     <div className="space-y-6">
       {/* Summary Header */}
-      <div className="bg-gradient-to-r from-slate-50 to-slate-100 rounded-lg p-4 border">
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 border border-blue-100 shadow-sm">
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold text-slate-900">
+            <h2 className="text-2xl font-bold text-slate-900 mb-2">
               {data.industry.name}
             </h2>
-            <p className="text-sm text-muted-foreground mt-1">
-              产业代码: {data.industry.code} | 版本: {data.industry.version}
-            </p>
-          </div>
-          <div className="text-right space-y-1">
-            <div className="text-2xl font-bold text-blue-600">
-              {totalCompanies}
+            <div className="flex gap-6 text-sm text-slate-600">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">产业链阶段:</span>
+                <span className="font-semibold text-blue-600">{sortedStages.length}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">产业环节:</span>
+                <span className="font-semibold text-blue-600">
+                  {sortedStages.reduce((sum, stage) => sum + stage.segments.length, 0)}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">相关企业:</span>
+                <span className="font-semibold text-blue-600">{totalCompanies}</span>
+              </div>
             </div>
-            <div className="text-xs text-muted-foreground">
-              家企业
-            </div>
-          </div>
-        </div>
-        <div className="mt-3 flex gap-4 text-sm">
-          <div>
-            <span className="text-muted-foreground">阶段:</span>
-            <span className="ml-2 font-medium">{sortedStages.length}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">环节:</span>
-            <span className="ml-2 font-medium">
-              {sortedStages.reduce((sum, stage) => sum + stage.segments.length, 0)}
-            </span>
           </div>
         </div>
       </div>
 
-      {/* Swim Lane Container with horizontal scroll */}
+      {/* Swim Lane Container */}
       <div className="relative">
         <div
-          className="flex gap-6 overflow-x-auto pb-4 px-1"
-          style={{
-            scrollbarWidth: 'thin',
-            scrollbarColor: '#cbd5e1 #f1f5f9'
-          }}
+          className="grid gap-4 items-start"
+          style={{ gridTemplateColumns: `repeat(${sortedStages.length}, minmax(320px, 1fr))` }}
         >
           {sortedStages.map((stage) => (
             <StageColumn
               key={stage.id}
               stage={stage}
               onCompanyClick={onCompanyClick}
+              matchResults={matchResults}
             />
           ))}
         </div>
-
-        {/* Scroll hint for large datasets */}
-        {sortedStages.length > 3 && (
-          <div className="absolute right-0 top-0 bottom-0 w-20 bg-gradient-to-l from-background to-transparent pointer-events-none" />
-        )}
       </div>
     </div>
   )

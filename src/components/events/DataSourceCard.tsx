@@ -43,11 +43,13 @@ interface DataSourceCardProps {
     lastFetchAt?: string;
     lastFetchStatus?: string;
     lastFetchStatusLabel?: string;
+    lastFetchCount?: number;
     scheduler?: DataSourceScheduler | null;
   };
   onToggle?: (id: string, isActive: boolean) => void;
-  onFetch?: (id: string) => void;
+  onFetch?: (id: string) => Promise<void>;
   onSettings?: (id: string) => void;
+  fetchingStatus?: 'idle' | 'fetching';
 }
 
 /**
@@ -58,7 +60,8 @@ export function DataSourceCard({
   dataSource,
   onToggle,
   onFetch,
-  onSettings
+  onSettings,
+  fetchingStatus = 'idle'
 }: DataSourceCardProps) {
   const {
     id,
@@ -70,12 +73,14 @@ export function DataSourceCard({
     lastFetchAt,
     lastFetchStatus,
     lastFetchStatusLabel,
+    lastFetchCount,
     scheduler
   } = dataSource;
 
   // 使用状态来存储格式化后的时间，以便定时更新
   const [formattedTime, setFormattedTime] = useState<string>('');
   const [formattedNextRun, setFormattedNextRun] = useState<string>('');
+  const [isLocalFetching, setIsLocalFetching] = useState(false);
 
   // 初始化和定时更新时间显示
   useEffect(() => {
@@ -98,6 +103,11 @@ export function DataSourceCard({
 
   // 获取采集状态图标和样式
   const getFetchStatusIcon = () => {
+    // 如果正在采集中，显示加载动画
+    if (fetchingStatus === 'fetching' || isLocalFetching) {
+      return <Loader2 className="h-4 w-4 text-blue-600 animate-spin" />;
+    }
+
     switch (lastFetchStatus) {
       case 'success':
         return <CheckCircle2 className="h-4 w-4 text-green-600" />;
@@ -112,6 +122,11 @@ export function DataSourceCard({
 
   // 获取采集状态样式
   const getFetchStatusBadgeVariant = () => {
+    // 如果正在采集中
+    if (fetchingStatus === 'fetching' || isLocalFetching) {
+      return 'secondary';
+    }
+
     switch (lastFetchStatus) {
       case 'success':
         return 'default';
@@ -121,6 +136,26 @@ export function DataSourceCard({
         return 'secondary';
       default:
         return 'outline';
+    }
+  };
+
+  // 获取采集状态文本
+  const getFetchStatusLabel = () => {
+    if (fetchingStatus === 'fetching' || isLocalFetching) {
+      return '采集中';
+    }
+    return lastFetchStatusLabel || '未运行';
+  };
+
+  // 处理立即采集按钮点击
+  const handleFetchClick = async () => {
+    if (!onFetch) return;
+
+    setIsLocalFetching(true);
+    try {
+      await onFetch(id);
+    } finally {
+      setIsLocalFetching(false);
     }
   };
 
@@ -206,10 +241,14 @@ export function DataSourceCard({
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
               {getFetchStatusIcon()}
-              <span className="text-muted-foreground">上次采集</span>
+              <span className="text-muted-foreground">
+                {lastFetchCount !== undefined && lastFetchCount > 0
+                  ? `上次采集 ${lastFetchCount} 条`
+                  : '上次采集'}
+              </span>
             </div>
             <Badge variant={getFetchStatusBadgeVariant()} className="text-xs">
-              {lastFetchStatusLabel || '未运行'}
+              {getFetchStatusLabel()}
             </Badge>
           </div>
 
@@ -224,11 +263,20 @@ export function DataSourceCard({
             variant="outline"
             size="sm"
             className="flex-1"
-            onClick={() => onFetch?.(id)}
-            disabled={!isActive}
+            onClick={handleFetchClick}
+            disabled={!isActive || fetchingStatus === 'fetching' || isLocalFetching}
           >
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-            立即采集
+            {(fetchingStatus === 'fetching' || isLocalFetching) ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                采集中...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+                立即采集
+              </>
+            )}
           </Button>
           <Button
             variant="ghost"

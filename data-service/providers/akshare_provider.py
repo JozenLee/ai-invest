@@ -252,20 +252,46 @@ class AKShareProvider(DataProvider):
 
 
     async def get_index_daily(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """获取指数日K数据
+        """获取指数日K数据（多接口降级）
+
+        优先级：新浪财经 > 东方财富
 
         支持格式：
         - 上证/深证: sh000001, sz399001 等
         - 中证指数: 930713, 931865 等 (6位纯数字)
         """
+        # 方案1: 新浪财经接口（稳定，但返回全部历史数据需要筛选）
         try:
-            # 使用 index_zh_a_hist 获取A股指数历史数据
+            print(f"[AKShare] 尝试新浪财经接口获取指数日K: {code}")
+            df = await self._call(ak.stock_zh_index_daily, symbol=code, timeout=15.0)
+
+            if not df.empty and 'date' in df.columns:
+                # 新浪接口返回所有历史数据，需要手动筛选日期范围
+                df = df.copy()
+                df['date'] = pd.to_datetime(df['date'])
+
+                # 筛选日期范围
+                start_dt = pd.to_datetime(start_date, format='%Y%m%d')
+                end_dt = pd.to_datetime(end_date, format='%Y%m%d')
+                df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
+
+                # 列名已经是标准格式: date, open, high, low, close, volume
+                print(f"[AKShare] 新浪财经接口成功，返回 {len(df)} 行指数日K数据")
+                return df
+
+        except Exception as e:
+            print(f"[AKShare] 新浪财经接口失败: {e}")
+
+        # 方案2: 东方财富接口（功能全，支持日期范围，但可能被代理影响）
+        try:
+            print(f"[AKShare] 尝试东方财富接口获取指数日K: {code}")
             df = await self._call(
                 ak.index_zh_a_hist,
                 symbol=code,
                 period='daily',
                 start_date=start_date,
-                end_date=end_date
+                end_date=end_date,
+                timeout=10.0
             )
 
             if not df.empty and '日期' in df.columns:
@@ -285,12 +311,14 @@ class AKShareProvider(DataProvider):
                 })
 
                 df['date'] = pd.to_datetime(df['date'])
-
-            return df
+                print(f"[AKShare] 东方财富接口成功，返回 {len(df)} 行指数日K数据")
+                return df
 
         except Exception as e:
-            print(f"[AKShare] 获取指数 {code} 日K失败: {e}")
-            return pd.DataFrame()
+            print(f"[AKShare] 东方财富接口失败: {e}")
+
+        print(f"[AKShare] 所有接口都失败，无法获取指数 {code} 日K数据")
+        return pd.DataFrame()
 
     async def get_index_realtime(self, symbols: List[str]) -> pd.DataFrame:
         """获取指定指数实时行情"""
@@ -335,12 +363,69 @@ class AKShareProvider(DataProvider):
         return df
 
     async def get_etf_daily(self, ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """获取ETF日K数据"""
-        return await self._call(
-            ak.fund_etf_hist_em,
-            symbol=ticker, period="daily",
-            start_date=start_date, end_date=end_date, adjust="qfq",
-        )
+        """获取ETF日K数据（多接口降级）
+
+        优先级：新浪财经 > 东方财富（东方财富接口当前不稳定）
+        """
+        # 方案1: 新浪财经接口（稳定，但返回所有历史数据）
+        try:
+            # 新浪接口需要添加市场前缀
+            sina_symbol = self._to_sina_symbol(ticker)
+            print(f"[AKShare] 尝试新浪财经接口: {sina_symbol}")
+
+            df = await self._call(ak.fund_etf_hist_sina, symbol=sina_symbol, timeout=15.0)
+
+            if not df.empty:
+                # 新浪接口返回所有历史数据，需要手动筛选日期范围
+                df = df.copy()
+
+                # 确保date列是datetime类型
+                if 'date' in df.columns:
+                    df['date'] = pd.to_datetime(df['date'])
+
+                    # 筛选日期范围
+                    start_dt = pd.to_datetime(start_date, format='%Y%m%d')
+                    end_dt = pd.to_datetime(end_date, format='%Y%m%d')
+                    df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
+
+                    # 统一列名到东方财富格式（如果需要）
+                    # 新浪格式: date, open, high, low, close, volume, amount
+                    # 保持不变，因为multi_source_provider会处理
+
+                    print(f"[AKShare] ETF {ticker}: 新浪财经接口成功，{len(df)}行")
+                    return df
+        except Exception as e:
+            print(f"[AKShare] 新浪财经接口失败: {e}")
+
+        # 方案2: 东方财富接口（功能最全，支持日期范围，但可能被代理影响）
+        try:
+            df = await self._call(
+                ak.fund_etf_hist_em,
+                symbol=ticker, period="daily",
+                start_date=start_date, end_date=end_date, adjust="qfq",
+                timeout=10.0
+            )
+            if not df.empty:
+                print(f"[AKShare] ETF {ticker}: 东方财富接口成功，{len(df)}行")
+                return df
+        except Exception as e:
+            print(f"[AKShare] 东方财富接口失败: {e}")
+
+        # 所有接口都失败
+        print(f"[AKShare] ETF {ticker}: 所有接口都失败")
+        return pd.DataFrame()
+
+    def _to_sina_symbol(self, ticker: str) -> str:
+        """将ticker转换为新浪财经格式
+
+        规则：
+        - 上海市场（51开头、58开头）: sh + ticker
+        - 深圳市场（15开头、16开头）: sz + ticker
+        """
+        if ticker.startswith('51') or ticker.startswith('58'):
+            return f'sh{ticker}'
+        else:
+            return f'sz{ticker}'
 
     async def get_etf_nav(self, ticker: str) -> Dict:
         """获取ETF净值和份额"""

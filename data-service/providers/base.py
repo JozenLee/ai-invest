@@ -162,6 +162,14 @@ class DataProvider(ABC):
         """获取市场情绪指标"""
         raise NotImplementedError(f"{self.name} 不支持市场情绪数据")
 
+    async def get_lhb_data(self) -> List[Dict]:
+        """获取龙虎榜数据（可选实现）"""
+        raise NotImplementedError(f"{self.name} 不支持龙虎榜数据")
+
+    async def get_lhb_detail(self, date: str) -> List[Dict]:
+        """获取指定日期龙虎榜详细数据（可选实现）"""
+        raise NotImplementedError(f"{self.name} 不支持龙虎榜详细数据")
+
     # ==================== 新闻 ====================
 
     async def get_news(self, keyword: str = "财联社", limit: int = 50, api: str = "stock_news_em") -> pd.DataFrame:

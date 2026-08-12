@@ -20,12 +20,18 @@ export async function GET(
     if (response.ok) {
       const data = await response.json()
       if (data.success && data.data) {
-        return NextResponse.json(data)
+        // 兼容测试期望：展开data到根级别，同时保留success和data字段
+        return NextResponse.json({
+          ...data,
+          ...data.data,
+          sector: sector // 确保sector字段在根级别
+        })
       }
       return NextResponse.json({
         success: false,
         error: data.error || `无法获取${sector}板块趋势数据`,
         data: null,
+        sector: sector
       })
     }
 

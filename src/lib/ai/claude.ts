@@ -140,6 +140,38 @@ export class ClaudeClient {
   "summary": "一句话摘要"
 }`
   }
+
+  /**
+   * 通用的文本生成接口
+   */
+  async complete(params: {
+    prompt: string
+    system?: string
+    maxTokens?: number
+  }): Promise<string> {
+    if (!this.client) {
+      throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
+    }
+
+    const message = await this.client.messages.create({
+      model: this.model,
+      max_tokens: params.maxTokens || this.maxTokens,
+      messages: [
+        {
+          role: 'user',
+          content: params.prompt
+        }
+      ],
+      system: params.system,
+    })
+
+    const content = message.content[0]
+    if (content.type === 'text') {
+      return content.text
+    }
+
+    throw new Error('Claude API 返回格式异常')
+  }
 }
 
 // 全局单例

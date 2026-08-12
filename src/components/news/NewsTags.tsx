@@ -4,7 +4,8 @@ import { Badge } from '@/components/ui/badge'
 import { Tag as TagIcon } from 'lucide-react'
 
 interface NewsTag {
-  id: string
+  newsId: string
+  tagId: string
   confidence: number
   tag: {
     id: string
@@ -24,6 +25,7 @@ const TAG_TYPE_COLORS: Record<string, string> = {
   tech: 'bg-purple-100 text-purple-800 border-purple-200',
   company: 'bg-green-100 text-green-800 border-green-200',
   concept: 'bg-orange-100 text-orange-800 border-orange-200',
+  segment: 'bg-indigo-100 text-indigo-800 border-indigo-200',
 }
 
 export function NewsTags({ tags, maxDisplay = 5 }: NewsTagsProps) {
@@ -41,7 +43,7 @@ export function NewsTags({ tags, maxDisplay = 5 }: NewsTagsProps) {
       <TagIcon className="h-3 w-3 text-muted-foreground" />
       {displayTags.map((newsTag) => (
         <Badge
-          key={newsTag.id}
+          key={`${newsTag.newsId}-${newsTag.tagId}`}
           variant="outline"
           className={TAG_TYPE_COLORS[newsTag.tag.type] || 'bg-gray-100 text-gray-800'}
           title={`置信度: ${(newsTag.confidence * 100).toFixed(0)}%`}

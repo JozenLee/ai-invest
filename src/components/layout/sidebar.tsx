@@ -34,24 +34,11 @@ const navigation = [
     name: '知识图谱',
     href: '/graph',
     icon: GitBranch,
-    children: [
-      { name: '产业图谱', href: '/graph/create' },
-      { name: '图谱探索', href: '/graph/explore' },
-      { name: '传导路径', href: '/graph/propagation' },
-      { name: '周期分析', href: '/graph/cycles' },
-      { name: '图谱编辑', href: '/graph/edit' },
-      { name: '变更历史', href: '/graph/changelog' },
-    ],
   },
   {
     name: 'AI分析',
     href: '/analysis',
     icon: Brain,
-    children: [
-      { name: '个股分析', href: '/analysis/stock' },
-      { name: '板块分析', href: '/analysis/sector' },
-      { name: '综合报告', href: '/analysis/report' },
-    ],
   },
   {
     name: '投资组合',

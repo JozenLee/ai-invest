@@ -48,8 +48,6 @@ curl -X POST http://localhost:3000/api/graph/extract \
   -d '{"text": "...", "type": "news"}'
 ```
 
-详细文档: [docs/graph-builder-usage.md](docs/graph-builder-usage.md)
-
 ## 大V管理增强功能
 
 ### 自动化添加
@@ -72,16 +70,12 @@ curl -X POST http://localhost:3000/api/graph/extract \
 - **Dashboard集成**: 热度TOP10、子图健康度可视化
 - **API接口**: 节点评分、排行榜、洞察数据
 
-详见 [评分系统使用指南](docs/scoring-system-usage.md)
-
 ## 文档
 
 - [项目说明](CLAUDE.md) - 项目概览和常用命令
-- [快速开始](QUICK_START.md) - 详细启动指南
-- [部署指南](DEPLOYMENT.md) - 生产环境部署
-- [开发指南](NEXT_SESSION_GUIDE.md) - 新会话启动和开发路径
-- [开发计划](docs/DEVELOPMENT-PLAN.md) - 详细技术规划
-- [进度追踪](docs/PROGRESS.md) - 当前开发进度
+- [数据源说明](docs/DATA-SOURCE.md) - 数据源和配置说明
+- [市场数据同步](docs/MARKET_DATA_SYNC_GUIDE.md) - 同步与维护指南
+- [标签系统](docs/TAG_SYSTEM_USAGE_GUIDE.md) - 标签使用说明
 
 ## 项目状态
 

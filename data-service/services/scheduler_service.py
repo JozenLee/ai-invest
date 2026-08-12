@@ -645,16 +645,19 @@ class SchedulerService:
         """获取所有启用的调度任务"""
         try:
             from db import db
-            async with db.get_connection() as conn:
-                cursor = await conn.execute("""
+            conn = db.get_connection()
+            try:
+                cursor = conn.execute("""
                     SELECT id, sourceId, scheduleType, scheduleConfig,
                            isEnabled, lastRunAt, nextRunAt, createdAt, updatedAt
                     FROM SchedulerJob
                     WHERE isEnabled = 1
                     ORDER BY createdAt ASC
                 """)
-                rows = await cursor.fetchall()
+                rows = cursor.fetchall()
                 return [dict(row) for row in rows]
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f'查询启用的调度任务失败: {e}')
             return []
@@ -663,7 +666,7 @@ class SchedulerService:
         """根据ID获取数据源配置"""
         try:
             from db import db
-            return await db.get_datasource(source_id)
+            return db.get_datasource(source_id)
         except Exception as e:
             logger.error(f'查询数据源失败: source_id={source_id}, error={e}')
             return None
@@ -680,18 +683,21 @@ class SchedulerService:
         """
         try:
             from db import db
-            async with db.get_connection() as conn:
-                cursor = await conn.execute("""
+            conn = db.get_connection()
+            try:
+                cursor = conn.execute("""
                     SELECT id, sourceId, scheduleType, scheduleConfig,
                            isEnabled, lastRunAt, nextRunAt, createdAt, updatedAt
                     FROM SchedulerJob
                     WHERE sourceId = ?
                     LIMIT 1
                 """, (source_id,))
-                row = await cursor.fetchone()
+                row = cursor.fetchone()
                 if row:
                     return dict(row)
                 return None
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f'查询调度器配置失败: source_id={source_id}, error={e}')
             return None
@@ -760,10 +766,14 @@ class SchedulerService:
 
             sql = f"UPDATE SchedulerJob SET {', '.join(updates)} WHERE id = ?"
 
-            async with db.get_connection() as conn:
-                await conn.execute(sql, params)
+            conn = db.get_connection()
+            try:
+                conn.execute(sql, params)
+                conn.commit()
                 logger.debug(f'更新调度器时间戳成功: scheduler_id={scheduler_id}')
-                return True
+            finally:
+                conn.close()
+            return True
 
         except Exception as e:
             logger.error(f'更新调度器时间戳失败: scheduler_id={scheduler_id}, error={e}')
@@ -854,15 +864,18 @@ class SchedulerService:
 
             # Query unprocessed posts
             from db import db
-            async with db.get_connection() as conn:
-                cursor = await conn.execute("""
+            conn = db.get_connection()
+            try:
+                cursor = conn.execute("""
                     SELECT id FROM InfluencerPost
                     WHERE aiProcessed = 0
                     ORDER BY createdAt DESC
                     LIMIT 50
                 """)
-                rows = await cursor.fetchall()
+                rows = cursor.fetchall()
                 post_ids = [row['id'] for row in rows]
+            finally:
+                conn.close()
 
             if post_ids:
                 # Publish to AI queue

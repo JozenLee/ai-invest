@@ -164,7 +164,7 @@ export default function TrendsOverviewPage() {
       ) : (
         <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {trends.map((trend) => (
-            <DomainTrendCard key={trend.domainCode} trend={trend} />
+            <DomainTrendCard key={trend.domainCode} trend={trend} newsCount={newsCount} />
           ))}
         </div>
       )}

@@ -31,7 +31,7 @@ class RawArticle(BaseModel):
 
 
 class AnalyzedArticle(BaseModel):
-    """AI分析后的新闻数据"""
+    """AI分析后的新闻数据（简化版 - 只保留前端需要的字段）"""
     # 继承原始字段
     id: str
     title: str
@@ -40,21 +40,10 @@ class AnalyzedArticle(BaseModel):
     url: Optional[str] = None
     publishTime: str
 
-    # AI生成字段
-    summary: Optional[str] = None  # AI生成的摘要
-
-    # AI分析字段
-    categoryId: Optional[str] = None
-    categoryConfidence: Optional[float] = 0.0
-    domainId: Optional[str] = None
-    domainIds: Optional[List[str]] = None
-    sentiment: Optional[float] = None
-    sentimentLabel: Optional[str] = None  # bullish/neutral/bearish
-    sentimentConfidence: Optional[float] = 0.0
-    impact: Optional[int] = None  # 1-5
-    keywords: Optional[str] = None  # JSON string
-    entities: Optional[str] = None  # JSON string
-    sectors: Optional[str] = None  # JSON string
+    # AI分析字段（简化 - 只保留前端UI需要的字段）
+    segmentCodes: Optional[List[str]] = None  # 产业细分领域代码列表
+    sentiment: Optional[float] = None  # 情绪分数 -1到1（-1利空, 0中性, 1利好）
+    impact: Optional[int] = None  # 影响力等级 1-5
 
     # 处理状态
     aiProcessed: bool = False
@@ -67,11 +56,9 @@ class AnalyzedArticle(BaseModel):
                 "id": "cls_123",
                 "title": "AI芯片需求暴增",
                 "content": "据财联社报道...",
-                "summary": "英伟达Q4财报超预期，AI芯片需求持续强劲，数据中心业务增长200%",
                 "source": "财联社",
-                "categoryId": "tech",
+                "segmentCodes": ["ai_chip_design", "ai_chip_manufacturing"],
                 "sentiment": 0.8,
-                "sentimentLabel": "bullish",
                 "impact": 4,
                 "aiProcessed": True
             }

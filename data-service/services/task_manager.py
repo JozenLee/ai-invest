@@ -1,6 +1,9 @@
 # data-service/services/task_manager.py
 from typing import Dict, Optional, Any
+from datetime import datetime
 from models.industry_models import ExplorationTask
+from models.review_models import ReviewFeedback, ReviewHistory
+from models.coverage_models import CoverageAssessment, ExplorationContext
 
 class TaskManager:
     """后台任务管理器"""
@@ -32,7 +35,9 @@ class TaskManager:
         structure: Optional[Any] = None,
         result: Optional[Any] = None,
         error: Optional[str] = None,
-        graph_stats: Optional[Dict[str, int]] = None
+        graph_stats: Optional[Dict[str, int]] = None,
+        coverage_assessment: Optional[CoverageAssessment] = None,
+        exploration_context: Optional[ExplorationContext] = None
     ) -> None:
         """更新任务状态"""
         task = self._tasks.get(task_id)
@@ -52,8 +57,56 @@ class TaskManager:
         if error:
             task.error = error
         if graph_stats:
-            # 将graph_stats存储到task的metadata中
-            task.metadata['graph_stats'] = graph_stats
+            task.graph_stats = graph_stats
+        if coverage_assessment:
+            task.coverage_assessment = coverage_assessment
+        if exploration_context:
+            task.exploration_context = exploration_context
+
+        task.updated_at = datetime.now()
+
+    def add_review_history(
+        self,
+        task_id: str,
+        phase: str,
+        feedback: ReviewFeedback
+    ) -> None:
+        """添加Review历史记录
+
+        Args:
+            task_id: 任务ID
+            phase: 阶段 (structure | companies | unified)
+            feedback: Review反馈
+        """
+        task = self._tasks.get(task_id)
+        if not task:
+            return
+
+        # 增加迭代计数
+        if phase == "structure":
+            task.structure_iterations += 1
+            iteration = task.structure_iterations
+        elif phase == "companies":
+            task.companies_iterations += 1
+            iteration = task.companies_iterations
+        elif phase == "unified":
+            # 统一审核：同时增加两个计数
+            task.structure_iterations += 1
+            task.companies_iterations += 1
+            iteration = task.structure_iterations  # 使用structure_iterations作为主迭代次数
+        else:
+            return
+
+        # 记录历史
+        history_entry = ReviewHistory(
+            task_id=task_id,
+            phase=phase,
+            iteration=iteration,
+            feedback=feedback,
+            timestamp=datetime.now()
+        )
+        task.review_history.append(history_entry)
+        task.updated_at = datetime.now()
 
     def delete_task(self, task_id: str) -> None:
         """删除任务"""

@@ -37,6 +37,10 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
       include: {
         schedulerJobs: true,
+        logs: {
+          orderBy: { createdAt: 'desc' },
+          take: 1
+        },
         _count: {
           select: {
             articles: true,
@@ -51,6 +55,9 @@ export async function GET(request: NextRequest) {
     const formatted = dataSources.map(ds => {
       // 获取第一个调度任务（如果存在）
       const schedulerJob = ds.schedulerJobs[0] || null
+
+      // 获取最近一次采集日志
+      const lastLog = ds.logs[0] || null
 
       return {
         id: ds.id,
@@ -70,6 +77,7 @@ export async function GET(request: NextRequest) {
         lastFetchAt: ds.lastFetchAt?.toISOString(),
         lastFetchStatus: ds.lastFetchStatus,
         lastFetchStatusLabel: getFetchStatusLabel(ds.lastFetchStatus),
+        lastFetchCount: lastLog?.fetchedCount || 0,
         errorMessage: ds.errorMessage,
         createdAt: ds.createdAt.toISOString(),
         updatedAt: ds.updatedAt.toISOString(),

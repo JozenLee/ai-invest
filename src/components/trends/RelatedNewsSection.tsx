@@ -31,7 +31,7 @@ export function RelatedNewsSection({ news }: RelatedNewsSectionProps) {
       : { icon: TrendingDown, label: '利空', color: 'text-red-600' }
   }
 
-  if (news.length === 0) {
+  if (!news || news.length === 0) {
     return (
       <Card className="rounded-xl shadow-sm">
         <div className="border-b p-6">

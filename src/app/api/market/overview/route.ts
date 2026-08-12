@@ -15,7 +15,8 @@ const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
 // 验证指数数据是否为真实数据（排除测试假数据）
 function isValidIndexData(indices: any[]): boolean {
   if (!indices || indices.length === 0) return false
-  const prices = indices.map(i => i.price).filter(p => p > 0)
+  // 兼容两种字段名：price 和 current
+  const prices = indices.map(i => i.current || i.price).filter(p => p > 0)
   if (prices.length === 0) return false
   // 检测假数据：所有价格都是整百（3000, 10000, 2000, 1000, 4000）
   const allRoundHundred = prices.every(p => p % 100 === 0)
@@ -109,9 +110,9 @@ export async function GET(request: Request) {
           indices: yahooData.map(q => ({
             code: q.code,
             name: q.name,
-            price: q.price,
+            current: q.price,
             change: q.change,
-            changePct: q.changePct,
+            changePercent: q.changePct,
             source: 'yahoo',
           })),
           source: 'yahoo',

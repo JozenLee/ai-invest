@@ -261,6 +261,25 @@ model GraphNodeETF {
   @@index([nodeId])
 }
 
+model GraphNodeIndex {
+  id          String   @id @default(cuid())
+  nodeId      String
+  indexCode   String // 指数代码（如：931865）
+  indexName   String // 指数名称
+  weight      Float    @default(1.0) // 权重/相关度
+  relevance   Float    @default(1.0) // 相关度评分
+  description String? // 绑定说明
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  node GraphNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@unique([nodeId, indexCode])
+  @@index([indexCode])
+  @@index([nodeId])
+}
+
 // ==================== 事件与资讯 ====================
 
 model NewsCategory {
@@ -349,6 +368,7 @@ model NewsArticle {
   categoryConfidence  Float?    @default(0) // 分类置信度
   domainId            String? // 关联领域
   domainIds           String? // JSON: 多领域支持
+  segmentCodes        String? // JSON: 产业细分领域代码列表
   sourceId            String? // 关联数据源
   sentiment           Float? // -1 ~ +1
   sentimentLabel      String? // bullish/neutral/bearish
@@ -368,6 +388,7 @@ model NewsArticle {
   sourceRef   DataSource?      @relation(fields: [sourceId], references: [id])
   graphLinks  NewsGraphLink[]
   tags        NewsArticleTag[]
+  impactFactors NewsImpactFactor[]
 
   @@index([publishTime])
   @@index([category])
@@ -720,6 +741,7 @@ model GraphNode {
   signals      InvestmentSignal[]
   tags         GraphNodeTag[]
   etfBindings  GraphNodeETF[]
+  indexBindings GraphNodeIndex[]
 
   @@index([type])
   @@index([parentId])
@@ -751,7 +773,7 @@ model GraphStock {
   id String @id @default(cuid())
 
   // 个股信息
-  stockCode String @unique
+  stockCode String
   stockName String
 
   // 图谱映射
@@ -766,6 +788,7 @@ model GraphStock {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([nodeId, stockCode])
   @@index([nodeId])
   @@index([stockCode])
 }
@@ -867,6 +890,28 @@ model NewsGraphLink {
   @@unique([newsId, nodeId])
   @@index([nodeId, createdAt])
   @@index([newsId])
+}
+
+model NewsImpactFactor {
+  id           String   @id @default(cuid())
+  newsId       String
+  industryCode String
+  segmentCode  String
+
+  impactFactor Float    // 影响因子分数
+  impactType   String   // direct/upstream/downstream/indirect
+  distance     Int      @default(0)  // 传导距离
+
+  calculation  String?  // JSON: 计算详情
+  createdAt    DateTime @default(now())
+
+  news NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
+
+  @@unique([newsId, industryCode, segmentCode])
+  @@index([newsId])
+  @@index([industryCode, segmentCode])
+  @@index([impactFactor])
+  @@map("news_impact_factors")
 }
 
 // ==================== 图谱构建系统 ====================

@@ -32,6 +32,7 @@ import { formatLocalTimeString } from '@/lib/time-utils'
 import { useNewsStream } from '@/hooks/useNewsStream'
 import { ETF_DOMAINS, getDomainByCode } from '@/config/etf-domains'
 import { NewsTags } from '@/components/news/NewsTags'
+import { IndustrySegmentTags } from '@/components/news/IndustrySegmentTags'
 
 interface NewsArticle {
   id: string
@@ -62,12 +63,34 @@ interface NewsArticle {
       type: string
     }
   }>
+  // 知识图谱关联信息 - 新增
+  industrySegments?: Array<{
+    industry_code: string
+    industry_name: string
+    segment_code: string
+    segment_name: string
+  }>
 }
 
 interface DataSource {
   id: string
   name: string
   category: string
+}
+
+interface Industry {
+  id: string
+  code: string
+  name: string
+  description?: string
+}
+
+interface Segment {
+  stage_name: string
+  stage_code: string
+  segment_code: string
+  segment_name: string
+  description: string
 }
 
 const sentimentConfig = {
@@ -115,6 +138,13 @@ export default function EventsFeedPage() {
   const [keyword, setKeyword] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [updateCount, setUpdateCount] = useState(0)
+
+  // 知识图谱筛选 - 新增
+  const [industries, setIndustries] = useState<Industry[]>([])
+  const [selectedIndustryId, setSelectedIndustryId] = useState<string>('')
+  const [segments, setSegments] = useState<Segment[]>([])
+  const [selectedSegmentCodes, setSelectedSegmentCodes] = useState<string[]>([])
+  const [isLoadingSegments, setIsLoadingSegments] = useState(false)
 
   // 今日统计数据（不受筛选影响）
   const [todayStats, setTodayStats] = useState({
@@ -198,6 +228,54 @@ export default function EventsFeedPage() {
     // API的Domain表可能还没有同步更新
   }
 
+  // 获取产业列表 - 新增
+  const fetchIndustries = async () => {
+    try {
+      const response = await fetch('/api/graph/industries')
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success && data.data) {
+          setIndustries(data.data)
+        }
+      }
+    } catch (error) {
+      console.error('获取产业列表失败:', error)
+    }
+  }
+
+  // 获取产业的Segment列表 - 新增
+  const fetchSegments = async (industryId: string) => {
+    if (!industryId) {
+      setSegments([])
+      return
+    }
+
+    setIsLoadingSegments(true)
+    try {
+      const response = await fetch(`/api/graph/industries/${industryId}/segments`)
+      if (response.ok) {
+        const data = await response.json()
+        if (data.success && data.data?.segments) {
+          setSegments(data.data.segments)
+        }
+      }
+    } catch (error) {
+      console.error('获取Segment列表失败:', error)
+    } finally {
+      setIsLoadingSegments(false)
+    }
+  }
+
+  // 当选择产业时，加载其Segment列表
+  useEffect(() => {
+    if (selectedIndustryId) {
+      fetchSegments(selectedIndustryId)
+    } else {
+      setSegments([])
+      setSelectedSegmentCodes([])
+    }
+  }, [selectedIndustryId])
+
   // 获取数据源列表
   const fetchDataSources = async () => {
     try {
@@ -273,6 +351,14 @@ export default function EventsFeedPage() {
       if (sortBy) url += `&sortBy=${sortApiMap[sortBy] || sortBy}`
       if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`
 
+      // 知识图谱筛选 - 新增
+      if (selectedIndustryId) {
+        url += `&industryId=${selectedIndustryId}`
+        if (selectedSegmentCodes.length > 0) {
+          url += `&segmentCodes=${selectedSegmentCodes.join(',')}`
+        }
+      }
+
       const response = await fetch(url)
       if (response.ok) {
         const data = await response.json()
@@ -285,13 +371,14 @@ export default function EventsFeedPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedCategoryIds, selectedDomainCodes, selectedSourceIds, selectedSentiments, sortBy, keyword])
+  }, [selectedCategoryIds, selectedDomainCodes, selectedSourceIds, selectedSentiments, sortBy, keyword, selectedIndustryId, selectedSegmentCodes])
 
   useEffect(() => {
     fetchCategories()
     fetchDomains()
     fetchDataSources()
     fetchTodayStats()
+    fetchIndustries() // 新增
   }, [])
 
   useEffect(() => {
@@ -316,6 +403,9 @@ export default function EventsFeedPage() {
     setSortBy('publishTime')
     setKeyword('')
     setSearchInput('')
+    // 清除知识图谱筛选 - 新增
+    setSelectedIndustryId('')
+    setSelectedSegmentCodes([])
   }
 
   const getSentimentInfo = (sentiment?: number | null) => {
@@ -410,96 +500,48 @@ export default function EventsFeedPage() {
             </div>
           </div>
 
-          {/* 分类、情感、领域和排序筛选 */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {/* 科技类 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[0].categories)}
-              placeholder={categoryGroups[0].name}
-              title={categoryGroups[0].name}
-              className="w-full"
-            />
+          {/* 产业和数据源筛选 */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {/* 产业筛选 */}
+            <Select
+              value={selectedIndustryId}
+              onValueChange={(value) => {
+                setSelectedIndustryId(value || '')
+                setSelectedSegmentCodes([]) // 切换产业时清空Segment选择
+              }}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="选择产业">
+                  {selectedIndustryId
+                    ? industries.find(i => i.id === selectedIndustryId)?.name
+                    : '选择产业'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">全部产业</SelectItem>
+                {industries.map((industry) => (
+                  <SelectItem key={industry.id} value={industry.id}>
+                    {industry.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
-            {/* 财经类 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[1].categories)}
-              placeholder={categoryGroups[1].name}
-              title={categoryGroups[1].name}
-              className="w-full"
-            />
-
-            {/* 产业类 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[2].categories)}
-              placeholder={categoryGroups[2].name}
-              title={categoryGroups[2].name}
-              className="w-full"
-            />
-
-            {/* 政策类 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[3].categories)}
-              placeholder={categoryGroups[3].name}
-              title={categoryGroups[3].name}
-              className="w-full"
-            />
-
-            {/* 国际类 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[4].categories)}
-              placeholder={categoryGroups[4].name}
-              title={categoryGroups[4].name}
-              className="w-full"
-            />
-
-            {/* 其他 */}
-            <MultiSelect
-              value={selectedCategoryIds}
-              onChange={setSelectedCategoryIds}
-              options={getCategoriesByGroup(categoryGroups[5].categories)}
-              placeholder={categoryGroups[5].name}
-              title={categoryGroups[5].name}
-              className="w-full"
-            />
-
-            {/* 情感筛选 */}
-            <MultiSelect
-              value={selectedSentiments}
-              onChange={setSelectedSentiments}
-              options={[
-                { value: 'bullish', label: EVENTS_TEXT.feed.filter.sentimentBullish },
-                { value: 'neutral', label: EVENTS_TEXT.feed.filter.sentimentNeutral },
-                { value: 'bearish', label: EVENTS_TEXT.feed.filter.sentimentBearish },
-              ]}
-              placeholder="情感筛选"
-              title="选择情感"
-              className="w-full"
-            />
-
-            {/* 领域筛选 - 使用ETF领域配置 */}
-            <MultiSelect
-              value={selectedDomainCodes}
-              onChange={setSelectedDomainCodes}
-              options={ETF_DOMAINS
-                .filter(d => d.code !== 'irrelevant') // 排除irrelevant
-                .map(domain => ({
-                  value: domain.code,
-                  label: domain.name,
+            {/* Segment筛选（当选择了产业时显示） */}
+            {selectedIndustryId && (
+              <MultiSelect
+                value={selectedSegmentCodes}
+                onChange={setSelectedSegmentCodes}
+                options={segments.map(seg => ({
+                  value: seg.segment_code,
+                  label: `${seg.stage_name} - ${seg.segment_name}`,
                 }))}
-              placeholder="ETF领域筛选"
-              title="选择ETF领域"
-              className="w-full"
-            />
+                placeholder={isLoadingSegments ? "加载中..." : "选择细分领域"}
+                title="选择细分领域"
+                className="w-full"
+                disabled={isLoadingSegments}
+              />
+            )}
 
             {/* 数据源筛选 */}
             <MultiSelect
@@ -513,28 +555,42 @@ export default function EventsFeedPage() {
               title="选择数据源"
               className="w-full"
             />
-
-            {/* 排序 */}
-            <Select value={sortBy} onValueChange={(value) => setSortBy(value || 'publishTime')}>
-              <SelectTrigger className="w-full">
-                <SelectValue>
-                  {sortDisplayMap[sortBy]}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="publishTime">{EVENTS_TEXT.feed.filter.sortByTime}</SelectItem>
-                <SelectItem value="sentiment">{EVENTS_TEXT.feed.filter.sortBySentiment}</SelectItem>
-                <SelectItem value="impact">{EVENTS_TEXT.feed.filter.sortByImpact}</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
           {/* 分类筛选 - 移除旧的树形选择器 */}
 
           {/* 当前筛选条件 */}
-          {(selectedCategoryIds.length > 0 || selectedDomainCodes.length > 0 || selectedSourceIds.length > 0 || selectedSentiments.length > 0 || keyword) && (
+          {(selectedCategoryIds.length > 0 || selectedDomainCodes.length > 0 || selectedSourceIds.length > 0 || selectedSentiments.length > 0 || keyword || selectedIndustryId || selectedSegmentCodes.length > 0) && (
             <div className="flex flex-wrap items-center gap-2 text-sm pt-2 border-t">
               <span className="text-muted-foreground">当前筛选：</span>
+              {/* 产业筛选标签 - 新增 */}
+              {selectedIndustryId && (
+                <Badge
+                  variant="secondary"
+                  className="cursor-pointer bg-purple-100 text-purple-800"
+                  onClick={() => setSelectedIndustryId('')}
+                >
+                  产业: {industries.find(i => i.id === selectedIndustryId)?.name} ×
+                </Badge>
+              )}
+              {/* Segment筛选标签 - 新增 */}
+              {selectedSegmentCodes.length > 0 && (
+                <>
+                  {selectedSegmentCodes.map((segmentCode) => {
+                    const segment = segments.find(s => s.segment_code === segmentCode)
+                    return (
+                      <Badge
+                        key={segmentCode}
+                        variant="secondary"
+                        className="cursor-pointer bg-indigo-100 text-indigo-800"
+                        onClick={() => setSelectedSegmentCodes(prev => prev.filter(code => code !== segmentCode))}
+                      >
+                        {segment?.segment_name || segmentCode} ×
+                      </Badge>
+                    )
+                  })}
+                </>
+              )}
               {selectedCategoryIds.length > 0 && (
                 <>
                   {selectedCategoryIds.map((categoryId) => (
@@ -634,9 +690,9 @@ export default function EventsFeedPage() {
                     <div
                       className={`p-2 rounded-full ${
                         sentimentInfo.color === 'default'
-                          ? 'bg-green-100 text-green-600'
-                          : sentimentInfo.color === 'destructive'
                           ? 'bg-red-100 text-red-600'
+                          : sentimentInfo.color === 'destructive'
+                          ? 'bg-green-100 text-green-600'
                           : 'bg-gray-100 text-gray-600'
                       }`}
                     >
@@ -677,46 +733,30 @@ export default function EventsFeedPage() {
                           <>
                             {/* 情感标签 - 仅当不是irrelevant时显示 */}
                             {article.sentimentLabel && (
-                              <Badge variant={sentimentInfo.color as any}>{sentimentInfo.label}</Badge>
+                              <Badge
+                                variant="outline"
+                                className={
+                                  sentimentInfo.color === 'default'
+                                    ? 'bg-red-100 text-red-700 border-red-300'
+                                    : sentimentInfo.color === 'destructive'
+                                    ? 'bg-green-100 text-green-700 border-green-300'
+                                    : 'bg-gray-100 text-gray-700 border-gray-300'
+                                }
+                              >
+                                {sentimentInfo.label}
+                              </Badge>
                             )}
                           </>
                         )}
-
-                        {/* 分类标签 */}
-                        {article.categoryName && (
-                          <Badge variant="secondary">{article.categoryName}</Badge>
-                        )}
-
-                        {/* 多领域标签 - 显示所有领域（排除irrelevant） */}
-                        {article.domainIds && article.domainIds.length > 0 && (
-                          <>
-                            {article.domainIds
-                              .filter(code => code !== 'irrelevant')
-                              .map((domainCode) => {
-                                const domain = getDomainByCode(domainCode)
-                                return domain ? (
-                                  <Badge key={domainCode} variant="default" className="bg-blue-100 text-blue-800">
-                                    {domain.name}
-                                  </Badge>
-                                ) : null
-                              })}
-                          </>
-                        )}
-
-                        {article.sectors?.map((sector) => (
-                          <Badge key={sector} variant="outline" className="text-xs">
-                            {sector}
-                          </Badge>
-                        ))}
 
                         {article.impact && article.impact >= 4 && (
                           <Badge variant="default">重大影响</Badge>
                         )}
                       </div>
 
-                      {/* AI提取的标签 */}
-                      {article.tags && article.tags.length > 0 && (
-                        <NewsTags tags={article.tags} maxDisplay={5} />
+                      {/* 产业图谱标签 - 新增 */}
+                      {article.industrySegments && article.industrySegments.length > 0 && (
+                        <IndustrySegmentTags tags={article.industrySegments} maxDisplay={3} />
                       )}
 
                       {/* 发布时间 - 单独一行 */}

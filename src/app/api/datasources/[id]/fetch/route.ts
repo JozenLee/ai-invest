@@ -55,7 +55,7 @@ export async function POST(
       }
     }
 
-    // 4. 调用Python数据服务触发采集
+    // 4. 调用Python数据服务触发采集（等待完成）
     const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000'
     const response = await fetch(`${pythonServiceUrl}/api/datasources/fetch`, {
       method: 'POST',
@@ -63,8 +63,8 @@ export async function POST(
         'Content-Type': 'application/json'
       },
       body: JSON.stringify(fetchPayload),
-      // 设置合理的超时时间，因为采集是异步的
-      signal: AbortSignal.timeout(10000) // 10秒超时
+      // 设置较长的超时时间，等待采集完成
+      signal: AbortSignal.timeout(120000) // 120秒超时
     })
 
     if (!response.ok) {
@@ -74,15 +74,16 @@ export async function POST(
 
     const result = await response.json()
 
-    // 5. 返回成功响应
+    // 5. 返回采集结果
     return NextResponse.json({
-      success: true,
-      message: '采集任务已触发',
-      data: {
-        sourceId: dataSource.id,
-        sourceName: dataSource.name,
-        ...result
-      }
+      success: result.success || true,
+      message: '采集完成',
+      fetched_count: result.fetched_count,
+      processed_count: result.processed_count,
+      failed_count: result.failed_count,
+      stored_count: result.stored_count,
+      duration_ms: result.duration_ms,
+      error: result.error
     })
 
   } catch (error) {

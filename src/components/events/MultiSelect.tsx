@@ -24,6 +24,7 @@ interface MultiSelectProps {
   title?: string;
   maxSelections?: number;
   className?: string;
+  disabled?: boolean;
 }
 
 export function MultiSelect({
@@ -34,6 +35,7 @@ export function MultiSelect({
   title = '选择选项',
   maxSelections,
   className = '',
+  disabled = false,
 }: MultiSelectProps) {
   const [open, setOpen] = useState(false);
 
@@ -87,6 +89,7 @@ export function MultiSelect({
           role="combobox"
           aria-expanded={open}
           className={`justify-between h-auto min-h-[2.5rem] ${className}`}
+          disabled={disabled}
         >
           <div className="flex items-center gap-1 flex-1 overflow-hidden">
             {selectedLabels.length === 0 ? (

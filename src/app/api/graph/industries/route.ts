@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
         'Content-Type': 'application/json',
       },
       cache: 'no-store',
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     })
 
     if (!response.ok) {

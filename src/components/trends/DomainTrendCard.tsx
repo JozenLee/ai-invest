@@ -14,6 +14,7 @@ import Link from 'next/link'
 
 interface DomainTrendCardProps {
   trend: DomainTrendSummary
+  newsCount?: number
 }
 
 const trendConfig = {
@@ -44,7 +45,7 @@ const trendConfig = {
  * 领域趋势卡片组件
  * 显示单个领域的趋势摘要信息
  */
-export function DomainTrendCard({ trend }: DomainTrendCardProps) {
+export function DomainTrendCard({ trend, newsCount = 50 }: DomainTrendCardProps) {
   const config = trendConfig[trend.trendDirection]
   const TrendIcon = config.icon
 
@@ -100,7 +101,7 @@ export function DomainTrendCard({ trend }: DomainTrendCardProps) {
         </div>
 
         {/* Key Drivers */}
-        {trend.keyDrivers.length > 0 && (
+        {trend.keyDrivers && trend.keyDrivers.length > 0 && (
           <div className="mb-4">
             <h4 className="text-sm font-medium mb-2 flex items-center gap-1">
               <CheckCircle className="h-4 w-4 text-green-500" />
@@ -118,7 +119,7 @@ export function DomainTrendCard({ trend }: DomainTrendCardProps) {
         )}
 
         {/* Key Risks */}
-        {trend.keyRisks.length > 0 && (
+        {trend.keyRisks && trend.keyRisks.length > 0 && (
           <div className="mb-4">
             <h4 className="text-sm font-medium mb-2 flex items-center gap-1">
               <AlertTriangle className="h-4 w-4 text-yellow-500" />
@@ -145,17 +146,11 @@ export function DomainTrendCard({ trend }: DomainTrendCardProps) {
 
         {/* View Details Button */}
         <Link
-          href={`/events/trends/${trend.domainCode}`}
+          href={`/events/trends/${trend.domainCode}?newsCount=${newsCount}`}
           onClick={() => {
-            // 确保localStorage已更新（作为备用方案）
+            // 保存到localStorage作为备用
             if (typeof window !== 'undefined') {
-              const storedCount = localStorage.getItem('trendNewsCount')
-              if (!storedCount) {
-                // 如果localStorage中没有值，从页面URL或默认值获取
-                const searchParams = new URLSearchParams(window.location.search)
-                const newsCount = searchParams.get('newsCount') || '50'
-                localStorage.setItem('trendNewsCount', newsCount)
-              }
+              localStorage.setItem('trendNewsCount', newsCount.toString())
             }
           }}
         >

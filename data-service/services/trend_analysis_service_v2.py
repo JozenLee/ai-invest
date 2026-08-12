@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 ETF_DOMAINS = [
     {"code": "semiconductor", "name": "半导体", "category": "科技", "keywords": ["半导体", "芯片", "晶圆", "光刻机", "封装测试"]},
     {"code": "ai", "name": "人工智能", "category": "科技", "keywords": ["人工智能", "AI", "大模型", "GPT", "深度学习"]},
+    {"code": "ai_hardware", "name": "AI算力硬件", "category": "科技", "keywords": ["AI算力", "GPU", "AI芯片", "算力硬件", "AI服务器"]},
     {"code": "computing", "name": "算力设备", "category": "科技", "keywords": ["服务器", "数据中心", "GPU", "算力", "云计算"]},
     {"code": "robotics", "name": "机器人", "category": "科技", "keywords": ["机器人", "工业机器人", "服务机器人", "自动化"]},
     {"code": "communication", "name": "通信设备", "category": "科技", "keywords": ["5G", "通信", "基站", "光通信", "物联网"]},
@@ -140,7 +141,31 @@ class TrendAnalysisService:
 
             if not filtered_news:
                 logger.warning(f"领域 {domain_code} 在最近{news_count}条新闻中没有找到相关内容")
-                return None
+                # 返回一个空但结构完整的结果，而不是None
+                return {
+                    "domainCode": domain_code,
+                    "domainName": domain_config['name'],
+                    "trendDirection": "neutral",
+                    "confidenceScore": 0.0,
+                    "sentimentDistribution": {
+                        "bullish": 0,
+                        "neutral": 0,
+                        "bearish": 0
+                    },
+                    "relatedNewsCount": 0,
+                    "relatedNews": [],
+                    "relatedDomains": [],
+                    "keyDrivers": [],
+                    "keyRisks": [],
+                    "currentStatus": f"{domain_config['name']}领域暂无相关新闻",
+                    "shortTermOutlook": "暂无数据，无法分析",
+                    "mediumTermOutlook": "暂无数据，无法分析",
+                    "allKeyDrivers": [],
+                    "allKeyRisks": [],
+                    "aiInsight": "",
+                    "lastUpdated": datetime.now().isoformat(),
+                    "noData": True  # 标记为无数据状态
+                }
 
             logger.info(f"领域 {domain_code} 在最近{news_count}条新闻中找到 {len(filtered_news)} 条相关新闻")
 
@@ -160,6 +185,8 @@ class TrendAnalysisService:
                 "relatedNewsCount": len(filtered_news),
                 "relatedNews": filtered_news[:30],  # 返回最多30条
                 "relatedDomains": [],  # 暂时留空，后续可添加
+                "keyDrivers": [],  # 初始化为空数组
+                "keyRisks": [],  # 初始化为空数组
                 "lastUpdated": datetime.now().isoformat(),
             }
 
@@ -167,18 +194,23 @@ class TrendAnalysisService:
             ai_insight = None
             if include_ai and self.client:
                 logger.info(f"开始为领域 {domain_code} 生成AI分析...")
+                # 使用实际筛选出的新闻数量，不硬编码限制
                 ai_insight = await self.generate_ai_insight(
-                    domain_config['name'], filtered_news[:20]  # 只传最相关的20条
+                    domain_config['name'], filtered_news
                 )
 
             # 添加AI分析结果或占位符
             if ai_insight:
+                drivers = ai_insight.get("keyDrivers", [])
+                risks = ai_insight.get("keyRisks", [])
                 result.update({
                     "currentStatus": ai_insight.get("currentStatus"),
                     "shortTermOutlook": ai_insight.get("shortTermOutlook"),
                     "mediumTermOutlook": ai_insight.get("mediumTermOutlook"),
-                    "allKeyDrivers": ai_insight.get("keyDrivers", []),
-                    "allKeyRisks": ai_insight.get("keyRisks", []),
+                    "keyDrivers": drivers[:2] if drivers else [],  # 摘要版本只取前2条
+                    "keyRisks": risks[:2] if risks else [],  # 摘要版本只取前2条
+                    "allKeyDrivers": drivers,
+                    "allKeyRisks": risks,
                     "aiInsight": "",  # 暂时留空，可后续添加额外洞察
                 })
             else:
@@ -189,6 +221,8 @@ class TrendAnalysisService:
                         domain_config['name'], trend_direction, sentiment_dist
                     ),
                     "mediumTermOutlook": "中期趋势需持续观察",
+                    "keyDrivers": [],
+                    "keyRisks": [],
                     "allKeyDrivers": [],
                     "allKeyRisks": [],
                     "aiInsight": "",
@@ -207,8 +241,9 @@ class TrendAnalysisService:
     async def _get_recent_news_with_domains(self, limit: int) -> List[Dict[str, Any]]:
         """获取有domainIds的最近新闻"""
         try:
-            async with self.db.get_connection() as conn:
-                cursor = await conn.execute("""
+            conn = self.db.get_connection()
+            try:
+                cursor = conn.execute("""
                     SELECT id, title, content, summary, source, url, publishTime,
                            category, sentiment, sentimentLabel, impact,
                            domainIds, keywords, entities
@@ -219,7 +254,7 @@ class TrendAnalysisService:
                     ORDER BY publishTime DESC
                     LIMIT ?
                 """, (limit,))
-                rows = await cursor.fetchall()
+                rows = cursor.fetchall()
 
                 news_list = []
                 for row in rows:
@@ -232,6 +267,8 @@ class TrendAnalysisService:
                     news_list.append(news)
 
                 return news_list
+            finally:
+                conn.close()
 
         except Exception as e:
             logger.error(f"获取新闻失败: {e}")
@@ -242,8 +279,9 @@ class TrendAnalysisService:
     ) -> List[Dict[str, Any]]:
         """获取特定领域的新闻"""
         try:
-            async with self.db.get_connection() as conn:
-                cursor = await conn.execute("""
+            conn = self.db.get_connection()
+            try:
+                cursor = conn.execute("""
                     SELECT id, title, content, summary, source, url, publishTime,
                            category, sentiment, sentimentLabel, impact,
                            domainIds, keywords, entities
@@ -252,7 +290,7 @@ class TrendAnalysisService:
                     ORDER BY publishTime DESC
                     LIMIT ?
                 """, (f'%"{domain_code}"%', limit))
-                rows = await cursor.fetchall()
+                rows = cursor.fetchall()
 
                 news_list = []
                 for row in rows:
@@ -265,6 +303,8 @@ class TrendAnalysisService:
                     news_list.append(news)
 
                 return news_list
+            finally:
+                conn.close()
 
         except Exception as e:
             logger.error(f"获取领域新闻失败: {e}")
@@ -417,9 +457,9 @@ class TrendAnalysisService:
             return None
 
         try:
-            # 准备新闻摘要
+            # 准备新闻摘要（使用传入的所有新闻，由Claude自动总结）
             news_summaries = []
-            for news in news_list[:15]:  # 最多15条
+            for news in news_list:
                 title = news.get('title', '')
                 summary = news.get('summary') or title[:50]
                 sentiment_label = news.get('sentimentLabel', 'neutral')

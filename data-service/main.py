@@ -10,6 +10,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+# 🔧 禁用代理，避免AKShare访问东方财富时的代理连接问题
+os.environ['NO_PROXY'] = '*'
+os.environ['no_proxy'] = '*'
+for proxy_key in ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']:
+    os.environ.pop(proxy_key, None)
+
 # 加载环境变量（从项目根目录加载）
 project_root = Path(__file__).parent.parent
 env_path = project_root / '.env'

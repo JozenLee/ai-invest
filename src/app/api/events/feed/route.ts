@@ -18,6 +18,10 @@ export async function GET(request: NextRequest) {
     const limit = parseInt(searchParams.get('limit') || '20')
     const offset = parseInt(searchParams.get('offset') || '0')
 
+    // 新增：产业和Segment筛选
+    const industryId = searchParams.get('industryId') || undefined
+    const segmentCodesParam = searchParams.get('segmentCodes') || undefined
+
     // 处理多个分类ID（支持逗号分隔的多选）
     let categoryIds: string[] | undefined
 
@@ -52,6 +56,12 @@ export async function GET(request: NextRequest) {
       sentiments = [sentiment]
     }
 
+    // 处理Segment codes（支持逗号分隔的多选）
+    let segmentCodes: string[] | undefined
+    if (segmentCodesParam) {
+      segmentCodes = segmentCodesParam.split(',').filter(Boolean)
+    }
+
     const result = await eventService.getNewsFeed({
       category,
       categoryIds,
@@ -62,6 +72,8 @@ export async function GET(request: NextRequest) {
       sortBy,
       limit,
       offset,
+      industryId,
+      segmentCodes,
     })
 
     return NextResponse.json({

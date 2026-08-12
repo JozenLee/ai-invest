@@ -76,3 +76,61 @@ export async function GET(
     )
   }
 }
+
+/**
+ * DELETE /api/graph/industries/[id]
+ * 删除产业图谱
+ *
+ * Proxies to: DELETE /api/v1/industries/{industry_id}
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const response = await fetch(`${DATA_SERVICE_URL}/api/v1/industries/${id}`, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: '产业不存在',
+            message: 'Industry not found'
+          },
+          { status: 404 }
+        )
+      }
+
+      throw new Error(`Data service returned ${response.status}`)
+    }
+
+    const data = await response.json()
+
+    return NextResponse.json({
+      success: true,
+      message: '删除成功',
+      data
+    })
+
+  } catch (error) {
+    console.error('[industries/[id] API] 删除产业失败:', error)
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: '删除产业失败',
+        message: error instanceof Error ? error.message : '未知错误'
+      },
+      { status: 500 }
+    )
+  }
+}

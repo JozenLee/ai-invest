@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { RefreshCw, TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { TrendHeader } from '@/components/trends/TrendHeader'
 import { AIInsightSection } from '@/components/trends/AIInsightSection'
 import { RelatedDomainsSection } from '@/components/trends/RelatedDomainsSection'
@@ -65,18 +66,28 @@ export default function TrendDetailPage() {
     setError(null)
 
     try {
-      const response = await fetch(
-        `/api/events/trends/analysis?domain=${encodeURIComponent(domain)}&newsCount=${newsCount}&includeAI=${includeAI}`
-      )
+      const url = `/api/events/trends/analysis?domain=${encodeURIComponent(domain)}&newsCount=${newsCount}&includeAI=${includeAI}`
+      console.log('[趋势详情] 请求URL:', url)
+
+      const response = await fetch(url)
+      console.log('[趋势详情] 响应状态:', response.status)
+
       const data: TrendAnalysisResponse = await response.json()
+      console.log('[趋势详情] 响应数据:', { success: data.success, hasData: !!data.data, error: data.error })
 
       if (data.success && data.data) {
         setTrend(data.data)
+        // 如果数据标记为noData，设置友好提示
+        if ((data.data as any).noData) {
+          setError(`${data.data.domainName}领域近期没有相关新闻数据`)
+        }
       } else {
-        setError(data.error || '获取趋势分析失败')
+        const errorMsg = data.error || '获取趋势分析失败'
+        console.error('[趋势详情] 设置错误:', errorMsg)
+        setError(errorMsg)
       }
     } catch (err) {
-      console.error('获取趋势详情失败:', err)
+      console.error('[趋势详情] 异常:', err)
       setError('网络错误，请稍后重试')
     } finally {
       setIsLoading(false)
@@ -143,6 +154,9 @@ export default function TrendDetailPage() {
     const domainConfig = getDomainByCode(domain)
     const displayName = domainConfig?.name || domain
 
+    // 判断是否是数据不足的情况
+    const isNoDataError = error?.includes('无相关新闻') || error?.includes('不存在')
+
     return (
       <div className="space-y-6">
         <TrendHeader
@@ -150,10 +164,24 @@ export default function TrendDetailPage() {
           newsCount={newsCount}
         />
         <div className="flex flex-col items-center justify-center py-12 border rounded-lg">
-          <p className="text-lg font-medium text-red-600">加载失败</p>
-          <p className="text-sm text-muted-foreground mt-2">
-            {error || '无法获取趋势数据'}
+          <p className="text-lg font-medium text-red-600">
+            {isNoDataError ? '暂无数据' : '加载失败'}
           </p>
+          <p className="text-sm text-muted-foreground mt-2">
+            {isNoDataError
+              ? `${displayName}领域近期没有足够的相关新闻数据，请稍后再试或选择其他领域`
+              : (error || '无法获取趋势数据')}
+          </p>
+          {!isNoDataError && (
+            <Button
+              variant="outline"
+              className="mt-4"
+              onClick={() => fetchTrendDetail(true, false)}
+            >
+              <RefreshCw className="mr-2 h-4 w-4" />
+              重试
+            </Button>
+          )}
         </div>
       </div>
     )

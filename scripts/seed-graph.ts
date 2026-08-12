@@ -596,7 +596,7 @@ async function main() {
     // 封装测试相关
     { nodeId: l2Nodes[2].id, ticker: '600584', market: 'A', name: '长电科技', relevance: 0.95, role: 'direct' },
     { nodeId: l2Nodes[2].id, ticker: '002156', market: 'A', name: '通富微电', relevance: 0.9, role: 'direct' },
-    { nodeId: l2Nodes[2].id, ticker: '600584', market: 'A', name: '华天科技', relevance: 0.85, role: 'direct' },
+    { nodeId: l2Nodes[2].id, ticker: '002185', market: 'A', name: '华天科技', relevance: 0.85, role: 'direct' },
 
     // 半导体设备相关
     { nodeId: l2Nodes[3].id, ticker: '002371', market: 'A', name: '北方华创', relevance: 0.95, role: 'direct' },
@@ -643,8 +643,8 @@ async function main() {
         stockName: stock.name,
         nodeId: stock.nodeId,
         relevance: stock.relevance,
-        category: stock.role
-      }
+        category: stock.role,
+      },
     })
   }
 

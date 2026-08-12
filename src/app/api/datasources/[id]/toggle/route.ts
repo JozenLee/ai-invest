@@ -69,6 +69,45 @@ export async function POST(
       }
     })
 
+    // 通知 Python 调度服务同步更新调度器
+    try {
+      const pythonServiceUrl = process.env.PYTHON_SERVICE_URL || 'http://localhost:8000'
+
+      // 解析配置
+      let driverConfig = {}
+      try {
+        driverConfig = JSON.parse(dataSource.config || '{}')
+      } catch {
+        driverConfig = {}
+      }
+
+      // 添加必要字段
+      driverConfig = {
+        ...driverConfig,
+        driverType: dataSource.driverType,
+        provider: dataSource.provider
+      }
+
+      const toggleResponse = await fetch(`${pythonServiceUrl}/api/datasources/${id}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          isActive,
+          updateFrequency: dataSource.updateFrequency || 0,
+          driverConfig
+        })
+      })
+
+      if (!toggleResponse.ok) {
+        console.warn(`Python 调度服务同步失败: ${toggleResponse.status}`)
+      } else {
+        console.log(`Python 调度服务已同步: source_id=${id}, isActive=${isActive}`)
+      }
+    } catch (pythonError) {
+      // Python 服务不可用时不阻塞主流程
+      console.warn('无法连接 Python 调度服务:', pythonError)
+    }
+
     return NextResponse.json({
       success: true,
       data: {

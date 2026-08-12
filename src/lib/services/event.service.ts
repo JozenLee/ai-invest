@@ -57,6 +57,8 @@ export class EventService {
     sortBy?: string
     limit?: number
     offset?: number
+    industryId?: string
+    segmentCodes?: string[]
   }): Promise<{ total: number; items: NewsArticle[]; source: 'local' | 'remote' }> {
     const {
       category,
@@ -68,11 +70,48 @@ export class EventService {
       sortBy = 'publishTime',
       limit = 20,
       offset = 0,
+      industryId,
+      segmentCodes,
     } = params
 
     // 优先从本地数据库读取（定时采集的数据）
     try {
       const where: any = {}
+
+      // 产业/Segment筛选（新增）
+      if (industryId) {
+        try {
+          let segmentsToQuery = segmentCodes || []
+
+          // 如果只选择了产业，没有选择Segment，则获取该产业下所有Segment
+          if (segmentsToQuery.length === 0) {
+            const segmentsResponse = await fetch(
+              `${DATA_SERVICE_URL}/api/v1/industry-graph/${industryId}/segments`
+            )
+
+            if (segmentsResponse.ok) {
+              const segmentsData = await segmentsResponse.json()
+              if (segmentsData.success && segmentsData.data?.segments) {
+                segmentsToQuery = segmentsData.data.segments.map((s: any) => s.segment_code)
+              }
+            }
+          }
+
+          // 直接使用segmentCodes字段筛选（JSON数组字段）
+          // SQLite不支持JSON函数，所以使用字符串匹配
+          if (segmentsToQuery.length > 0) {
+            where.OR = segmentsToQuery.map(segmentCode => ({
+              segmentCodes: { contains: `"${segmentCode}"` }
+            }))
+          } else {
+            // 没有segment，返回空结果
+            return { total: 0, items: [], source: 'local' }
+          }
+        } catch (error) {
+          console.error('获取Segment筛选失败:', error)
+          // 继续执行，不阻塞其他筛选条件
+        }
+      }
 
       // 分类筛选
       if (categoryIds && categoryIds.length > 0) {
@@ -173,6 +212,77 @@ export class EventService {
       if (total > 0) {
         console.log(`✅ 从本地数据库获取新闻: ${articles.length}/${total} 条`)
 
+        // 收集所有新闻的 segmentCodes
+        const allSegmentCodes = new Set<string>()
+        articles.forEach(article => {
+          if (article.segmentCodes) {
+            try {
+              const codes = JSON.parse(article.segmentCodes as string)
+              if (Array.isArray(codes)) {
+                codes.forEach(code => allSegmentCodes.add(code))
+              }
+            } catch (e) {
+              // segmentCodes 解析失败，跳过
+            }
+          }
+        })
+
+        console.log(`📊 收集到 ${allSegmentCodes.size} 个不同的 segmentCodes`)
+        if (allSegmentCodes.size > 0) {
+          console.log(`📊 segmentCodes: ${Array.from(allSegmentCodes).join(', ')}`)
+        }
+
+        // 构建 segmentCode -> 产业信息的映射（从知识图谱API获取）
+        const segmentToIndustryMap: Record<string, {
+          industry_code: string
+          industry_name: string
+          segment_code: string
+          segment_name: string
+        }> = {}
+
+        if (allSegmentCodes.size > 0) {
+          try {
+            console.log(`🔍 开始构建 Segment 映射...`)
+            // 获取所有产业列表
+            const industriesResp = await fetch(`${DATA_SERVICE_URL}/api/v1/industries`)
+            if (industriesResp.ok) {
+              const industries = await industriesResp.json()
+              console.log(`✅ 获取到 ${industries.length} 个产业`)
+
+              // 遍历每个产业，获取其segments
+              for (const industry of industries) {
+                try {
+                  const graphResp = await fetch(`${DATA_SERVICE_URL}/api/v1/industries/${industry.id}/graph`)
+                  if (graphResp.ok) {
+                    const graphData = await graphResp.json()
+                    const stages = graphData.stages || []
+
+                    for (const stage of stages) {
+                      for (const segment of stage.segments || []) {
+                        if (allSegmentCodes.has(segment.code)) {
+                          segmentToIndustryMap[segment.code] = {
+                            industry_code: industry.code,
+                            industry_name: industry.name,
+                            segment_code: segment.code,
+                            segment_name: segment.name
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch (e) {
+                  console.error(`获取产业 ${industry.name} 图谱失败:`, e)
+                }
+              }
+              console.log(`✅ 构建映射完成，匹配到 ${Object.keys(segmentToIndustryMap).length} 个 segments`)
+            } else {
+              console.error(`❌ 获取产业列表失败: ${industriesResp.status}`)
+            }
+          } catch (error) {
+            console.error('构建Segment映射失败:', error)
+          }
+        }
+
         return {
           total,
           source: 'local',
@@ -186,6 +296,38 @@ export class EventService {
                 console.error('解析domainIds失败:', e)
               }
             }
+
+            // 解析segmentCodes（JSON数组）
+            let segmentCodes: string[] = []
+            if (a.segmentCodes) {
+              try {
+                segmentCodes = JSON.parse(a.segmentCodes as string)
+              } catch (e) {
+                console.error('解析segmentCodes失败:', e)
+              }
+            }
+
+            // 从 segmentCodes 构建产业细分信息
+            const industrySegments: Array<{
+              industry_code: string
+              industry_name: string
+              segment_code: string
+              segment_name: string
+            }> = []
+
+            // 去重：使用Set来避免重复的Segment
+            const segmentKeys = new Set<string>()
+
+            segmentCodes.forEach(segmentCode => {
+              const segmentInfo = segmentToIndustryMap[segmentCode]
+              if (segmentInfo) {
+                const key = `${segmentInfo.industry_code}-${segmentInfo.segment_code}`
+                if (!segmentKeys.has(key)) {
+                  segmentKeys.add(key)
+                  industrySegments.push(segmentInfo)
+                }
+              }
+            })
 
             return {
               id: a.id,
@@ -209,9 +351,17 @@ export class EventService {
               keywords: a.keywords ? JSON.parse(a.keywords as string) : undefined,
               aiProcessed: a.aiProcessed || false,
               tags: a.tags || [],
+              segmentCodes: segmentCodes, // 新增：产业细分领域代码列表
+              industrySegments: industrySegments, // 新增：完整的产业细分信息
             }
           }),
         }
+      }
+
+      // 如果使用了产业筛选但本地无结果，直接返回空，不降级
+      // 因为产业筛选依赖本地Tag表，Python服务无法处理
+      if (industryId) {
+        return { total: 0, items: [], source: 'local' }
       }
 
       console.log('⚠️ 本地数据库无数据，降级到Python服务')

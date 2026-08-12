@@ -1,5 +1,6 @@
 // src/app/api/graph/extract/__tests__/route.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { NextRequest } from 'next/server'
 
 // Set API key before any imports that create singletons
 process.env.ANTHROPIC_API_KEY = 'mock-api-key'
@@ -73,7 +74,7 @@ describe('POST /api/graph/extract', () => {
   })
 
   it('should create extraction job and return job ID', async () => {
-    const request = new Request('http://localhost/api/graph/extract', {
+    const request = new NextRequest('http://localhost/api/graph/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -102,7 +103,7 @@ describe('POST /api/graph/extract', () => {
   })
 
   it('should return 400 for invalid input', async () => {
-    const request = new Request('http://localhost/api/graph/extract', {
+    const request = new NextRequest('http://localhost/api/graph/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -116,7 +117,7 @@ describe('POST /api/graph/extract', () => {
   })
 
   it('should handle extraction errors gracefully', async () => {
-    const request = new Request('http://localhost/api/graph/extract', {
+    const request = new NextRequest('http://localhost/api/graph/extract', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

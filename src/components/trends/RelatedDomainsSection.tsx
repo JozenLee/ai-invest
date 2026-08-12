@@ -13,7 +13,7 @@ interface RelatedDomainsSectionProps {
  * 展示相关联的领域及其关联关系说明
  */
 export function RelatedDomainsSection({ relatedDomains }: RelatedDomainsSectionProps) {
-  if (relatedDomains.length === 0) {
+  if (!relatedDomains || relatedDomains.length === 0) {
     return (
       <Card className="rounded-xl shadow-sm">
         <div className="border-b p-6">

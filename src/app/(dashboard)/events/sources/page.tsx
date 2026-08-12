@@ -39,6 +39,7 @@ interface DataSource {
   lastFetchAt?: string
   lastFetchStatus?: string
   lastFetchStatusLabel?: string
+  lastFetchCount?: number
   scheduler?: {
     id: string
     scheduleType: string
@@ -58,6 +59,7 @@ export default function DataSourcesPage() {
   const [selectedSource, setSelectedSource] = useState<DataSource | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [latestFetchTime, setLatestFetchTime] = useState<string>('从未运行')
+  const [fetchingSourceIds, setFetchingSourceIds] = useState<Set<string>>(new Set())
 
   // 获取数据源列表
   const fetchDataSources = async () => {
@@ -115,6 +117,9 @@ export default function DataSourcesPage() {
 
   // 立即采集
   const handleFetch = async (id: string) => {
+    // 添加到采集中状态
+    setFetchingSourceIds(prev => new Set(prev).add(id))
+
     try {
       const response = await fetch(`/api/datasources/${id}/fetch`, {
         method: 'POST',
@@ -123,18 +128,25 @@ export default function DataSourcesPage() {
       if (response.ok) {
         const data = await response.json()
         if (data.success) {
-          alert('采集任务已触发')
+          // 静默刷新数据源列表，不显示弹窗
           await fetchDataSources()
         } else {
-          alert(data.error || '操作失败')
+          // 只在失败时显示错误提示
+          console.error('采集失败:', data.error)
         }
       } else {
         const data = await response.json()
-        alert(data.error || '操作失败')
+        console.error('采集失败:', data.error)
       }
     } catch (error) {
       console.error('触发采集失败:', error)
-      alert('操作失败，请确保数据服务已启动')
+    } finally {
+      // 从采集中状态移除
+      setFetchingSourceIds(prev => {
+        const next = new Set(prev)
+        next.delete(id)
+        return next
+      })
     }
   }
 
@@ -291,6 +303,7 @@ export default function DataSourcesPage() {
                 onToggle={handleToggle}
                 onFetch={handleFetch}
                 onSettings={handleSettings}
+                fetchingStatus={fetchingSourceIds.has(source.id) ? 'fetching' : 'idle'}
               />
             ))}
           </div>

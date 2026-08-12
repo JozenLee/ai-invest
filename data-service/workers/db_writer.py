@@ -143,6 +143,7 @@ class DatabaseWriter:
                 'categoryConfidence': a.categoryConfidence,
                 'domainId': a.domainId,
                 'domainIds': json.dumps(a.domainIds) if a.domainIds else None,
+                'segmentCodes': json.dumps(a.segmentCodes) if a.segmentCodes else None,
                 'sentiment': a.sentiment,
                 'sentimentLabel': a.sentimentLabel,
                 'sentimentConfidence': a.sentimentConfidence,

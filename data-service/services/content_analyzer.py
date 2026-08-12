@@ -5,6 +5,7 @@
 
 import os
 import json
+import re
 import logging
 from typing import List, Dict, Optional, Any
 from datetime import datetime
@@ -42,6 +43,100 @@ class ContentAnalyzer:
                     logger.info(f'Claude API客户端初始化成功 (官方API, model: {self.model})')
             else:
                 logger.warning('ANTHROPIC_API_KEY未设置，AI分析功能不可用')
+
+    def _extract_json_from_text(self, text: str) -> Optional[str]:
+        """
+        从文本中提取JSON字符串
+        处理常见的格式：markdown代码块、前后说明文字等
+        """
+        text = text.strip()
+
+        # 方法1: 移除markdown代码块
+        if "```json" in text:
+            match = re.search(r'```json\s*\n(.*?)\n```', text, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+        if "```" in text:
+            match = re.search(r'```\s*\n(.*?)\n```', text, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+
+        # 方法2: 查找JSON对象（最外层的{}）
+        brace_stack = []
+        start_idx = -1
+
+        for i, char in enumerate(text):
+            if char == '{':
+                if not brace_stack:
+                    start_idx = i
+                brace_stack.append(char)
+            elif char == '}':
+                if brace_stack:
+                    brace_stack.pop()
+                    if not brace_stack and start_idx != -1:
+                        # 找到完整的JSON对象
+                        return text[start_idx:i+1]
+
+        # 方法3: 如果文本本身看起来就是JSON
+        if text.startswith('{') and text.endswith('}'):
+            return text
+
+        return None
+
+    def _fix_json_string(self, json_str: str) -> str:
+        """
+        修复常见的JSON格式错误
+        """
+        if not json_str:
+            return json_str
+
+        # 修复1: 移除注释（单行）
+        json_str = re.sub(r'//.*?\n', '\n', json_str)
+
+        # 修复2: 移除注释（多行）
+        json_str = re.sub(r'/\*.*?\*/', '', json_str, flags=re.DOTALL)
+
+        # 修复3: 修复尾随逗号 {"a": 1,}
+        json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
+
+        # 修复4: 确保字符串值使用双引号（常见错误：使用单引号）
+        # 注意：这个比较复杂，可能影响正常内容，暂时跳过
+
+        # 修复5: null值的常见拼写错误
+        json_str = re.sub(r'\bNone\b', 'null', json_str)
+        json_str = re.sub(r'\bTrue\b', 'true', json_str)
+        json_str = re.sub(r'\bFalse\b', 'false', json_str)
+
+        return json_str.strip()
+
+    def _parse_json_safely(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        安全地解析JSON，包含提取和修复逻辑
+        """
+        if not text:
+            return None
+
+        # 步骤1: 提取JSON
+        json_str = self._extract_json_from_text(text)
+        if not json_str:
+            logger.warning(f"无法从文本中提取JSON，原始文本: {text[:200]}")
+            return None
+
+        # 步骤2: 尝试直接解析
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            logger.warning(f"第一次JSON解析失败: {e}, 尝试修复...")
+
+        # 步骤3: 修复后再解析
+        try:
+            fixed_json_str = self._fix_json_string(json_str)
+            return json.loads(fixed_json_str)
+        except json.JSONDecodeError as e:
+            logger.error(f"修复后JSON解析仍然失败: {e}")
+            logger.error(f"原始提取的JSON: {json_str[:500]}")
+            return None
 
     async def analyze_sentiment(self, content: str) -> float:
         """
@@ -312,18 +407,20 @@ class ContentAnalyzer:
         try:
             combined_text = f"{title}\n\n{content[:1500]}"
 
-            prompt = f"""请对以下新闻进行全面分析，以JSON格式返回结果：
+            prompt = f"""请对以下新闻进行全面分析。
+
+你必须严格按照以下JSON格式返回，不要添加任何解释、说明或其他文字，只返回纯JSON对象：
 
 {{
   "summary": "新闻摘要（30-50字）",
-  "category": "分类代码（ai/chip/earnings/policy等22个类别之一）",
+  "category": "分类代码",
   "domains": ["领域代码1", "领域代码2"],
-  "sentiment": 情感分数（-1到1的浮点数，若irrelevant则为null）,
-  "impact": 影响力等级（1-5的整数）,
+  "sentiment": 0.5,
+  "impact": 3,
   "keywords": ["关键词1", "关键词2", "关键词3"]
 }}
 
-分类代码说明（保持与历史数据兼容）：
+分类代码（22个类别之一）：
 科技类: ai, chip, internet, product, breakthrough
 财经类: earnings, merger, capital, macro
 政策类: policy, regulation, government
@@ -331,26 +428,26 @@ class ContentAnalyzer:
 国际类: geopolitics, global_market, trade
 产业类: supply, capacity, competition, new_energy, medical
 
-领域代码说明（对应ETF指数分类，选择1-3个最相关的）：
-科技类: semiconductor(半导体), ai(人工智能), computing(算力设备), robotics(机器人), communication(通信设备), software(软件互联网)
-新能源: new_energy_vehicle(新能源车), battery(电池储能), photovoltaic(光伏), wind_power(风电)
-医药类: innovative_drug(创新药), medical_device(医疗器械)
-制造类: equipment(高端装备), military(国防军工)
-消费类: food_beverage(食品饮料), consumer_electronics(消费电子)
-其他: finance(金融), real_estate(房地产), agriculture(农业), environment(环保)
+领域代码（ETF指数分类，选择1-3个最相关的）：
+科技类: semiconductor, ai, computing, robotics, communication, software
+新能源: new_energy_vehicle, battery, photovoltaic, wind_power
+医药类: innovative_drug, medical_device
+制造类: equipment, military
+消费类: food_beverage, consumer_electronics
+其他: finance, real_estate, agriculture, environment
 特殊: irrelevant(与股市投资无关)
 
 重要规则：
-1. 如果新闻与股市投资完全无关（纯娱乐、体育、社会民生等），domains返回["irrelevant"]，sentiment返回null，impact返回1
-2. 对于irrelevant新闻，不要标注利好/利空/中性，影响力必须为1
-3. domains应按相关度从高到低排序，最多3个
-4. 多个领域相关的新闻应打上所有相关标签（如："芯片制造设备"应标注["semiconductor", "equipment"]）
-5. 新能源相关新闻应根据具体内容选择：new_energy_vehicle(新能源车)、battery(电池储能)、photovoltaic(光伏)、wind_power(风电)，不要使用new_energy
+1. 如果新闻与股市投资完全无关（纯娱乐、体育、社会民生等），domains设为["irrelevant"]，sentiment设为null，impact设为1
+2. domains应按相关度从高到低排序，最多3个
+3. 多个领域相关的新闻应打上所有相关标签
+4. sentiment为-1到1的浮点数（irrelevant时为null）
+5. impact为1-5的整数（irrelevant时为1）
 
 新闻内容：
 {combined_text}
 
-请严格按照JSON格式返回，不要添加其他说明文字。"""
+请只返回JSON对象，不要有任何其他文字。"""
 
             response = self.client.messages.create(
                 model=self.model,
@@ -359,86 +456,81 @@ class ContentAnalyzer:
             )
 
             result_text = response.content[0].text.strip()
+            logger.info(f"AI返回原始文本: {result_text[:300]}")
 
-            # 移除可能的代码块标记
-            if result_text.startswith("```json"):
-                result_text = result_text[7:]  # 移除 ```json
-            if result_text.startswith("```"):
-                result_text = result_text[3:]  # 移除 ```
-            if result_text.endswith("```"):
-                result_text = result_text[:-3]  # 移除结尾 ```
-            result_text = result_text.strip()
+            # 使用增强的JSON解析器
+            analysis = self._parse_json_safely(result_text)
 
-            # 解析JSON响应
-            try:
-                analysis = json.loads(result_text)
-
-                # 验证和规范化数据
-                summary = analysis.get("summary", title[:50])
-                category = analysis.get("category", "global_market")
-                domains = analysis.get("domains", [])
-
-                # 验证domains格式
-                if not isinstance(domains, list):
-                    domains = []
-
-                # 修正常见的领域代码错误
-                domain_mapping = {
-                    "new_energy": "battery",  # 新能源 → 电池储能（宁德时代等）
-                    "医药": "innovative_drug",
-                    "医疗": "medical_device",
-                }
-                domains = [domain_mapping.get(d, d) for d in domains]
-                domains = domains[:3]  # 最多保留3个
-
-                # 检查是否为无影响新闻
-                is_irrelevant = "irrelevant" in domains
-
-                # 情感处理
-                sentiment_raw = analysis.get("sentiment")
-                if is_irrelevant or sentiment_raw is None:
-                    sentiment = None
-                    sentiment_label = None
-                else:
-                    sentiment = float(sentiment_raw)
-                    sentiment = max(-1.0, min(1.0, sentiment))
-                    # 生成情感标签
-                    if sentiment > 0.2:
-                        sentiment_label = "bullish"
-                    elif sentiment < -0.2:
-                        sentiment_label = "bearish"
-                    else:
-                        sentiment_label = "neutral"
-
-                impact = int(analysis.get("impact", 3))
-
-                # irrelevant新闻强制impact=1
-                if is_irrelevant:
-                    impact = 1
-                else:
-                    impact = max(1, min(5, impact))
-
-                keywords = analysis.get("keywords", [])
-
-                return {
-                    "summary": summary,
-                    "sentiment": sentiment,
-                    "sentimentLabel": sentiment_label,
-                    "sentimentConfidence": 0.85 if sentiment is not None else None,
-                    "category": category,
-                    "categoryConfidence": 0.85,
-                    "impact": impact,
-                    "keywords": keywords[:10],
-                    "entities": [],  # 可以后续优化
-                    "domains": domains
-                }
-
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON解析失败: {e}, 返回文本: {result_text[:200]}")
+            if not analysis:
+                logger.error(f"JSON解析完全失败，使用降级分析")
                 return await self._fallback_analysis(title, content)
 
+            # 验证和规范化数据
+            summary = analysis.get("summary", title[:50])
+            category = analysis.get("category", "global_market")
+            domains = analysis.get("domains", [])
+
+            # 验证domains格式
+            if not isinstance(domains, list):
+                logger.warning(f"domains不是列表格式: {domains}, 转换为列表")
+                domains = []
+
+            # 修正常见的领域代码错误
+            domain_mapping = {
+                "new_energy": "battery",  # 新能源 → 电池储能（宁德时代等）
+                "医药": "innovative_drug",
+                "医疗": "medical_device",
+            }
+            domains = [domain_mapping.get(d, d) for d in domains]
+            domains = domains[:3]  # 最多保留3个
+
+            # 检查是否为无影响新闻
+            is_irrelevant = "irrelevant" in domains
+
+            # 情感处理
+            sentiment_raw = analysis.get("sentiment")
+            if is_irrelevant or sentiment_raw is None:
+                sentiment = None
+                sentiment_label = None
+            else:
+                sentiment = float(sentiment_raw)
+                sentiment = max(-1.0, min(1.0, sentiment))
+                # 生成情感标签
+                if sentiment > 0.2:
+                    sentiment_label = "bullish"
+                elif sentiment < -0.2:
+                    sentiment_label = "bearish"
+                else:
+                    sentiment_label = "neutral"
+
+            impact = int(analysis.get("impact", 3))
+
+            # irrelevant新闻强制impact=1
+            if is_irrelevant:
+                impact = 1
+            else:
+                impact = max(1, min(5, impact))
+
+            keywords = analysis.get("keywords", [])
+
+            result = {
+                "summary": summary,
+                "sentiment": sentiment,
+                "sentimentLabel": sentiment_label,
+                "sentimentConfidence": 0.85 if sentiment is not None else None,
+                "category": category,
+                "categoryConfidence": 0.85,
+                "impact": impact,
+                "keywords": keywords[:10],
+                "entities": [],  # 可以后续优化
+                "domains": domains
+            }
+
+            logger.info(f"AI分析成功: category={category}, domains={domains}, sentiment={sentiment}, impact={impact}")
+            return result
+
         except Exception as e:
-            logger.error(f"综合分析失败: {e}")
+            logger.error(f"综合分析失败: {e}", exc_info=True)
             return await self._fallback_analysis(title, content)
 
     async def _fallback_analysis(self, title: str, content: str) -> Dict[str, Any]:

@@ -2,6 +2,8 @@
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from .coverage_models import CoverageAssessment, ExplorationContext
+from .review_models import ReviewHistory
 
 
 class IndustryInfo(BaseModel):
@@ -17,6 +19,18 @@ class SegmentInfo(BaseModel):
     code: str = Field(..., description="环节代码")
     description: str = Field(..., description="环节功能描述")
     key_categories: List[str] = Field(default_factory=list, description="核心类别")
+    companies: List[Dict[str, Any]] = Field(default_factory=list, description="企业列表（编辑模式时从Neo4j加载）")
+    order: Optional[int] = Field(None, description="显示顺序（在阶段内的排列位置）")
+
+    # 新增字段（用于新闻分类）
+    news_keywords: List[str] = Field(
+        default_factory=list,
+        description="新闻匹配关键词（用于AI分类）"
+    )
+    tag_codes: List[str] = Field(
+        default_factory=list,
+        description="关联的Tag代码列表"
+    )
 
 
 class StageInfo(BaseModel):
@@ -81,7 +95,7 @@ class ExplorationTask(BaseModel):
     industry_name: str
     status: str = Field(
         "pending",
-        description="pending/exploring_structure/structure_ready/exploring_details/writing_to_graph/completed/failed"
+        description="pending/exploring_structure/structure_reviewing/structure_refining/exploring_details/companies_reviewing/companies_refining/writing_to_graph/completed/failed"
     )
     progress: int = Field(0, ge=0, le=100)
     current_step: Optional[str] = None
@@ -92,3 +106,27 @@ class ExplorationTask(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+
+    # 新增字段 - 用于递归探索和多轮Review
+    review_history: List[ReviewHistory] = Field(
+        default_factory=list,
+        description="Review历史记录"
+    )
+    coverage_assessment: Optional[CoverageAssessment] = Field(
+        None,
+        description="覆盖度评估结果"
+    )
+    exploration_context: Optional[ExplorationContext] = Field(
+        None,
+        description="递归探索上下文"
+    )
+    structure_iterations: int = Field(
+        0,
+        ge=0,
+        description="结构Review轮次"
+    )
+    companies_iterations: int = Field(
+        0,
+        ge=0,
+        description="企业Review轮次"
+    )

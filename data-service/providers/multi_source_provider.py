@@ -6,6 +6,7 @@ Multi-Source Data Provider - 多数据源智能提供者
 1. ETF历史数据: Tushare > AKShare > 实时数据降级
 2. ETF实时数据: AKShare > Sina
 3. 指数数据: 固定映射 > AKShare > Sina
+4. 指数历史数据: AKShare新浪财经 > AKShare东方财富 > 实时数据降级
 """
 from typing import Optional, List, Dict, Any
 import logging
@@ -41,7 +42,9 @@ class MultiSourceProvider:
         from providers.akshare_provider import AKShareProvider
         from providers.sina_provider import SinaProvider
         from providers.fallback_provider import FallbackProvider
+        from providers.tushare_provider import TushareProvider
 
+        self.tushare = TushareProvider()
         self.akshare = AKShareProvider()
         self.sina = SinaProvider()
         self.fallback = FallbackProvider()
@@ -112,37 +115,70 @@ class MultiSourceProvider:
         """
         获取ETF历史数据（多数据源）
 
-        优先级: AKShare > 实时数据降级
+        优先级: AKShare > Tushare > 实时数据降级
         """
-        # 方案1: AKShare（东方财富）
+        self.logger.info(f"🔍 Fetching history for ETF {code} ({start_date} to {end_date})")
+
+        # 方案1: AKShare（新浪财经，免费且稳定）
         try:
             self.logger.info(f"[AKShare] Fetching ETF {code} history...")
             df = await self.akshare.get_etf_daily(code, start_date, end_date)
             if not df.empty:
-                self.logger.info(f"✅ AKShare returned {len(df)} rows")
+                self.logger.info(f"✅ AKShare returned {len(df)} rows for {code}")
+
+                # 统一列名（新浪财经返回英文列名）
+                if 'date' in df.columns and '日期' not in df.columns:
+                    # 新浪财经格式，需要重命名
+                    df = df.rename(columns={
+                        'date': '日期',
+                        'open': '开盘',
+                        'close': '收盘',
+                        'high': '最高',
+                        'low': '最低',
+                        'volume': '成交量',
+                        'amount': '成交额'
+                    })
+                    # 计算涨跌幅（如果没有）
+                    if '涨跌幅' not in df.columns and len(df) > 1:
+                        df['涨跌幅'] = df['收盘'].pct_change() * 100
+                        df['涨跌幅'] = df['涨跌幅'].fillna(0)
+
                 return df
         except Exception as e:
-            self.logger.warning(f"[AKShare] ETF {code} failed: {e}")
+            self.logger.warning(f"⚠️ [AKShare] ETF {code} failed: {e}")
 
-        # 方案2: 降级到实时数据（单日）
+        # 方案2: Tushare（需要权限，作为备用）
+        if self.tushare.available:
+            try:
+                self.logger.info(f"[Tushare] Fetching ETF {code} history...")
+                df = await self.tushare.get_etf_daily(code, start_date, end_date)
+                if not df.empty:
+                    self.logger.info(f"✅ Tushare returned {len(df)} rows for {code}")
+                    return df
+            except Exception as e:
+                self.logger.warning(f"[Tushare] ETF {code} failed: {e}")
+        else:
+            self.logger.info(f"[Tushare] Not available (TUSHARE_TOKEN not configured)")
+
+        # 方案3: 降级到实时数据（单日）
         try:
-            self.logger.info(f"[Fallback] Using spot data for ETF {code}...")
+            self.logger.warning(f"⚠️ [Fallback] Using spot data for ETF {code} (no history available)...")
             spot_data = await self.fallback.get_etf_spot_data(code)
             if spot_data and spot_data.get("kline"):
                 # 转换为DataFrame格式
                 kline = spot_data["kline"][0]
                 df = pd.DataFrame([{
-                    "date": kline["日期"],
-                    "open": kline["开盘"],
-                    "close": kline["收盘"],
-                    "high": kline["最高"],
-                    "low": kline["最低"],
-                    "volume": kline["成交量"],
-                    "amount": kline["成交额"],
-                    "pct_chg": kline["涨跌幅"],
+                    "日期": kline["日期"],
+                    "开盘": kline["开盘"],
+                    "收盘": kline["收盘"],
+                    "最高": kline["最高"],
+                    "最低": kline["最低"],
+                    "成交量": kline["成交量"],
+                    "成交额": kline["成交额"],
+                    "涨跌幅": kline["涨跌幅"],
                 }])
-                df["date"] = pd.to_datetime(df["date"])
-                self.logger.info(f"✅ Fallback spot data returned (single day)")
+                df["日期"] = pd.to_datetime(df["日期"])
+                self.logger.warning(f"⚠️ Fallback: only 1 day of data for {code}")
                 return df
         except Exception as e:
             self.logger.warning(f"[Fallback] ETF {code} failed: {e}")
@@ -324,6 +360,183 @@ class MultiSourceProvider:
                 continue
 
         return results
+
+    async def get_index_history(
+        self,
+        code: str,
+        start_date: str,
+        end_date: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        获取指数历史数据（多数据源）
+
+        优先级: AKShare新浪财经 > AKShare东方财富 > 固定映射降级
+
+        Args:
+            code: 指数代码（如 000688, 399006, 399303, 931079）
+            start_date: 开始日期 YYYYMMDD
+            end_date: 结束日期 YYYYMMDD
+
+        Returns:
+            {
+                "code": "000688",
+                "name": "科创50",
+                "history": [{"日期": "2026-05-01", "开盘": 1000, ...}],
+                "source": "akshare_index_daily"
+            }
+        """
+        self.logger.info(f"🔍 Fetching history for index {code} ({start_date} to {end_date})")
+
+        # 统一代码格式
+        normalized_code = code.replace("sh", "").replace("sz", "")
+
+        # 获取指数名称（从固定映射）
+        index_name = None
+        if code in self.INDEX_FIXED_MAPPING:
+            index_name = self.INDEX_FIXED_MAPPING[code]["name"]
+        elif normalized_code in self.INDEX_FIXED_MAPPING:
+            index_name = self.INDEX_FIXED_MAPPING[normalized_code]["name"]
+
+        # 方案1: AKShare stock_zh_index_daily（新浪财经，最稳定）
+        try:
+            # 转换代码格式：添加市场前缀
+            sina_code = self._normalize_index_code(code)
+            self.logger.info(f"[AKShare] Trying stock_zh_index_daily for {sina_code}...")
+
+            df = await self.akshare.get_index_daily(sina_code, start_date, end_date)
+
+            if not df.empty:
+                self.logger.info(f"✅ AKShare returned {len(df)} rows for index {code}")
+
+                # 转换为标准格式
+                history = []
+                for _, row in df.iterrows():
+                    # 计算涨跌幅
+                    if len(history) > 0:
+                        prev_close = history[-1]["收盘"]
+                        pct_chg = ((float(row.get("close", 0)) - prev_close) / prev_close * 100) if prev_close > 0 else 0
+                    else:
+                        pct_chg = 0
+
+                    history.append({
+                        "日期": str(row.get("date", "")),
+                        "开盘": float(row.get("open", 0)),
+                        "收盘": float(row.get("close", 0)),
+                        "最高": float(row.get("high", 0)),
+                        "最低": float(row.get("low", 0)),
+                        "成交量": float(row.get("volume", 0)),
+                        "涨跌幅": round(pct_chg, 2)
+                    })
+
+                return {
+                    "code": code,
+                    "name": index_name or code,
+                    "history": history,
+                    "source": "akshare_index_daily",
+                    "data_points": len(history)
+                }
+
+        except Exception as e:
+            self.logger.warning(f"⚠️ [AKShare stock_zh_index_daily] Index {code} failed: {e}")
+
+        # 方案2: AKShare index_zh_a_hist（东方财富，支持更多指数）
+        try:
+            import akshare as ak
+            self.logger.info(f"[AKShare] Trying index_zh_a_hist for {normalized_code}...")
+
+            df = await self.akshare._call(
+                ak.index_zh_a_hist,
+                symbol=normalized_code,
+                period='daily',
+                start_date=start_date,
+                end_date=end_date,
+                timeout=15.0
+            )
+
+            if not df.empty:
+                self.logger.info(f"✅ AKShare index_zh_a_hist returned {len(df)} rows for {code}")
+
+                # 转换为标准格式
+                history = []
+                for _, row in df.iterrows():
+                    history.append({
+                        "日期": str(row.get("日期", "")),
+                        "开盘": float(row.get("开盘", 0)),
+                        "收盘": float(row.get("收盘", 0)),
+                        "最高": float(row.get("最高", 0)),
+                        "最低": float(row.get("最低", 0)),
+                        "成交量": float(row.get("成交量", 0)),
+                        "涨跌幅": float(row.get("涨跌幅", 0))
+                    })
+
+                return {
+                    "code": code,
+                    "name": index_name or code,
+                    "history": history,
+                    "source": "akshare_index_zh_a_hist",
+                    "data_points": len(history)
+                }
+
+        except Exception as e:
+            self.logger.warning(f"⚠️ [AKShare index_zh_a_hist] Index {code} failed: {e}")
+
+        # 方案3: 降级到实时数据（单日）
+        try:
+            self.logger.warning(f"⚠️ [Fallback] Using spot data for index {code} (no history available)...")
+            spot_data = await self.get_index_data(code)
+            if spot_data:
+                # 构造单日历史数据
+                history = [{
+                    "日期": datetime.now().strftime("%Y-%m-%d"),
+                    "开盘": spot_data["price"],
+                    "收盘": spot_data["price"],
+                    "最高": spot_data["price"],
+                    "最低": spot_data["price"],
+                    "成交量": spot_data.get("volume", 0),
+                    "涨跌幅": spot_data["change_pct"]
+                }]
+
+                self.logger.warning(f"⚠️ Fallback: only 1 day of data for index {code}")
+                return {
+                    "code": code,
+                    "name": spot_data["name"],
+                    "history": history,
+                    "source": "fallback_spot",
+                    "data_points": 1
+                }
+        except Exception as e:
+            self.logger.warning(f"[Fallback] Index {code} failed: {e}")
+
+        self.logger.error(f"❌ All sources failed for index {code}")
+        return None
+
+    def _normalize_index_code(self, code: str) -> str:
+        """
+        统一指数代码格式为新浪财经格式（sh/sz前缀）
+
+        规则：
+        - 上证指数（000开头）: sh + code
+        - 深证指数（399开头）: sz + code
+        - 中证指数（930/931开头）: 保持原样
+        - 已有前缀：保持不变
+        """
+        # 移除现有前缀
+        pure_code = code.replace("sh", "").replace("sz", "")
+
+        # 如果已经有前缀，保持不变
+        if code.startswith("sh") or code.startswith("sz"):
+            return code
+
+        # 添加市场前缀
+        if pure_code.startswith("000"):
+            return f"sh{pure_code}"
+        elif pure_code.startswith("399"):
+            return f"sz{pure_code}"
+        elif pure_code.startswith("930") or pure_code.startswith("931"):
+            # 中证指数，尝试不同格式
+            return f"sh{pure_code}"  # 优先尝试上海
+        else:
+            return code
 
     async def get_multiple_index_data(self, codes: List[str]) -> List[Dict[str, Any]]:
         """批量获取指数数据"""

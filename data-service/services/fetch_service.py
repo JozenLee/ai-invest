@@ -57,8 +57,13 @@ class FetchService:
             fetched_count = len(raw_data)
             logger.info(f"采集完成: source_id={source_id}, count={fetched_count}")
 
-            # 3. AI数据清洗（情感分析、分类、实体识别）
-            processed_data = await self._process_with_ai(raw_data, source_id)
+            # 3. 去重：过滤已存在的新闻（在AI分析前，减少AI处理负担）
+            new_data = await self._filter_duplicates(raw_data)
+            duplicate_count = fetched_count - len(new_data)
+            logger.info(f"去重完成: source_id={source_id}, 原始={fetched_count}, 去重后={len(new_data)}, 重复={duplicate_count}")
+
+            # 4. AI数据清洗（仅处理产业细分和影响力）
+            processed_data = await self._process_with_ai(new_data, source_id)
             processed_count = len([d for d in processed_data if d.get("aiProcessed")])
             failed_count = len([d for d in processed_data if d.get("aiError")])
 
@@ -67,33 +72,16 @@ class FetchService:
                 f"processed={processed_count}, failed={failed_count}"
             )
 
-            # 4. 应用领域筛选（如果配置了）
-            original_count = len(processed_data)
-            domain_filter = source_config.get("domainFilter")
-            logger.info(f"🔍 检查领域筛选配置: source_id={source_id}, domain_filter={domain_filter}")
-            if domain_filter and domain_filter.get("enabled"):
-                logger.info(f"🔍 开始应用领域筛选: original_count={original_count}")
-                processed_data = self.apply_domain_filter(processed_data, domain_filter)
-                filtered_count = len(processed_data)
-                logger.info(
-                    f"领域筛选完成: source_id={source_id}, "
-                    f"original={original_count}, filtered={filtered_count}, "
-                    f"mode={domain_filter.get('mode')}, "
-                    f"domains={domain_filter.get('domainIds')}"
-                )
-            else:
-                logger.info(f"未启用领域筛选: source_id={source_id}, 数据量={len(processed_data)}")
-
-            # 5. 持久化到本地数据库
-            logger.info(f"🔍 准备持久化数据: source_id={source_id}, count={len(processed_data)}")
+            # 5. 持久化到本地数据库（简化版 - 不再需要去重检查）
+            logger.info(f"准备持久化数据: source_id={source_id}, count={len(processed_data)}")
             stored_count = await self._store_to_database(processed_data, source_id)
-            logger.info(f"🔍 持久化完成: source_id={source_id}, stored_count={stored_count}")
+            logger.info(f"持久化完成: source_id={source_id}, stored_count={stored_count}")
 
             # 6. 计算耗时
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 7. 更新采集日志
-            await self._update_fetch_log(
+            self._update_fetch_log(
                 log_id=log_id,
                 status="success",
                 fetched_count=fetched_count,
@@ -104,7 +92,7 @@ class FetchService:
             )
 
             # 8. 更新数据源状态
-            await self._update_source_status(
+            self._update_source_status(
                 source_id=source_id,
                 status="success",
                 last_fetch_at=datetime.now(timezone.utc)
@@ -126,7 +114,7 @@ class FetchService:
             # 更新失败日志
             if log_id:
                 duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await self._update_fetch_log(
+                self._update_fetch_log(
                     log_id=log_id,
                     status="failed",
                     fetched_count=0,
@@ -138,7 +126,7 @@ class FetchService:
                 )
 
             # 更新数据源状态
-            await self._update_source_status(
+            self._update_source_status(
                 source_id=source_id,
                 status="failed",
                 last_fetch_at=datetime.now(timezone.utc),
@@ -234,13 +222,53 @@ class FetchService:
             logger.error(f"数据采集失败: {e}")
             return []
 
+    async def _filter_duplicates(self, raw_data: List[Dict]) -> List[Dict]:
+        """
+        过滤已存在的新闻（通过URL或title+publishTime去重）
+
+        Args:
+            raw_data: 原始数据列表
+
+        Returns:
+            去重后的新数据列表
+        """
+        if not raw_data:
+            return []
+
+        new_data = []
+
+        for item in raw_data:
+            url = item.get("url", "")
+            title = item.get("title", "")
+            publish_time = item.get("publishTime", "")
+
+            # 检查URL是否存在
+            if url and db.check_article_exists(url):
+                logger.debug(f"重复新闻(URL): {title[:30]}")
+                continue
+
+            # 如果没有URL，通过title+publishTime去重
+            if not url:
+                # 生成唯一ID用于去重检查
+                unique_key = f"{title}_{publish_time}"
+                article_id = hashlib.md5(unique_key.encode()).hexdigest()
+
+                # 检查ID是否存在
+                if db.check_article_id_exists(article_id):
+                    logger.debug(f"重复新闻(ID): {title[:30]}")
+                    continue
+
+            new_data.append(item)
+
+        return new_data
+
     async def _process_with_ai(
         self,
         raw_data: List[Dict],
         source_id: str
     ) -> List[Dict]:
         """
-        AI数据清洗：情感分析、分类、实体识别
+        AI数据清洗（简化版 - 只提取产业细分和影响力）
 
         Args:
             raw_data: 原始数据列表
@@ -264,76 +292,88 @@ class FetchService:
                 for item in raw_data:
                     processed_item = {
                         **item,
-                        "category": "market",
-                        "categoryConfidence": 0.0,
-                        "sentiment": 0.0,
-                        "sentimentLabel": "neutral",
-                        "sentimentConfidence": 0.0,
-                        "keywords": [],
-                        "entities": [],
-                        "sectors": self._extract_sectors(item.get("title", "")),
+                        "segmentCodes": [],
+                        "impact": 3,
+                        "aiProcessed": False
                     }
                     processed_data.append(processed_item)
                 return processed_data
 
-            # 尝试使用增强的 AI 分析器
-            from services.content_analyzer import content_analyzer
+            # 使用全局 AI 分析器实例（避免重复加载产业细分领域）
+            from workers.ai_analyzer import AIAnalyzer
+            from models.article import RawArticle
+            from services.ai_service import get_global_analyzer, is_analyzer_ready
 
-            # 准备批量分析的数据
-            news_batch = []
+            # 优先使用全局AI分析器（已预加载产业细分领域）
+            if is_analyzer_ready():
+                ai_analyzer = get_global_analyzer()
+                logger.info(f"✅ 使用全局AI分析器: {len(ai_analyzer.industry_segments)} 个产业细分领域已加载")
+            else:
+                # 降级：创建新实例并尝试加载
+                logger.warning("⚠️ 全局AI分析器未就绪，创建临时实例")
+                ai_analyzer = AIAnalyzer()
+                if not ai_analyzer.industry_segments:
+                    logger.info("正在加载产业细分领域...")
+                    await ai_analyzer.load_industry_segments(max_retries=3, retry_delay=2.0)
+                    logger.info(f"临时实例加载完成: {len(ai_analyzer.industry_segments)} 个领域")
+
+            # 转换为 RawArticle 对象
+            raw_articles = []
             for item in raw_data:
-                news_batch.append({
-                    "title": item.get("title", ""),
-                    "content": item.get("content", "")
-                })
-
-            # 批量AI分析
-            logger.info(f"开始AI批量分析: count={len(news_batch)}")
-            analysis_results = await content_analyzer.analyze_news_batch(
-                news_batch,
-                batch_size=10
-            )
-
-            # 合并分析结果
-            processed_data = []
-            for i, item in enumerate(raw_data):
                 try:
-                    analysis = analysis_results[i] if i < len(analysis_results) else {}
+                    raw_article = RawArticle(
+                        id=hashlib.md5(item.get("url", item.get("title", "")).encode()).hexdigest(),
+                        title=item.get("title", ""),
+                        content=item.get("content", ""),
+                        source=item.get("source", "未知"),
+                        url=item.get("url", ""),
+                        publishTime=item.get("publishTime", "")
+                    )
+                    raw_articles.append(raw_article)
+                except Exception as e:
+                    logger.error(f"创建RawArticle失败: {e}")
+                    continue
 
-                    # 检查是否为无影响新闻
-                    domains = analysis.get("domains", [])
-                    is_irrelevant = "irrelevant" in domains
+            # 批量AI分析（简化版 - 只提取产业细分和影响力）
+            logger.info(f"开始AI批量分析: count={len(raw_articles)}")
+            analyzed_articles = await ai_analyzer.analyze_batch(raw_articles)
 
+            # 转换为字典格式（简化版）
+            processed_data = []
+            for analyzed in analyzed_articles:
+                try:
                     processed_item = {
-                        **item,
-                        "summary": analysis.get("summary", item.get("title", "")[:100]),
-                        "category": analysis.get("category", "global_market"),
-                        "categoryConfidence": analysis.get("categoryConfidence", 0.5),
-                        "sentiment": analysis.get("sentiment"),  # 可能为None
-                        "sentimentLabel": analysis.get("sentimentLabel"),  # 可能为None
-                        "sentimentConfidence": analysis.get("sentimentConfidence"),  # 可能为None
-                        "impact": analysis.get("impact", 3),
-                        "keywords": analysis.get("keywords", []),
-                        "entities": analysis.get("entities", []),
-                        "sectors": self._extract_sectors(item.get("title", "")),
-                        "domainIds": domains,
-                        "aiProcessed": True,
-                        "aiProcessedAt": datetime.now(timezone.utc).isoformat(),
-                        "aiError": None
+                        "id": analyzed.id,
+                        "title": analyzed.title,
+                        "content": analyzed.content,
+                        "source": analyzed.source,
+                        "url": analyzed.url,
+                        "publishTime": analyzed.publishTime,
+                        "segmentCodes": analyzed.segmentCodes or [],
+                        "sentiment": analyzed.sentiment,  # 添加情绪字段
+                        "impact": analyzed.impact or 3,
+                        "aiProcessed": analyzed.aiProcessed,
+                        "aiProcessedAt": analyzed.aiProcessedAt.isoformat() if analyzed.aiProcessedAt else datetime.now(timezone.utc).isoformat(),
+                        "aiError": analyzed.aiError
                     }
+
+                    # Debug logging
+                    if analyzed.segmentCodes:
+                        logger.info(f"[转换] title={analyzed.title[:40]}, segmentCodes={analyzed.segmentCodes}, sentiment={analyzed.sentiment}, impact={analyzed.impact}")
 
                     processed_data.append(processed_item)
 
                 except Exception as e:
-                    logger.error(f"合并分析结果失败: {e}")
-                    processed_data.append({
-                        **item,
-                        "aiProcessed": False,
-                        "aiError": str(e)
-                    })
+                    logger.error(f"转换分析结果失败: {e}")
+                    continue
 
             logger.info(f"AI分析完成: processed={len(processed_data)}")
             return processed_data
+
+        except Exception as e:
+            logger.error(f"AI批量分析失败: {e}")
+            # 降级：返回未分析的数据
+            return [{**item, "segmentCodes": [], "impact": 3, "aiProcessed": False} for item in raw_data]
 
         except Exception as e:
             logger.error(f"AI批量分析失败，使用简单规则: {e}")
@@ -508,15 +548,14 @@ class FetchService:
         source_id: str
     ) -> int:
         """
-        持久化数据到本地数据库
+        持久化数据到本地数据库（简化版 - 已在AI分析前去重）
         """
         stored_count = 0
-        logger.info(f"🔍 [存储] 开始持久化: source_id={source_id}, count={len(data)}")
+        logger.info(f"[存储] 开始持久化: source_id={source_id}, count={len(data)}")
 
         try:
             for idx, item in enumerate(data):
                 try:
-                    logger.info(f"🔍 [存储] 处理第 {idx+1}/{len(data)} 条: {item.get('title', '')[:30]}")
                     # 解析发布时间
                     publish_time = self._parse_publish_time(item.get("publishTime", ""))
 
@@ -524,7 +563,6 @@ class FetchService:
                     expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
 
                     # 生成文章 ID
-                    import hashlib
                     url = item.get("url", "")
                     title = item.get("title", "")
                     if url:
@@ -532,24 +570,18 @@ class FetchService:
                     else:
                         article_id = hashlib.md5(f"{title}_{publish_time}".encode()).hexdigest()
 
-                    # 准备数据
+                    # 准备数据（简化版 - 只保存必要字段）
+                    segment_codes_value = json.dumps(item.get("segmentCodes", []), ensure_ascii=False)
                     article_data = {
                         "id": article_id,
-                        "title": item.get("title", "")[:500],  # 限制长度
+                        "title": title[:500],  # 限制长度
                         "content": item.get("content", "")[:10000],
-                        "summary": item.get("summary") or item.get("title", "")[:200],
                         "source": item.get("source", "未知"),
                         "url": url,
                         "publishTime": publish_time.isoformat() if isinstance(publish_time, datetime) else publish_time,
-                        "category": item.get("category", "global_market"),  # 使用 category 而不是 categoryId
-                        "sentiment": item.get("sentiment"),
-                        "sentimentLabel": item.get("sentimentLabel"),
-                        "sentimentConfidence": item.get("sentimentConfidence", 0.0),
-                        "impact": item.get("impact"),  # 添加 impact
-                        "keywords": json.dumps(item.get("keywords", []), ensure_ascii=False) if item.get("keywords") else None,
-                        "entities": json.dumps(item.get("entities", []), ensure_ascii=False) if item.get("entities") else None,
-                        "sectors": json.dumps(item.get("sectors", []), ensure_ascii=False) if item.get("sectors") else None,
-                        "domainIds": json.dumps(item.get("domainIds", []), ensure_ascii=False) if item.get("domainIds") else None,
+                        "segmentCodes": segment_codes_value,  # 产业细分
+                        "sentiment": item.get("sentiment"),  # 情绪分数
+                        "impact": item.get("impact", 3),  # 影响力
                         "sourceId": source_id,
                         "aiProcessed": item.get("aiProcessed", False),
                         "aiProcessedAt": item.get("aiProcessedAt"),
@@ -557,35 +589,25 @@ class FetchService:
                         "expiresAt": expires_at
                     }
 
-                    # 检查是否已存在（根据URL去重）
-                    if article_data["url"]:
-                        logger.info(f"🔍 [存储] 检查URL是否存在: {article_data['url'][:50]}")
-                        exists = await db.check_article_exists(article_data["url"])
-                        if exists:
-                            logger.info(f"🔍 [存储] 文章已存在，跳过: {article_data['title'][:30]}")
-                            continue
-                        logger.info(f"🔍 [存储] URL不存在，准备插入")
+                    # 调试日志
+                    logger.info(f"[存储] 准备插入: title={title[:30]}, segmentCodes={segment_codes_value}, sentiment={item.get('sentiment')}, impact={article_data['impact']}")
 
-                    # 插入数据库
-                    logger.info(f"🔍 [存储] 开始插入数据库: id={article_data['id'][:20]}...")
-                    result = await db.insert_news_article(article_data)
+                    # 直接插入数据库（已在AI分析前去重，不需要再检查）
+                    result = db.insert_news_article(article_data)
                     if result:
                         stored_count += 1
-                        logger.info(f"🔍 [存储] 插入成功: stored_count={stored_count}")
+                        if (idx + 1) % 10 == 0:  # 每10条记录一次日志
+                            logger.info(f"[存储] 进度: {idx + 1}/{len(data)}, 成功: {stored_count}")
 
                 except Exception as e:
-                    logger.error(f"🔍 [存储] 插入单条数据失败: {e}, title={item.get('title', '')[:50]}")
-                    import traceback
-                    logger.error(f"🔍 [存储] 错误堆栈: {traceback.format_exc()}")
+                    logger.error(f"[存储] 插入单条数据失败: {e}, title={title[:50]}")
                     continue
 
-            logger.info(f"🔍 [存储] 数据持久化完成: source_id={source_id}, stored={stored_count}/{len(data)}")
+            logger.info(f"[存储] 数据持久化完成: source_id={source_id}, stored={stored_count}/{len(data)}")
             return stored_count
 
         except Exception as e:
-            logger.error(f"🔍 [存储] 数据持久化失败: {e}")
-            import traceback
-            logger.error(f"🔍 [存储] 错误堆栈: {traceback.format_exc()}")
+            logger.error(f"[存储] 数据持久化失败: {e}")
             return stored_count
 
     def _parse_publish_time(self, time_str: str) -> datetime:
@@ -631,7 +653,7 @@ class FetchService:
     ) -> str:
         """创建采集日志"""
         try:
-            log = await db.create_datasource_log({
+            log = db.create_datasource_log({
                 "sourceId": source_id,
                 "status": status,
                 "message": "采集任务启动",

@@ -33,7 +33,26 @@ export function Header() {
   useEffect(() => {
     const segments = pathname.split('/').filter(Boolean)
 
-    // 可以在这里添加其他动态路由的名称加载逻辑
+    // 加载产业图谱名称
+    if (segments.includes('industries') && segments.length > segments.indexOf('industries') + 1) {
+      const industryIdIndex = segments.indexOf('industries') + 1
+      const industryId = segments[industryIdIndex]
+
+      // 只处理看起来像产业代码的ID（不是纯数字）
+      if (industryId && !industryId.match(/^\d+$/)) {
+        fetch(`/api/graph/industries/${industryId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.success && data.data?.name) {
+              setDynamicNames(prev => ({
+                ...prev,
+                [industryId]: data.data.name
+              }))
+            }
+          })
+          .catch(err => console.error('Failed to load industry name:', err))
+      }
+    }
   }, [pathname])
 
   return (
@@ -127,11 +146,9 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
     analysis: '事件分析',
     trends: '领域趋势',
     graph: '知识图谱',
-    explore: '图谱探索',
-    propagation: '传导路径',
-    cycles: '周期分析',
-    edit: '图谱编辑',
-    changelog: '变更历史',
+    industries: '产业图谱',
+    create: '创建',
+    edit: '编辑',
     stock: '个股分析',
     sector: '板块分析',
     report: '综合报告',

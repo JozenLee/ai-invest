@@ -176,6 +176,42 @@ class CacheService:
         for key in expired_keys:
             del self.memory_cache[key]
 
+    # ==================== 知识图谱专用缓存方法 ====================
+
+    def get_industries(self) -> Optional[Any]:
+        """从缓存获取产业列表"""
+        return self.get('cache:industries:list')
+
+    def set_industries(self, industries: Any, ttl: int = 3600):
+        """缓存产业列表（默认1小时）"""
+        return self.set('cache:industries:list', industries, ttl)
+
+    def get_segments(self, industry_code: str) -> Optional[Any]:
+        """从缓存获取某个产业的Segment列表"""
+        return self.get(f'cache:industry:{industry_code}:segments')
+
+    def set_segments(self, industry_code: str, segments: Any, ttl: int = 3600):
+        """缓存Segment列表（默认1小时）"""
+        return self.set(f'cache:industry:{industry_code}:segments', segments, ttl)
+
+    def get_classification_segments(self) -> Optional[Any]:
+        """从缓存获取用于新闻分类的所有Segment列表"""
+        return self.get('cache:classification:segments')
+
+    def set_classification_segments(self, segments: Any, ttl: int = 3600):
+        """缓存分类Segment列表（默认1小时）"""
+        return self.set('cache:classification:segments', segments, ttl)
+
+    def invalidate_industry(self, industry_code: str):
+        """失效某个产业的所有缓存"""
+        self.delete(f'cache:industry:{industry_code}:segments')
+        self.delete('cache:industries:list')
+        self.delete('cache:classification:segments')
+
+    def invalidate_all_graph_cache(self):
+        """清除所有图谱相关缓存"""
+        return self.clear('cache:*')
+
 
 # 全局缓存服务实例
 cache_service = CacheService()

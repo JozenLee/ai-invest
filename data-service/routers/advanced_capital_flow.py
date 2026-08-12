@@ -164,7 +164,10 @@ async def get_enhanced_capital_flow():
         # 并行获取数据
         sector_data_today = await data_service.get_sector_capital_flow("今日")
         northbound_data = await data_service.get_northbound_flow()
-        lhb_data = await data_service.get_lhb_data()
+
+        # 龙虎榜数据暂时禁用（AKShare API结构变化）
+        lhb_data = []
+        # lhb_data = await data_service.get_lhb_data()
 
         # 转换为统一格式
         sectors_formatted = []

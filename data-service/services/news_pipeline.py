@@ -46,6 +46,17 @@ class NewsPipeline:
 
         logger.info("新闻处理管道初始化完成")
 
+    async def ensure_segments_loaded(self):
+        """
+        确保产业细分领域已加载到AI分析器
+        在执行管道前调用
+        """
+        if not self.analyzer.industry_segments:
+            logger.info("开始加载产业细分领域...")
+            await self.analyzer.load_industry_segments()
+        else:
+            logger.debug(f"产业细分领域已加载（{len(self.analyzer.industry_segments)}个）")
+
     async def run(self, platform_id: str = "cls-hot", limit: int = 50) -> PipelineResult:
         """
         执行完整管道流程
@@ -59,6 +70,9 @@ class NewsPipeline:
         """
         start_time = datetime.now()
         logger.info(f"开始执行新闻处理管道: platform={platform_id}, limit={limit}")
+
+        # 确保产业细分领域已加载
+        await self.ensure_segments_loaded()
 
         try:
             # 1. 数据采集

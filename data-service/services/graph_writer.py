@@ -7,7 +7,8 @@ from services.neo4j_service import Neo4jService
 
 async def write_graph_to_neo4j(
     result: ExplorationResult,
-    neo4j_service: Neo4jService
+    neo4j_service: Neo4jService,
+    industry_id: str = None
 ) -> Dict[str, int]:
     """
     将ExplorationResult写入Neo4j图数据库
@@ -15,6 +16,7 @@ async def write_graph_to_neo4j(
     Args:
         result: 完整的产业链探索结果
         neo4j_service: Neo4j服务实例
+        industry_id: 产业ID（可选，如果不提供则使用industry.code生成）
 
     Returns:
         Dict[str, int]: 统计信息
@@ -37,7 +39,9 @@ async def write_graph_to_neo4j(
 
     # 1. 创建产业节点
     industry = result.structure.industry
-    industry_id = f"industry_{industry.code}"
+    # 如果提供了industry_id则使用，否则使用industry.code生成
+    if not industry_id:
+        industry_id = f"industry_{industry.code}"
 
     await neo4j_service.create_industry(
         industry_id=industry_id,
@@ -47,10 +51,20 @@ async def write_graph_to_neo4j(
     )
     stats["industries"] += 1
 
+    # 定义阶段顺序映射
+    stage_order_map = {
+        'upstream': 1,
+        'midstream': 2,
+        'downstream': 3
+    }
+
     # 2. 遍历产业链结构：Stage → Segment → Company
     for stage in result.structure.structure:
         # 2.1 创建Stage节点
         stage_id = f"stage_{industry.code}_{stage.stage_code}"
+
+        # 获取阶段的数字顺序
+        stage_order = stage_order_map.get(stage.stage_code, 999)
 
         await neo4j_service.create_node(
             node_id=stage_id,
@@ -58,7 +72,8 @@ async def write_graph_to_neo4j(
             properties={
                 "code": stage.stage_code,
                 "name": stage.stage,
-                "description": stage.description
+                "description": stage.description,
+                "order": stage_order
             }
         )
         stats["stages"] += 1
@@ -68,13 +83,16 @@ async def write_graph_to_neo4j(
             from_id=industry_id,
             to_id=stage_id,
             rel_type="HAS_STAGE",
-            properties={"order": stage.stage_code}
+            properties={"order": stage_order}
         )
         stats["relationships"] += 1
 
         # 2.3 遍历Segment
-        for segment in stage.segments:
+        for seg_index, segment in enumerate(stage.segments):
             segment_id = f"segment_{industry.code}_{segment.code}"
+
+            # 使用segment.order字段，如果没有则使用索引
+            segment_order = segment.order if segment.order is not None else seg_index
 
             await neo4j_service.create_node(
                 node_id=segment_id,
@@ -83,7 +101,8 @@ async def write_graph_to_neo4j(
                     "code": segment.code,
                     "name": segment.name,
                     "description": segment.description,
-                    "key_categories": segment.key_categories
+                    "key_categories": segment.key_categories,
+                    "order": segment_order
                 }
             )
             stats["segments"] += 1

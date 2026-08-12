@@ -67,6 +67,10 @@ class ETFProvider:
         # 返回空列表，符合接口约定
         return []
 
+    async def get_etf_holdings(self, ticker: str) -> List[Dict]:
+        """获取ETF持仓明细的别名方法"""
+        return await self.get_holdings(ticker)
+
     async def get_etf_info(self, ticker: str) -> Optional[Dict]:
         """
         获取ETF基本信息

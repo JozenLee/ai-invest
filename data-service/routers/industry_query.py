@@ -30,6 +30,32 @@ async def list_industries():
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
+@router.get("/check", response_model=Dict[str, Any])
+async def check_industry_exists(name: str):
+    """
+    检查产业名称是否已存在
+
+    Args:
+        name: 产业名称
+
+    Returns:
+        Dict: 检查结果
+            - exists: 是否存在
+            - industry: 如果存在，返回产业基本信息
+    """
+    neo4j_service = get_neo4j_service()
+    try:
+        industries = await neo4j_service.list_industries()
+        existing = next((ind for ind in industries if ind.get('name') == name), None)
+
+        return {
+            "exists": existing is not None,
+            "industry": existing
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
 @router.get("/{industry_id}", response_model=Dict[str, Any])
 async def get_industry(industry_id: str):
     """
@@ -120,3 +146,39 @@ async def get_industry_swimlane(industry_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.delete("/{industry_id}")
+async def delete_industry(industry_id: str):
+    """
+    删除产业图谱
+
+    Args:
+        industry_id: 产业ID
+
+    Returns:
+        Dict: 删除结果
+            - success: 是否成功
+            - message: 消息
+
+    Raises:
+        HTTPException: 404 - 产业不存在
+    """
+    neo4j_service = get_neo4j_service()
+    try:
+        # 检查产业是否存在
+        industry = await neo4j_service.get_industry_basic(industry_id)
+        if not industry:
+            raise HTTPException(status_code=404, detail="产业不存在")
+
+        # 删除产业及相关数据
+        await neo4j_service.delete_industry(industry_id)
+
+        return {
+            "success": True,
+            "message": f"产业 {industry.get('name')} 已删除"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")

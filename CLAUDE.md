@@ -43,7 +43,7 @@ ai-invest/
 │   │   ├── (dashboard)/        # 主应用页面
 │   │   │   ├── dashboard/      # 仪表盘
 │   │   │   ├── events/         # 事件资讯（含影响者管理）
-│   │   │   ├── graph/          # 知识图谱
+│   │   │   ├── graph/          # 知识图谱（统一入口）
 │   │   │   └── analysis/       # AI分析
 │   │   └── api/                # API路由
 │   │       ├── market/         # 市场数据
@@ -112,6 +112,10 @@ ai-invest/
 - `POST /api/influencers/[id]/fetch` - 手动触发内容采集
 
 ### 知识图谱
+- `GET /api/graph/industries` - 产业图谱列表
+- `GET /api/graph/industries/[id]` - 产业详情
+- `POST /api/graph/industries/create` - 创建产业图谱
+- `GET /api/graph/industries/[id]/graph` - 产业泳道图数据
 - `GET /api/graph/nodes` - 图谱节点
 - `GET /api/graph/edges` - 图谱边
 - `GET /api/graph/tree` - 树形结构
@@ -144,4 +148,8 @@ ai-invest/
 ---
 
 ## Claude Code工作偏好
-- **不输出任务总结**: 完成任务后无需提供总结或回顾，直接结束即可
+- **禁止生成总结文档**:
+  - 完成任务后，不要生成任何 `*-summary.md`、`*-report.md`、`*-completion.md` 等总结性文档
+  - 不要在 `docs/` 目录中创建实施报告、完成报告、总结文档
+  - 完成任务后直接结束，无需提供文字总结或回顾
+  - 只在用户明确要求时才输出总结内容

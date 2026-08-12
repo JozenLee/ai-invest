@@ -1,5 +1,6 @@
 // src/app/api/graph/suggestions/__tests__/route.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { NextRequest } from 'next/server'
 import { GET, POST } from '../route'
 import { PATCH } from '../[id]/route'
 import prisma from '@/lib/db/prisma'
@@ -41,7 +42,7 @@ describe('Suggestions API', () => {
 
   describe('GET /api/graph/suggestions', () => {
     it('should return suggestions list', async () => {
-      const request = new Request('http://localhost/api/graph/suggestions')
+      const request = new NextRequest('http://localhost/api/graph/suggestions')
       const response = await GET(request)
       const data = await response.json()
 
@@ -51,7 +52,7 @@ describe('Suggestions API', () => {
     })
 
     it('should filter by confidence', async () => {
-      const request = new Request(
+      const request = new NextRequest(
         'http://localhost/api/graph/suggestions?minConfidence=0.8'
       )
       const response = await GET(request)
@@ -62,7 +63,7 @@ describe('Suggestions API', () => {
     })
 
     it('should filter by status', async () => {
-      const request = new Request(
+      const request = new NextRequest(
         'http://localhost/api/graph/suggestions?status=pending'
       )
       const response = await GET(request)
@@ -74,7 +75,7 @@ describe('Suggestions API', () => {
 
   describe('POST /api/graph/suggestions/batch', () => {
     it('should batch approve suggestions', async () => {
-      const request = new Request('http://localhost/api/graph/suggestions/batch', {
+      const request = new NextRequest('http://localhost/api/graph/suggestions/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -99,7 +100,7 @@ describe('Suggestions API', () => {
     })
 
     it('should batch reject suggestions', async () => {
-      const request = new Request('http://localhost/api/graph/suggestions/batch', {
+      const request = new NextRequest('http://localhost/api/graph/suggestions/batch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -120,7 +121,7 @@ describe('Suggestions API', () => {
 
   describe('PATCH /api/graph/suggestions/[id]', () => {
     it('should approve single suggestion', async () => {
-      const request = new Request(
+      const request = new NextRequest(
         `http://localhost/api/graph/suggestions/${testSuggestionIds[0]}`,
         {
           method: 'PATCH',
@@ -133,7 +134,7 @@ describe('Suggestions API', () => {
       )
 
       const response = await PATCH(request, {
-        params: { id: testSuggestionIds[0] }
+        params: Promise.resolve({ id: testSuggestionIds[0] })
       })
       const data = await response.json()
 
@@ -147,7 +148,7 @@ describe('Suggestions API', () => {
     })
 
     it('should reject single suggestion with note', async () => {
-      const request = new Request(
+      const request = new NextRequest(
         `http://localhost/api/graph/suggestions/${testSuggestionIds[1]}`,
         {
           method: 'PATCH',
@@ -161,7 +162,7 @@ describe('Suggestions API', () => {
       )
 
       const response = await PATCH(request, {
-        params: { id: testSuggestionIds[1] }
+        params: Promise.resolve({ id: testSuggestionIds[1] })
       })
 
       const suggestion = await prisma.graphSuggestion.findUnique({
