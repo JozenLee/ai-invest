@@ -10,12 +10,12 @@ echo ""
 
 # Run the automated test
 echo "1. Running automated test..."
-npm run test:tags
+npx tsx scripts/test-tag-linking.ts
 echo ""
 
 # Check database for existing articles with tags
 echo "2. Verifying existing articles..."
-npm run verify:tags
+npx tsx scripts/verify-tag-linking.ts
 echo ""
 
 echo "=================================="

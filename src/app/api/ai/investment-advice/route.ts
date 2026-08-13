@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 
+type Preferences = {
+  riskTolerance?: 'conservative' | 'balanced' | 'aggressive'
+  investmentHorizon?: 'short' | 'medium' | 'long'
+}
+
+type ETFAnalysis = {
+  name: string
+  code: string
+  priceChangePct: number
+  trend: string
+}
+
+type Position = {
+  name: string
+  symbol: string
+  quantity: number
+  profitLossPct: number
+}
+
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
   baseURL: process.env.ANTHROPIC_BASE_URL,
@@ -9,7 +28,21 @@ const anthropic = new Anthropic({
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { industry, companyTrend, marketTrend, etfAnalysis, preferences, positions } = body
+    const {
+      industry,
+      companyTrend,
+      marketTrend,
+      etfAnalysis,
+      preferences,
+      positions,
+    }: {
+      industry?: string
+      companyTrend?: string
+      marketTrend?: string
+      etfAnalysis?: ETFAnalysis[]
+      preferences?: Preferences
+      positions?: Position[]
+    } = body
 
     if (!industry) {
       return NextResponse.json(
@@ -31,12 +64,12 @@ export async function POST(request: NextRequest) {
       long: '长期（1年以上）'
     } as const)[preferences?.investmentHorizon || 'medium']
 
-    const etfList = etfAnalysis?.map((etf: any) =>
+    const etfList = etfAnalysis?.map((etf) =>
       `${etf.name} (${etf.code}): 涨跌${etf.priceChangePct}%, 趋势${etf.trend}`
     ).join('\n') || '暂无ETF数据'
 
-    const positionList = positions?.length > 0
-      ? positions.map((p: any) => `${p.name} (${p.symbol}): 持有${p.quantity}股, 盈亏${p.profitLossPct}%`).join('\n')
+    const positionList = positions && positions.length > 0
+      ? positions.map((p) => `${p.name} (${p.symbol}): 持有${p.quantity}股, 盈亏${p.profitLossPct}%`).join('\n')
       : '暂无持仓'
 
     const prompt = `作为资深投资顾问，请为${industry}领域提供个性化投资建议。

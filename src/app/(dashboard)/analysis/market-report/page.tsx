@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { Suspense, useEffect, useState, useRef } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -81,7 +81,7 @@ interface MarketReportData {
   trendReport: string
 }
 
-export default function MarketReportPage() {
+function MarketReportContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
   const industryId = searchParams.get('industryId')
@@ -331,5 +331,13 @@ export default function MarketReportPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function MarketReportPage() {
+  return (
+    <Suspense fallback={<div className="space-y-6 p-6"><Skeleton className="h-10 w-64" /><Skeleton className="h-96 w-full" /></div>}>
+      <MarketReportContent />
+    </Suspense>
   )
 }

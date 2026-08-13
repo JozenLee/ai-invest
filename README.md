@@ -59,7 +59,7 @@ curl -X POST http://localhost:3000/api/graph/extract \
 ### 数据生命周期
 可配置动态数据保留天数，系统自动清理过期数据，节省存储空间。
 
-详见：[大V管理增强功能使用指南](./docs/INFLUENCER_ENHANCEMENT_GUIDE.md)
+配置与采集说明见：[平台 Provider 配置与使用指南](./docs/platform-provider-guide.md)
 
 ## 评分系统 (Phase 1)
 

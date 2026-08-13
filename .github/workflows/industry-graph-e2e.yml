@@ -38,7 +38,7 @@ jobs:
       neo4j:
         image: neo4j:5.15-community
         env:
-          NEO4J_AUTH: neo4j/ai-invest-neo4j-2024
+          NEO4J_AUTH: neo4j/ci-test-password
           NEO4J_PLUGINS: '["apoc"]'
           NEO4J_dbms_security_procedures_unrestricted: apoc.*
           NEO4J_dbms_memory_heap_initial__size: 512m
@@ -47,7 +47,7 @@ jobs:
           - 7687:7687
           - 7474:7474
         options: >-
-          --health-cmd "cypher-shell -u neo4j -p ai-invest-neo4j-2024 'RETURN 1'"
+          --health-cmd "cypher-shell -u neo4j -p ci-test-password 'RETURN 1'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -82,7 +82,7 @@ jobs:
         echo "DATA_SERVICE_URL=http://localhost:8000" >> $GITHUB_ENV
         echo "NEO4J_URI=bolt://localhost:7687" >> $GITHUB_ENV
         echo "NEO4J_USER=neo4j" >> $GITHUB_ENV
-        echo "NEO4J_PASSWORD=ai-invest-neo4j-2024" >> $GITHUB_ENV
+        echo "NEO4J_PASSWORD=ci-test-password" >> $GITHUB_ENV
         echo "NEO4J_DATABASE=neo4j" >> $GITHUB_ENV
         echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> $GITHUB_ENV
         echo "ANTHROPIC_API_BASE_URL=${{ secrets.ANTHROPIC_API_BASE_URL }}" >> $GITHUB_ENV
@@ -91,7 +91,7 @@ jobs:
       run: |
         echo "等待Neo4j完全就绪..."
         for i in {1..30}; do
-          if cypher-shell -a bolt://localhost:7687 -u neo4j -p ai-invest-neo4j-2024 "RETURN 1 as test" > /dev/null 2>&1; then
+          if cypher-shell -a bolt://localhost:7687 -u neo4j -p ci-test-password "RETURN 1 as test" > /dev/null 2>&1; then
             echo "✅ Neo4j连接成功"
             break
           fi
@@ -99,7 +99,7 @@ jobs:
           sleep 2
         done
         # 验证APOC插件
-        cypher-shell -a bolt://localhost:7687 -u neo4j -p ai-invest-neo4j-2024 "RETURN apoc.version() as version" || echo "⚠️ APOC插件未启用（非必需）"
+        cypher-shell -a bolt://localhost:7687 -u neo4j -p ci-test-password "RETURN apoc.version() as version" || echo "⚠️ APOC插件未启用（非必需）"
 
     - name: 初始化数据库
       run: |
@@ -143,7 +143,7 @@ jobs:
         echo "=== 服务状态检查 ==="
         echo "Next.js: $(curl -s http://localhost:3000 > /dev/null && echo '✅' || echo '❌')"
         echo "Python服务: $(curl -s http://localhost:8000/health > /dev/null && echo '✅' || echo '❌')"
-        echo "Neo4j: $(cypher-shell -a bolt://localhost:7687 -u neo4j -p ai-invest-neo4j-2024 "RETURN 1" > /dev/null 2>&1 && echo '✅' || echo '❌')"
+        echo "Neo4j: $(cypher-shell -a bolt://localhost:7687 -u neo4j -p ci-test-password "RETURN 1" > /dev/null 2>&1 && echo '✅' || echo '❌')"
 
     - name: 运行E2E测试
       run: npx playwright test tests/e2e/industry-graph-crud.spec.ts --reporter=html
@@ -153,7 +153,7 @@ jobs:
     - name: 清理Neo4j测试数据
       if: always()
       run: |
-        cypher-shell -a bolt://localhost:7687 -u neo4j -p ai-invest-neo4j-2024 \
+        cypher-shell -a bolt://localhost:7687 -u neo4j -p ci-test-password \
           "MATCH (n:Industry) WHERE n.name CONTAINS 'E2E' OR n.name CONTAINS '测试' DETACH DELETE n" || true
 
     - name: 上传测试报告
@@ -293,12 +293,12 @@ jobs:
       neo4j:
         image: neo4j:5.15-community
         env:
-          NEO4J_AUTH: neo4j/ai-invest-neo4j-2024
+          NEO4J_AUTH: neo4j/ci-test-password
         ports:
           - 7687:7687
           - 7474:7474
         options: >-
-          --health-cmd "cypher-shell -u neo4j -p ai-invest-neo4j-2024 'RETURN 1'"
+          --health-cmd "cypher-shell -u neo4j -p ci-test-password 'RETURN 1'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -323,7 +323,7 @@ jobs:
       run: |
         echo "NEO4J_URI=bolt://localhost:7687" >> $GITHUB_ENV
         echo "NEO4J_USER=neo4j" >> $GITHUB_ENV
-        echo "NEO4J_PASSWORD=ai-invest-neo4j-2024" >> $GITHUB_ENV
+        echo "NEO4J_PASSWORD=ci-test-password" >> $GITHUB_ENV
         echo "NEO4J_DATABASE=neo4j" >> $GITHUB_ENV
 
     - name: 测试Neo4j连接

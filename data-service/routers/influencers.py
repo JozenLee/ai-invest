@@ -5,9 +5,9 @@ Provides influencer management, post fetching, and opinion aggregation endpoints
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import List, Optional
-from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 
@@ -18,21 +18,30 @@ from providers.bilibili_provider import BilibiliAPIProvider
 
 logger = logging.getLogger(__name__)
 
-# Load Bilibili configuration
 def load_bilibili_config():
-    """Load Bilibili configuration from config file"""
-    config_path = Path(__file__).parent.parent / "config" / "bilibili_config.json"
-    try:
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-    except Exception as e:
-        logger.warning(f"Failed to load Bilibili config: {e}")
-    return {
-        'cookie_str': '',
-        'retry_delay': 2,
-        'max_retries': 3
+    """Load Bilibili configuration from the database and environment."""
+    config = {
+        'cookie_str': os.getenv('BILIBILI_COOKIE', ''),
+        'retry_delay': int(os.getenv('BILIBILI_RETRY_DELAY', '2')),
+        'max_retries': int(os.getenv('BILIBILI_MAX_RETRIES', '3')),
     }
+
+    try:
+        conn = db.get_connection()
+        try:
+            row = conn.execute(
+                "SELECT configData FROM PlatformConfig WHERE platform = ? AND isActive = 1",
+                ('bilibili',),
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if row and row['configData']:
+            config.update(json.loads(row['configData']))
+    except Exception as e:
+        logger.warning(f"Failed to load Bilibili platform config: {e}")
+
+    return config
 
 router = APIRouter(prefix="/api/influencers", tags=["influencers"])
 

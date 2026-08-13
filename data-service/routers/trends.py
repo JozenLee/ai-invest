@@ -7,8 +7,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional
 
-from services.trend_analysis_service_v2 import get_trend_analysis_service
-from services.trend_analysis_service_v3 import get_trend_analysis_service_v3
+from services.trend_domain_service import get_domain_trend_service
+from services.trend_knowledge_graph_service import get_knowledge_graph_trend_service
 from db import db
 
 logger = logging.getLogger(__name__)
@@ -36,11 +36,11 @@ async def get_all_domains_summary(
 
         if useKnowledgeGraph:
             # 使用知识图谱版本（V3）
-            service = get_trend_analysis_service_v3(db)
+            service = get_knowledge_graph_trend_service(db)
             summaries = await service.analyze_all_segments_lightweight(newsCount)
         else:
             # 使用旧版本（V2）- 向后兼容
-            service = get_trend_analysis_service(db)
+            service = get_domain_trend_service(db)
             summaries = await service.analyze_all_domains_lightweight(newsCount)
 
         if not summaries:
@@ -91,7 +91,7 @@ async def get_domain_detailed_analysis(
 
         # 检测是否为知识图谱产业（如ai_hardware）
         # 知识图谱产业使用V3服务的轻量级分析，传统领域使用V2服务
-        v3_service = get_trend_analysis_service_v3(db)
+        v3_service = get_knowledge_graph_trend_service(db)
         await v3_service.sync_knowledge_graph()
 
         # 判断是否为知识图谱产业
@@ -126,7 +126,7 @@ async def get_domain_detailed_analysis(
             if includeAI:
                 logger.info(f"开始为知识图谱产业 {domain} 生成AI分析...")
                 # 使用V2服务的AI生成能力
-                v2_service = get_trend_analysis_service(db)
+                v2_service = get_domain_trend_service(db)
                 related_news = analysis.get('relatedNews', [])
 
                 if related_news and v2_service.client:
@@ -162,7 +162,7 @@ async def get_domain_detailed_analysis(
         else:
             logger.info(f"领域 {domain} 是传统领域，使用V2服务分析")
             # 获取趋势分析服务实例（V2服务用于传统domainIds领域）
-            service = get_trend_analysis_service(db)
+            service = get_domain_trend_service(db)
 
             # 执行分析（根据includeAI参数决定是否调用AI）
             analysis = await service.analyze_domain_detailed(domain, newsCount, include_ai=includeAI)
@@ -195,7 +195,7 @@ async def test_trend_service():
         服务状态信息
     """
     try:
-        service = TrendAnalysisService(data_service, db)
+        service = get_domain_trend_service(db)
 
         # 检查数据服务
         news_list = await service._get_recent_news(10)

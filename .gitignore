@@ -12,6 +12,12 @@
 
 # testing
 /coverage
+/playwright-report/
+/test-results/
+/.pytest_cache/
+data-service/.pytest_cache/
+data-service/.mypy_cache/
+data-service/.ruff_cache/
 
 # next.js
 /.next/
@@ -47,6 +53,7 @@ next-env.d.ts
 # database
 *.db
 *.db-journal
+*.db.backup*
 
 # python data service
 data-service/.next/
@@ -55,12 +62,12 @@ data-service/__pycache__/
 *.pid
 *.log
 
-# temporary and test files
-test-*.py
-test_*.py
-debug-*.py
-debug_*.py
-configure-*.py
+# temporary and test files at the repository root
+/test-*.py
+/test_*.py
+/debug-*.py
+/debug_*.py
+/configure-*.py
 *.tmp
 
 # IDE and system files
@@ -71,10 +78,7 @@ configure-*.py
 # temporary directories
 .agents/
 .superpowers/
-.cache/
 .env-backups/
 .claude/
-/playwright-report/
-/test-results/
 
 /src/generated/prisma

@@ -373,8 +373,8 @@ class TrendAnalysisServiceV3:
 # 全局单例
 _service_instance = None
 
-def get_trend_analysis_service_v3(db):
-    """获取趋势分析服务实例"""
+def get_knowledge_graph_trend_service(db):
+    """获取基于知识图谱细分领域的趋势分析服务实例。"""
     global _service_instance
     if _service_instance is None:
         _service_instance = TrendAnalysisServiceV3(db)

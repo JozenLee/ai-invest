@@ -32,6 +32,7 @@ interface FeedResponse {
   data: {
     items: NewsItem[];
     total: number;
+    source?: string;
   };
 }
 

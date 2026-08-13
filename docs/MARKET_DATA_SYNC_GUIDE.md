@@ -23,10 +23,13 @@
 - 用于首次同步或手动全量同步
 - 包含指数、ETF、资金流向的完整同步逻辑
 
-**B. 定时同步脚本** (`scripts/sync-market-data-cron.ts`)
-- 用于每日定时同步
-- 更好的错误处理和日志输出
-- 推荐用于生产环境
+定时任务可直接调用完整同步脚本：
+
+```bash
+npx tsx scripts/sync-real-market-data.ts
+```
+
+脚本包含指数、ETF和板块资金流向同步逻辑，适合手动执行或由 cron 调度。
 
 ### ✅ 4. 页面标识
 在图谱探索页面添加了数据来源说明：
@@ -91,10 +94,7 @@ curl http://localhost:8000/health
 ```bash
 cd /Users/jozen.lee/ai-softwares/ai-invest
 
-# 使用定时同步脚本（推荐）
-npx tsx scripts/sync-market-data-cron.ts
-
-# 或使用完整同步脚本
+# 执行同步脚本
 npx tsx scripts/sync-real-market-data.ts
 ```
 
@@ -107,21 +107,12 @@ npx tsx scripts/sync-real-market-data.ts
 crontab -e
 
 # 添加以下行（每个交易日17:00执行）
-0 17 * * 1-5 cd /Users/jozen.lee/ai-softwares/ai-invest && npx tsx scripts/sync-market-data-cron.ts >> /tmp/market-sync.log 2>&1
+0 17 * * 1-5 cd /Users/jozen.lee/ai-softwares/ai-invest && npx tsx scripts/sync-real-market-data.ts >> /tmp/market-sync.log 2>&1
 ```
 
 **方式B: 使用 package.json 脚本**
 
-在 `package.json` 中添加：
-```json
-{
-  "scripts": {
-    "sync:market": "tsx scripts/sync-market-data-cron.ts"
-  }
-}
-```
-
-然后运行：
+运行：
 ```bash
 npm run sync:market
 ```
@@ -239,7 +230,7 @@ print(df.tail())
 curl http://localhost:8000/api/capital-flow/sector | jq '.data[].sector'
 ```
 
-2. 更新 `sync-market-data-cron.ts` 中的 `SECTORS` 映射表
+2. 更新 `scripts/sync-real-market-data.ts` 中的 `SECTOR_MAPPING` 映射表
 
 ---
 
@@ -332,7 +323,7 @@ sqlite3 prisma/dev.db "
 ## 联系与支持
 
 **相关文件位置：**
-- 同步脚本: `scripts/sync-market-data-cron.ts`
+- 同步脚本: `scripts/sync-real-market-data.ts`
 - 数据服务: `data-service/`
 - 前端页面: `src/app/(dashboard)/graph/explore/page.tsx`
 - 市场数据服务: `src/lib/services/graph-market-data.service.ts`

@@ -7,20 +7,20 @@ module.exports = {
       interpreter: 'python3',
       env: {
         // 数据库配置
-        DATABASE_URL: 'file:../prisma/dev.db',
+        DATABASE_URL: process.env.DATABASE_URL || 'file:../prisma/dev.db',
 
         // AI 服务配置（第三方 API）
-        ANTHROPIC_API_KEY: 'sk-d65f4c3e3c4849fb168f0450491e7f070f1eafb7f6ee64abb874db661fe4cf2f',
-        ANTHROPIC_BASE_URL: 'https://apiclaude.cc',
-        ANTHROPIC_AUTH_TOKEN: 'sk-d65f4c3e3c4849fb168f0450491e7f070f1eafb7f6ee64abb874db661fe4cf2f',
-        CLAUDE_MODEL: 'claude-opus-4-8',
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+        ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN,
+        CLAUDE_MODEL: process.env.CLAUDE_MODEL,
 
         // 日志配置
-        LOG_LEVEL: 'info',
+        LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 
         // 其他配置
-        NODE_ENV: 'production',
-        TZ: 'Asia/Shanghai',
+        NODE_ENV: process.env.NODE_ENV || 'production',
+        TZ: process.env.TZ || 'Asia/Shanghai',
       },
     },
     {
@@ -29,7 +29,7 @@ module.exports = {
       args: 'run dev',
       env: {
         // 数据库配置
-        DATABASE_URL: 'file:./prisma/dev.db',
+        DATABASE_URL: process.env.DATABASE_URL || 'file:./prisma/dev.db',
 
         // 服务配置
         PYTHON_API_URL: 'http://localhost:8000',
@@ -37,8 +37,8 @@ module.exports = {
         NEXT_PUBLIC_API_URL: 'http://localhost:3000',
 
         // 其他配置
-        NODE_ENV: 'production',
-        TZ: 'Asia/Shanghai',
+        NODE_ENV: process.env.NODE_ENV || 'production',
+        TZ: process.env.TZ || 'Asia/Shanghai',
       },
     },
   ],

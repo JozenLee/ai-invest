@@ -516,8 +516,8 @@ class TrendAnalysisService:
 # 创建全局实例的工厂函数
 _service_instance = None
 
-def get_trend_analysis_service(db):
-    """获取趋势分析服务实例"""
+def get_domain_trend_service(db):
+    """获取基于传统领域数据的趋势分析服务实例。"""
     global _service_instance
     if _service_instance is None:
         _service_instance = TrendAnalysisService(db)

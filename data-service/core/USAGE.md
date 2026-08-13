@@ -901,9 +901,8 @@ def validate_config(config: Dict) -> bool:
 
 ## 📚 相关文档
 
-- **实施报告**: `docs/multi-platform-implementation-report.md`
-- **平台配置指南**: `docs/platform-provider-guide.md`
-- **项目总览**: `CLAUDE.md`
+- **平台配置指南**: `../../docs/platform-provider-guide.md`
+- **项目总览**: `../../CLAUDE.md`
 
 ---
 

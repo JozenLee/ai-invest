@@ -28,8 +28,8 @@ cd data-service
 pip install -r requirements.txt
 python main.py       # 启动数据服务 (端口8000)
 
-# AI功能测试
-python3 test-ai-classification.py
+# 单元测试
+npm run test:unit
 
 # 验收测试
 bash scripts/acceptance-test.sh
@@ -141,7 +141,6 @@ ai-invest/
 - **核心能力**: 用户信息获取、内容列表采集、增量更新
 - **基础设施**: HTTP客户端、限流器、配置管理、数据解析
 - **详细文档**: 
-  - 实施报告: `docs/multi-platform-implementation-report.md`
   - 配置指南: `docs/platform-provider-guide.md`
   - 使用手册: `data-service/core/USAGE.md`
 

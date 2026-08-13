@@ -16,13 +16,9 @@ export ANTHROPIC_API_KEY="your-api-key-here"
 
 ### 2. 数据库迁移
 
-如果是新项目，运行迁移脚本：
+如果是已有项目，运行标签关联迁移脚本：
 ```bash
-# 迁移Domain到Tag
-npx tsx scripts/migrate-domain-to-tags.ts
-
-# 迁移ETF绑定
-npx tsx scripts/migrate-etf-bindings.ts
+npm run migrate:tags
 ```
 
 ### 3. 运行测试
@@ -216,12 +212,12 @@ console.log(analysis.sentimentLabel) // 情感标签
 
 ## 维护工具
 
-### 数据质量检查
+### 标签关联验证
 
-检查系统数据完整性和统计信息：
+检查新闻的 `segmentCodes` 与 Tag 关联是否完整：
 
 ```bash
-npx tsx scripts/check-data-quality.ts
+npx tsx scripts/verify-tag-linking.ts
 ```
 
 输出内容：
@@ -231,41 +227,13 @@ npx tsx scripts/check-data-quality.ts
 - GraphNodeETF统计
 - DomainTag桥接完整性
 
-### 批量处理历史新闻
+### 端到端关联测试
 
-为历史新闻批量添加标签：
-
-```bash
-# 基础用法（默认：批量10篇，延迟1秒，跳过已标记）
-npx tsx scripts/batch-tag-historical-news.ts
-
-# 自定义配置
-npx tsx scripts/batch-tag-historical-news.ts --batch-size 5 --delay 2000
-
-# 重新处理已标记新闻
-npx tsx scripts/batch-tag-historical-news.ts --reprocess
-```
-
-**参数**:
-- `--batch-size N`: 每批处理N篇新闻（默认10）
-- `--delay N`: 每篇新闻处理后延迟N毫秒（默认1000）
-- `--reprocess`: 重新处理已标记新闻（默认跳过）
-
-**注意**: 需要 `ANTHROPIC_API_KEY` 环境变量
-
-### 重算节点统计
-
-更新所有节点的新闻统计信息：
+验证标签创建、关联和重复处理逻辑：
 
 ```bash
-npx tsx scripts/recalculate-node-stats.ts
+npx tsx scripts/test-tag-linking.ts
 ```
-
-更新内容：
-- 关联新闻总数
-- 最近30天新闻数
-- 最新新闻日期
-- 统计数据保存到节点metadata
 
 ---
 
@@ -336,7 +304,7 @@ const tree = await tagService.getTagTree()
 ### 5. 性能优化
 
 - 应用启动时预热缓存：`tagCacheService.warmupCache()`
-- 定期检查数据质量：`scripts/check-data-quality.ts`
+- 定期运行标签关联验证：`scripts/verify-tag-linking.ts`
 - 监控API响应时间
 - 考虑生产环境使用Redis替代内存缓存
 
@@ -432,11 +400,8 @@ const redis = new Redis(process.env.REDIS_URL)
 使用cron或任务调度器：
 
 ```bash
-# 每天凌晨3点运行数据质量检查
-0 3 * * * cd /app && npx tsx scripts/check-data-quality.ts
-
-# 每小时重算节点统计
-0 * * * * cd /app && npx tsx scripts/recalculate-node-stats.ts
+# 每天凌晨3点验证标签关联
+0 3 * * * cd /app && npx tsx scripts/verify-tag-linking.ts
 ```
 
 ### 4. 监控告警
@@ -450,10 +415,8 @@ const redis = new Redis(process.env.REDIS_URL)
 
 ## 相关文档
 
-- **设计规范**: `docs/superpowers/specs/2026-08-01-market-news-graph-integration-design.md`
-- **实施计划**: `docs/superpowers/plans/2026-08-01-market-news-graph-integration.md`
-- **完整报告**: `docs/superpowers/FINAL_IMPLEMENTATION_REPORT.md`
-- **Phase 1报告**: `docs/superpowers/PHASE1_COMPLETION_REPORT.md`
+- **项目说明**: `CLAUDE.md`
+- **部署检查清单**: `docs/deployment-checklist.md`
 
 ---
 

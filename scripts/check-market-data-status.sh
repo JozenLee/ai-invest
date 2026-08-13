@@ -19,7 +19,7 @@ echo ""
 
 # 2. 检查数据库数据
 echo "📈 2. 检查数据库中的数据..."
-cd /Users/jozen.lee/ai-softwares/ai-invest
+cd "$(dirname "$0")/.."
 
 ETF_COUNT=$(sqlite3 prisma/dev.db "SELECT COUNT(*) FROM ETFDaily;" 2>/dev/null || echo "0")
 SECTOR_COUNT=$(sqlite3 prisma/dev.db "SELECT COUNT(*) FROM SectorCapitalFlow;" 2>/dev/null || echo "0")
@@ -66,16 +66,7 @@ else
 fi
 echo ""
 
-# 4. 检查模拟数据脚本状态
-echo "🚫 4. 检查模拟数据脚本..."
-if [ -f "scripts/generate-mock-market-data.ts.deprecated" ]; then
-    echo "   ✅ 模拟数据脚本已禁用"
-else
-    echo "   ⚠️  模拟数据脚本仍然存在，建议禁用"
-fi
-echo ""
-
-# 5. 同步建议
+# 4. 同步建议
 echo "=================================================="
 echo "           操作建议"
 echo "=================================================="
@@ -83,18 +74,17 @@ echo ""
 
 if [ "$ETF_COUNT" -eq 0 ] && [ "$SECTOR_COUNT" -eq 0 ]; then
     echo "❌ 无市场数据，需要立即同步："
-    echo "   cd /Users/jozen.lee/ai-softwares/ai-invest"
-    echo "   npx tsx scripts/sync-market-data-cron.ts"
+    echo "   npx tsx scripts/sync-real-market-data.ts"
 elif [ "$ETF_COUNT" -gt 0 ] && [ "$SECTOR_COUNT" -gt 0 ]; then
     echo "✅ 市场数据已就绪"
     echo ""
     echo "设置定时任务（可选）："
     echo "   crontab -e"
-    echo "   添加: 0 17 * * 1-5 cd /Users/jozen.lee/ai-softwares/ai-invest && npx tsx scripts/sync-market-data-cron.ts >> /tmp/market-sync.log 2>&1"
+    echo "   添加: 0 17 * * 1-5 cd /path/to/ai-invest && npx tsx scripts/sync-real-market-data.ts >> /tmp/market-sync.log 2>&1"
 else
     echo "⚠️  数据部分同步，建议重新同步："
     echo "   cd /Users/jozen.lee/ai-softwares/ai-invest"
-    echo "   npx tsx scripts/sync-market-data-cron.ts"
+    echo "   npx tsx scripts/sync-real-market-data.ts"
 fi
 echo ""
 

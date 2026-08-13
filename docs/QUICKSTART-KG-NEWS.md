@@ -137,19 +137,17 @@ cd data-service
 
 ## 📚 相关文档
 
-- **完整部署指南**: `docs/deployment-guide-kg-news-integration.md`
-- **实施文档**: `docs/kg-news-integration-implementation.md`
-- **部署完成报告**: `docs/kg-news-integration-deployment-complete.md`
 - **部署检查清单**: `docs/deployment-checklist.md`
+- **项目说明**: `CLAUDE.md`
 
 ## 🔧 维护命令
 
 ```bash
-# 测试 API
-./scripts/test-kg-news-api.sh
+# 类型检查
+npm run typecheck
 
-# 部署前检查
-./scripts/pre-deployment-check.sh
+# API 测试
+npm run test:api
 
 # 重新初始化
 cd data-service

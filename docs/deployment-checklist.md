@@ -29,7 +29,7 @@
 - [ ] 服务日志无错误
 
 ### Step 2: 运行初始化
-- [ ] 已执行 `./scripts/init_kg_news_integration.sh`
+- [ ] 已执行 `cd data-service && ./scripts/init_kg_news_integration.sh`
 - [ ] Segment 关键词已生成
 - [ ] Tag-Segment 映射已完成
 - [ ] 缓存已清除

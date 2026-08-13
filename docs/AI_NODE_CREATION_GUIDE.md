@@ -24,15 +24,7 @@ curl -X POST http://localhost:3000/api/graph/ai/create-node \
   }'
 ```
 
-### 方式2: 使用测试脚本
-
-```bash
-cd /Users/jozen.lee/ai-softwares/ai-invest
-chmod +x scripts/test-ai-node-creation.sh
-./scripts/test-ai-node-creation.sh
-```
-
-### 方式3: 在代码中调用
+### 方式2: 在代码中调用
 
 ```typescript
 import { aiNodeCreationService } from '@/lib/services/ai-node-creation.service'

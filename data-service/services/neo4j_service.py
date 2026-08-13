@@ -13,13 +13,15 @@ class Neo4jService:
     def __init__(self):
         self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
         self.user = os.getenv("NEO4J_USER", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD", "ai-invest-neo4j-2024")
+        self.password = os.getenv("NEO4J_PASSWORD")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         self._driver: Optional[AsyncDriver] = None
 
     async def connect(self):
         """建立Neo4j连接"""
         if self._driver is None:
+            if not self.password:
+                raise RuntimeError("NEO4J_PASSWORD must be configured before connecting to Neo4j")
             self._driver = AsyncGraphDatabase.driver(
                 self.uri,
                 auth=(self.user, self.password),

@@ -629,7 +629,12 @@ async function main() {
 
   for (const stock of stocks) {
     await prisma.graphStock.upsert({
-      where: { stockCode: stock.stockCode },
+      where: {
+        nodeId_stockCode: {
+          nodeId: stock.nodeId,
+          stockCode: stock.stockCode,
+        },
+      },
       update: {},
       create: stock,
     })

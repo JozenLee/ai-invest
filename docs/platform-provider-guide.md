@@ -740,8 +740,7 @@ VALUES (
 ## 🔗 相关资源
 
 - **基础设施使用手册**: `data-service/core/USAGE.md`
-- **实施报告**: `docs/multi-platform-implementation-report.md`
-- **数据源能力对比**: `docs/DATASOURCE-FINAL-SUMMARY.md`
+- **数据源说明**: `docs/DATA-SOURCE.md`
 - **NewsNow 开源项目**: https://github.com/ourongxing/newsnow
 
 ---
