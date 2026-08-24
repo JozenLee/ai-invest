@@ -1,66 +1,118 @@
 # Tushare Pro 数据提供者
-# 通过 Tushare Pro API 获取 A 股数据
-# 需要配置 TUSHARE_TOKEN 环境变量
+# 通过 Tushare Promax 聚合接口获取 A 股数据
+# 需要配置 TUSHARE_API_URL 和 TUSHARE_API_KEY 环境变量
 
 import asyncio
 import os
+import requests
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from providers.base import DataProvider
+from utils.trading_hours import is_trading_hours
 
 
 class TushareProvider(DataProvider):
-    """Tushare Pro 数据提供者
+    """Tushare Promax 数据提供者。
 
-    需要 TUSHARE_TOKEN 环境变量。
-    基础行情接口（120积分）可免费使用，
-    资金流向/北向资金（2000+积分）需要付费升级。
+    所有接口统一使用：
+    ``GET {TUSHARE_API_URL}/{api}`` + ``X-API-Key``。
+
+    这样新增 Tushare 接口时只需要增加接口名和参数，不再依赖
+    SDK 的动态方法、SDK 版本或不同网关对参数的二次限制。
     """
 
     name = "tushare"
 
     def __init__(self, token: Optional[str] = None):
-        self._token = token or os.getenv("TUSHARE_TOKEN", "")
-        self._pro = None
-        if self._token:
-            try:
-                import tushare as ts
-                ts.set_token(self._token)
-                self._pro = ts.pro_api()
-                print(f"[Tushare] 初始化成功")
-            except ImportError:
-                print("[Tushare] tushare 未安装，请 pip install tushare")
-            except Exception as e:
-                print(f"[Tushare] 初始化失败: {e}")
+        self._api_url = os.getenv("TUSHARE_API_URL", "").rstrip("/")
+        self._api_key = os.getenv("TUSHARE_API_KEY", "") or token or ""
+        if self._api_url and self._api_key:
+            print("[Tushare] Promax 聚合接口初始化成功")
         else:
-            print("[Tushare] 未配置 TUSHARE_TOKEN，Tushare 数据源不可用")
+            print("[Tushare] 未配置 TUSHARE_API_URL/TUSHARE_API_KEY，数据源不可用")
 
     @property
     def available(self) -> bool:
         """是否可用"""
-        return self._pro is not None
+        return bool(self._api_url and self._api_key)
 
-    async def _call(self, func, *args, **kwargs) -> Any:
-        """在线程池中调用同步的 Tushare 函数"""
-        def _sync():
-            return func(*args, **kwargs)
-        return await asyncio.to_thread(_sync)
+    async def _call_api(self, api: str, **params) -> pd.DataFrame:
+        """调用 Tushare SDK 或 Promax 聚合接口，并统一返回 DataFrame。"""
+        def normalize(frame: pd.DataFrame) -> pd.DataFrame:
+            if "date" in frame.columns and "trade_date" not in frame.columns:
+                frame = frame.rename(columns={"date": "trade_date"})
+            return frame
+
+        def frame_from_payload(payload: Any) -> pd.DataFrame:
+            """兼容 Promax 对 Tushare 返回结果的几种常见包装格式。"""
+            if isinstance(payload, pd.DataFrame):
+                return normalize(payload)
+
+            if isinstance(payload, dict):
+                data = payload.get("data", payload)
+                if isinstance(data, dict):
+                    fields = data.get("fields") or data.get("columns")
+                    rows = next(
+                        (
+                            data[key]
+                            for key in ("items", "rows", "result", "data")
+                            if isinstance(data.get(key), list)
+                        ),
+                        [],
+                    )
+                    if fields and rows:
+                        return normalize(pd.DataFrame(rows, columns=fields))
+                    return normalize(pd.DataFrame(rows))
+                if isinstance(data, list):
+                    return normalize(pd.DataFrame(data))
+                return pd.DataFrame()
+
+            if isinstance(payload, list):
+                return normalize(pd.DataFrame(payload))
+            return pd.DataFrame()
+
+        self._check_available()
+        def _request():
+            response = requests.get(
+                f"{self._api_url}/{api}",
+                params=params,
+                headers={"X-API-Key": self._api_key},
+                verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
+                timeout=float(os.getenv("TUSHARE_TIMEOUT_SECONDS", "30")),
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
+                raise RuntimeError(payload.get("msg") or f"Tushare API {api} 返回错误码 {payload.get('code')}")
+            return frame_from_payload(payload)
+        return await asyncio.to_thread(_request)
+
+    async def request_dataframe(self, api: str, **params) -> pd.DataFrame:
+        """通过统一的 Promax 鉴权调用任意返回表格的 Tushare 接口。
+
+        新增接口优先复用此方法，避免在其他 Provider 中重新实现 token、URL、
+        SSL 和超时处理。
+        """
+        return await self._call_api(api, **params)
 
     def _check_available(self):
         """检查是否可用，不可用则抛出异常"""
         if not self.available:
-            raise RuntimeError("Tushare 未初始化，请配置 TUSHARE_TOKEN")
+            raise RuntimeError("Tushare Promax 未初始化，请配置 TUSHARE_API_URL 和 TUSHARE_API_KEY")
 
     # ==================== 指数数据 ====================
 
     async def get_index_spot(self) -> pd.DataFrame:
         """获取指数实时行情快照
 
-        Tushare 没有直接的指数实时快照接口，
-        通过 index_daily 获取最新交易日数据模拟。
+        交易时段使用 Promax 的 rt_k 实时接口；非交易时段使用 index_daily
+        返回最近一个交易日的收盘数据。
+
+        不能在交易时段把 index_daily 当作实时行情，否则页面会显示上一交易日
+        收盘价并错误标记为实时数据。
         """
         self._check_available()
 
@@ -73,44 +125,103 @@ class TushareProvider(DataProvider):
             "000300.SH",  # 沪深300
         ]
 
-        today = datetime.now().strftime("%Y%m%d")
-        # 往前多取几天以确保有数据（非交易日）
-        start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
+        # 市场概览是页面首屏接口，不能串行等待 5 个 Tushare 请求。
+        # 单个指数失败或超时时跳过该指数，其他指数仍可正常返回。
+        request_timeout = float(os.getenv("TUSHARE_MARKET_TIMEOUT_SECONDS", "8"))
+        trading = is_trading_hours()
 
-        records = []
-        for code in index_codes:
+        async def fetch_realtime(code: str) -> Optional[Dict[str, Any]]:
+            """通过 rt_k 获取单个指数实时快照。"""
             try:
-                df = await self._call(
-                    self._pro.index_daily,
-                    ts_code=code, start_date=start, end_date=today,
+                df = await asyncio.wait_for(
+                    self._call_api("rt_k", ts_code=code),
+                    timeout=request_timeout,
                 )
-                if not df.empty:
-                    latest = df.iloc[0]  # Tushare 返回按日期降序
-                    # 提取纯代码（去掉 .SH/.SZ 后缀）
-                    pure_code = code.split(".")[0]
-                    market = code.split(".")[1]
-                    # 映射为 AKShare 兼容格式
-                    if market == "SH":
-                        ak_code = f"sh{pure_code}"
-                    else:
-                        ak_code = f"sz{pure_code}"
+                if df.empty:
+                    return None
 
-                    records.append({
-                        "代码": ak_code,
-                        "名称": self._get_index_name(code),
-                        "最新价": float(latest.get("close", 0)),
-                        "涨跌额": float(latest.get("change", 0)),
-                        "涨跌幅": float(latest.get("pct_chg", 0)),
-                        "成交量": float(latest.get("vol", 0)),
-                        "成交额": float(latest.get("amount", 0)),
-                        "今开": float(latest.get("open", 0)),
-                        "最高": float(latest.get("high", 0)),
-                        "最低": float(latest.get("low", 0)),
-                        "昨收": float(latest.get("pre_close", 0)),
-                    })
+                latest = df.iloc[0]
+                pure_code, market = code.split(".")
+                ak_code = f"{'sh' if market == 'SH' else 'sz'}{pure_code}"
+
+                def number(*names: str, default: float = 0.0) -> float:
+                    for name in names:
+                        value = latest.get(name)
+                        if value is not None and not pd.isna(value):
+                            try:
+                                return float(value)
+                            except (TypeError, ValueError):
+                                continue
+                    return default
+
+                price = number("last", "price", "close", "最新价")
+                previous_close = number("pre_close", "prev_close", "昨收")
+                change = number("change", "chg", "涨跌额", default=price - previous_close)
+                change_pct = number(
+                    "pct_chg", "percent", "change_pct", "涨跌幅",
+                    default=(change / previous_close * 100 if previous_close else 0.0),
+                )
+
+                return {
+                    "代码": ak_code,
+                    "名称": self._get_index_name(code),
+                    "最新价": price,
+                    "涨跌额": change,
+                    "涨跌幅": change_pct,
+                    "成交量": number("vol", "volume", "成交量"),
+                    "成交额": number("amount", "成交额"),
+                    "今开": number("open", "今开"),
+                    "最高": number("high", "最高"),
+                    "最低": number("low", "最低"),
+                    "昨收": previous_close,
+                    "数据日期": datetime.now().strftime("%Y-%m-%d"),
+                }
             except Exception as e:
-                print(f"[Tushare] 获取指数 {code} 失败: {e}")
-                continue
+                print(f"[Tushare] 获取指数 {code} 实时行情失败: {e}")
+                return None
+
+        async def fetch_daily(code: str) -> Optional[Dict[str, Any]]:
+            """非交易时段获取最近交易日收盘数据。"""
+            today = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
+            try:
+                df = await asyncio.wait_for(
+                    self._call_api("index_daily", ts_code=code, start_date=start, end_date=today),
+                    timeout=request_timeout,
+                )
+                if df.empty:
+                    return None
+
+                latest = df.iloc[0]  # Tushare 返回按日期降序
+                pure_code, market = code.split(".")
+                ak_code = f"{'sh' if market == 'SH' else 'sz'}{pure_code}"
+                trade_date = str(latest.get("trade_date", latest.get("date", "")))
+                if len(trade_date) == 8 and trade_date.isdigit():
+                    trade_date = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}"
+
+                return {
+                    "代码": ak_code,
+                    "名称": self._get_index_name(code),
+                    "最新价": float(latest.get("close", latest.get("price", 0))),
+                    "涨跌额": float(latest.get("change", 0)),
+                    "涨跌幅": float(latest.get("pct_chg", 0)),
+                    "成交量": float(latest.get("vol", latest.get("volume", 0))),
+                    "成交额": float(latest.get("amount", 0)),
+                    "今开": float(latest.get("open", 0)),
+                    "最高": float(latest.get("high", 0)),
+                    "最低": float(latest.get("low", 0)),
+                    "昨收": float(latest.get("pre_close", 0)),
+                    "数据日期": trade_date,
+                }
+            except Exception as e:
+                print(f"[Tushare] 获取指数 {code} 日线失败: {e}")
+                return None
+
+        async def fetch_one(code: str) -> Optional[Dict[str, Any]]:
+            return await (fetch_realtime(code) if trading else fetch_daily(code))
+
+        results = await asyncio.gather(*(fetch_one(code) for code in index_codes))
+        records = [record for record in results if record is not None]
 
         return pd.DataFrame(records) if records else pd.DataFrame()
 
@@ -123,10 +234,7 @@ class TushareProvider(DataProvider):
         self._check_available()
         ts_code = self._to_ts_code(code)
 
-        df = await self._call(
-            self._pro.index_daily,
-            ts_code=ts_code, start_date=start_date, end_date=end_date,
-        )
+        df = await self._call_api("index_daily", ts_code=ts_code, start_date=start_date, end_date=end_date)
 
         if not df.empty:
             # 统一列名为 AKShare 兼容格式
@@ -168,10 +276,10 @@ class TushareProvider(DataProvider):
         for symbol in symbols:
             try:
                 ts_code = self._to_ts_code(symbol, default_market="SZ" if symbol.startswith(("0", "3")) else "SH")
-                df = await self._call(
-                    self._pro.daily,
-                    ts_code=ts_code, start_date=start, end_date=today,
-                )
+                try:
+                    df = await self._call_api("rt_k", ts_code=ts_code)
+                except Exception:
+                    df = await self._call_api("daily", ts_code=ts_code, start_date=start, end_date=today)
                 if not df.empty:
                     latest = df.iloc[0]
                     records.append({
@@ -180,7 +288,7 @@ class TushareProvider(DataProvider):
                         "最新价": float(latest.get("close", 0)),
                         "涨跌额": float(latest.get("change", 0)),
                         "涨跌幅": float(latest.get("pct_chg", 0)),
-                        "成交量": float(latest.get("vol", 0)),
+                        "成交量": float(latest.get("vol", latest.get("volume", 0))),
                         "成交额": float(latest.get("amount", 0)),
                     })
             except Exception as e:
@@ -200,10 +308,7 @@ class TushareProvider(DataProvider):
         adj_map = {"qfq": "qfq", "hfq": "hfq", "": None}
         adj = adj_map.get(adjust)
 
-        df = await self._call(
-            self._pro.daily,
-            ts_code=ts_code, start_date=start_date, end_date=end_date,
-        )
+        df = await self._call_api("daily", ts_code=ts_code, start_date=start_date, end_date=end_date)
 
         if not df.empty:
             df = df.rename(columns={"trade_date": "date"})
@@ -211,6 +316,36 @@ class TushareProvider(DataProvider):
             df = df.sort_values("date").reset_index(drop=True)
 
         return df
+
+    async def get_stock_kline(
+        self,
+        ticker: str,
+        period: str = "daily",
+        start_date: str = "",
+        end_date: str = "",
+    ) -> pd.DataFrame:
+        """获取股票日/周/月 K 线，统一走 Promax。"""
+        self._check_available()
+        endpoint = {"daily": "daily", "weekly": "weekly", "monthly": "monthly"}.get(period)
+        if not endpoint:
+            raise ValueError(f"Tushare 不支持 K 线周期: {period}")
+
+        ts_code = self._to_ts_code(
+            ticker,
+            default_market="SZ" if ticker.startswith(("0", "2", "3")) else "SH",
+        )
+        frame = await self._call_api(
+            endpoint,
+            ts_code=ts_code,
+            start_date=str(start_date).replace("-", ""),
+            end_date=str(end_date).replace("-", ""),
+        )
+        if not frame.empty:
+            frame = frame.rename(columns={"trade_date": "date"})
+            if "date" in frame.columns:
+                frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+                frame = frame.sort_values("date").reset_index(drop=True)
+        return frame
 
     # ==================== ETF 数据 ====================
 
@@ -229,18 +364,18 @@ class TushareProvider(DataProvider):
             try:
                 # ETF 代码格式：510300.SH / 159919.SZ
                 ts_code = self._to_ts_code(symbol, default_market="SH" if symbol.startswith("5") else "SZ")
-                df = await self._call(
-                    self._pro.fund_daily,
-                    ts_code=ts_code, start_date=start, end_date=today,
-                )
+                try:
+                    df = await self._call_api("rt_k", ts_code=ts_code)
+                except Exception:
+                    df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start, end_date=today)
                 if not df.empty:
                     latest = df.iloc[0]
                     records.append({
                         "代码": symbol,
                         "名称": "",
-                        "最新价": float(latest.get("close", 0)),
+                        "最新价": float(latest.get("close", latest.get("price", 0))),
                         "涨跌幅": float(latest.get("pct_chg", 0)),
-                        "成交量": float(latest.get("vol", 0)),
+                        "成交量": float(latest.get("vol", latest.get("volume", 0))),
                         "成交额": float(latest.get("amount", 0)),
                     })
             except Exception as e:
@@ -255,10 +390,7 @@ class TushareProvider(DataProvider):
 
         ts_code = self._to_ts_code(ticker, default_market="SH" if ticker.startswith("5") else "SZ")
 
-        df = await self._call(
-            self._pro.fund_daily,
-            ts_code=ts_code, start_date=start_date, end_date=end_date,
-        )
+        df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start_date, end_date=end_date)
 
         if not df.empty:
             df = df.rename(columns={"trade_date": "date"})
@@ -279,30 +411,141 @@ class TushareProvider(DataProvider):
         today = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
-        df = await self._call(
-            self._pro.moneyflow_market_dtl,
-            start_date=start, end_date=today,
-        )
+        df = pd.DataFrame()
+        last_error = None
+        for api in ("moneyflow_mkt_dc", "moneyflow_market_dtl"):
+            try:
+                df = await self._call_api(api, start_date=start, end_date=today)
+                if not df.empty:
+                    break
+            except Exception as error:
+                last_error = error
 
         if not df.empty:
             latest = df.iloc[0]  # 按日期降序
+            net_amount = float(latest.get("net_amount", latest.get("net_mf_amount", 0)) or 0)
+            if api == "moneyflow_mkt_dc":
+                # DC 接口的 buy_*_amount 字段是各档位净流入额，不是买入总额。
+                main_net = net_amount
+                mid_net = float(latest.get("buy_md_amount", latest.get("net_md_amount", 0)) or 0)
+                small_net = float(latest.get("buy_sm_amount", latest.get("net_sm_amount", 0)) or 0)
+            else:
+                buy_elg = float(latest.get("buy_elg_amount", 0) or 0)
+                sell_elg = float(latest.get("sell_elg_amount", 0) or 0)
+                buy_md = float(latest.get("buy_md_amount", 0) or 0)
+                sell_md = float(latest.get("sell_md_amount", 0) or 0)
+                buy_sm = float(latest.get("buy_sm_amount", 0) or 0)
+                sell_sm = float(latest.get("sell_sm_amount", 0) or 0)
+                main_net = (buy_elg - sell_elg) if buy_elg or sell_elg else net_amount
+                mid_net = buy_md - sell_md
+                small_net = buy_sm - sell_sm
             return {
-                "主力净流入-净额": float(latest.get("buy_elg_amount", 0)) - float(latest.get("sell_elg_amount", 0)),
+                "主力净流入-净额": main_net,
                 "主力净流入-净占比": 0.0,  # Tushare 不直接提供占比
-                "中单净流入-净额": float(latest.get("buy_md_amount", 0)) - float(latest.get("sell_md_amount", 0)),
-                "小单净流入-净额": float(latest.get("buy_sm_amount", 0)) - float(latest.get("sell_sm_amount", 0)),
+                "中单净流入-净额": mid_net,
+                "小单净流入-净额": small_net,
                 "日期": str(latest.get("trade_date", today)),
                 "source": "tushare_moneyflow",
             }
 
-        raise Exception("Tushare 大盘资金流向数据为空")
+        raise last_error or Exception("Tushare 大盘资金流向数据为空")
 
     async def get_sector_capital_flow(self, indicator: str = "今日") -> List[Dict]:
-        """获取板块资金流向
+        """获取行业/概念资金流向并统一金额单位为元。"""
+        self._check_available()
+        day_count = {"今日": 1, "3日": 3, "5日": 5, "10日": 10}.get(indicator, 1)
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=day_count + 10)).strftime("%Y%m%d")
+        frame = pd.DataFrame()
+        last_error = None
+        # THS 接口返回行业分类；DC 接口可能同时包含概念、指数和互联互通分类，
+        # 因此仅作为 Tushare 内部的兼容回退。
+        for api in ("moneyflow_ind_ths", "moneyflow_ind_dc"):
+            dc_params = {"content_type": "行业"} if api == "moneyflow_ind_dc" else {}
+            for params in ({"trade_date": end, **dc_params}, {"start_date": start, "end_date": end, **dc_params}):
+                try:
+                    frame = await self._call_api(api, **params)
+                    if not frame.empty:
+                        break
+                except Exception as error:
+                    last_error = error
+            if not frame.empty:
+                break
+        if frame.empty:
+            raise last_error or Exception("Tushare 板块资金流向数据为空")
 
-        Tushare 没有直接的板块资金流向接口，抛出 NotImplemented。
-        """
-        raise NotImplementedError("Tushare 不支持板块资金流向数据")
+        name_col = next((c for c in ("name", "industry", "sector", "ts_code") if c in frame.columns), None)
+        net_col = next((c for c in ("net_amount", "net_mf_amount", "net_amount_x") if c in frame.columns), None)
+        pct_col = next((c for c in ("pct_change", "pct_chg", "change_pct") if c in frame.columns), None)
+        if not name_col or not net_col:
+            raise ValueError(f"Tushare 板块资金流向字段不兼容: {list(frame.columns)}")
+
+        if "trade_date" in frame.columns:
+            frame["trade_date"] = frame["trade_date"].astype(str)
+            latest_date = frame["trade_date"].max()
+            if day_count == 1:
+                frame = frame[frame["trade_date"] == latest_date]
+            else:
+                valid_dates = sorted(frame["trade_date"].unique())[-day_count:]
+                frame = frame[frame["trade_date"].isin(valid_dates)]
+
+        # 优先保留明确标记为行业的记录；若网关未返回分类字段，则 THS
+        # 接口本身视为行业数据，DC 回退时排除明显的指数/互联互通/融资类名称。
+        classify_col = next((c for c in ("content_type", "classify", "type", "category") if c in frame.columns), None)
+        if classify_col:
+            industry_rows = frame[frame[classify_col].astype(str).str.contains("行业", na=False)]
+            if not industry_rows.empty:
+                frame = industry_rows
+        elif api == "moneyflow_ind_dc":
+            excluded_keywords = ("融资融券", "深股通", "沪股通", "MSCI", "富时", "中证", "上证", "深成", "大盘")
+            frame = frame[~frame[name_col].astype(str).str.contains("|".join(excluded_keywords), case=False, na=False)]
+
+        grouped: Dict[str, Dict[str, Any]] = {}
+        latest_trade_date = str(frame["trade_date"].max()) if "trade_date" in frame.columns and not frame.empty else end
+        for _, row in frame.iterrows():
+            name = str(row.get(name_col) or "").strip()
+            if not name:
+                continue
+            item = grouped.setdefault(name, {"名称": name, "今日主力净流入-净额": 0.0, "今日涨跌幅": 0.0})
+            raw_net_amount = float(row.get(net_col, 0) or 0)
+            # moneyflow_ind_dc 返回元；moneyflow_ind_ths 返回亿元。
+            # 统一转换为元，供增强接口按 1e8 转换为亿元。
+            amount_multiplier = 1e8 if api == "moneyflow_ind_ths" else 1.0
+            item["今日主力净流入-净额"] += raw_net_amount * amount_multiplier
+            if pct_col:
+                item["今日涨跌幅"] = float(row.get(pct_col, 0) or 0)
+        result = list(grouped.values())
+        for item in result:
+            item["_source"] = "tushare"
+            item["日期"] = latest_trade_date
+        return result
+
+    async def get_market_volume_amplification(self, lookback_days: int = 20) -> Dict:
+        """使用上证指数日成交额计算真实成交额放大倍数。"""
+        self._check_available()
+        today = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=lookback_days + 20)).strftime("%Y%m%d")
+        frame = await self._call_api("index_daily", ts_code="000001.SH", start_date=start, end_date=today)
+        if frame.empty or "amount" not in frame.columns:
+            raise RuntimeError("Tushare 上证指数成交额数据为空或缺少 amount 字段")
+        frame = frame.copy()
+        frame["trade_date"] = frame.get("trade_date", "").astype(str)
+        frame["amount"] = pd.to_numeric(frame["amount"], errors="coerce")
+        frame = frame.dropna(subset=["amount"]).sort_values("trade_date")
+        if len(frame) < 2:
+            raise RuntimeError("Tushare 上证指数成交额历史数据不足")
+        current = float(frame.iloc[-1]["amount"])
+        history = frame.iloc[-(lookback_days + 1):-1]["amount"]
+        average = float(history.mean()) if not history.empty else current
+        amplification = current / average if average > 0 else 1.0
+        return {
+            "currentVolume": round(current, 2),
+            "avgVolume": round(average, 2),
+            "amplification": round(amplification, 2),
+            "isAmplified": amplification >= 1.5,
+            "date": str(frame.iloc[-1]["trade_date"]),
+            "source": "tushare",
+        }
 
     async def get_northbound_flow(self) -> Dict:
         """获取北向资金流向
@@ -314,16 +557,41 @@ class TushareProvider(DataProvider):
         today = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
-        df = await self._call(
-            self._pro.moneyflow_hsgt,
-            start_date=start, end_date=today,
-        )
+        frame = pd.DataFrame()
+        last_error = None
+        for params in ({"trade_date": today}, {"start_date": start, "end_date": today}):
+            try:
+                candidate = await self._call_api("moneyflow_hsgt", **params)
+                frame = candidate
 
-        if not df.empty:
-            latest = df.iloc[0]
+                # Promax/Tushare 在非交易日或当日数据尚未发布时，
+                # 可能返回一行字段为空的占位记录。不能仅凭 DataFrame
+                # 非空就停止尝试，否则会错过日期范围查询中的有效交易日数据。
+                if not candidate.empty and "north_money" in candidate.columns:
+                    north_values = pd.to_numeric(
+                        candidate["north_money"], errors="coerce"
+                    ).fillna(0)
+                    if (north_values != 0).any():
+                        break
+                elif not candidate.empty:
+                    # 没有 north_money 字段时也继续尝试备用查询。
+                    continue
+            except Exception as error:
+                last_error = error
+                continue
+
+        if not frame.empty:
+            if "trade_date" in frame.columns:
+                frame = frame.sort_values("trade_date")
+            valid_rows = frame[pd.to_numeric(frame.get("north_money"), errors="coerce").fillna(0) != 0]
+            if valid_rows.empty:
+                raise Exception("Tushare 北向资金返回空值或零值")
+            latest = valid_rows.iloc[-1]
             north_money = float(latest.get("north_money", 0))  # 北向资金（万元）
-            sh_money = float(latest.get("sh_money", 0))  # 沪股通（万元）
-            sz_money = float(latest.get("sz_money", 0))  # 深股通（万元）
+            # Tushare moneyflow_hsgt 使用 hgt/sgt 表示沪股通/深股通。
+            # 兼容部分网关返回的 sh_money/sz_money 别名。
+            sh_money = float(latest.get("hgt", latest.get("sh_money", 0)) or 0)  # 沪股通（万元）
+            sz_money = float(latest.get("sgt", latest.get("sz_money", 0)) or 0)  # 深股通（万元）
 
             return {
                 "date": str(latest.get("trade_date", today)),
@@ -332,9 +600,10 @@ class TushareProvider(DataProvider):
                 "szConnect": sz_money / 10000,
                 "source": "tushare_hsgt",
                 "unit": "亿元",
+                "stale": str(latest.get("trade_date", today)) != today,
             }
 
-        raise Exception("Tushare 北向资金数据为空")
+        raise last_error or Exception("Tushare 北向资金数据为空")
 
     async def get_northbound_flow_history(self, days: int = 30) -> List[Dict]:
         """获取北向资金历史数据"""
@@ -343,10 +612,7 @@ class TushareProvider(DataProvider):
         end = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=days + 10)).strftime("%Y%m%d")
 
-        df = await self._call(
-            self._pro.moneyflow_hsgt,
-            start_date=start, end_date=end,
-        )
+        df = await self._call_api("moneyflow_hsgt", start_date=start, end_date=end)
 
         if df.empty:
             raise Exception("Tushare 北向资金历史数据为空")
@@ -359,8 +625,8 @@ class TushareProvider(DataProvider):
                 records.append({
                     "date": str(row["trade_date"]),
                     "value": north_money / 10000,
-                    "shConnect": float(row.get("sh_money", 0)) / 10000,
-                    "szConnect": float(row.get("sz_money", 0)) / 10000,
+                    "shConnect": float(row.get("hgt", row.get("sh_money", 0)) or 0) / 10000,
+                    "szConnect": float(row.get("sgt", row.get("sz_money", 0)) or 0) / 10000,
                 })
 
         if not records:
@@ -375,10 +641,7 @@ class TushareProvider(DataProvider):
         today = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
-        df = await self._call(
-            self._pro.moneyflow,
-            ts_code=ts_code, start_date=start, end_date=today,
-        )
+        df = await self._call_api("moneyflow", ts_code=ts_code, start_date=start, end_date=today)
 
         if not df.empty:
             latest = df.iloc[0]
@@ -401,10 +664,7 @@ class TushareProvider(DataProvider):
         today = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
 
-        df = await self._call(
-            self._pro.margin_detail,
-            start_date=start, end_date=today,
-        )
+        df = await self._call_api("margin_detail", start_date=start, end_date=today)
 
         if not df.empty:
             # 按日期汇总
@@ -423,6 +683,77 @@ class TushareProvider(DataProvider):
             }
 
         raise Exception("Tushare 融资融券数据为空")
+
+    async def get_lhb_data(self) -> List[Dict]:
+        """获取最近交易日龙虎榜明细。"""
+        self._check_available()
+        last_error = None
+        for offset in range(0, 11):
+            trade_date = (datetime.now() - timedelta(days=offset)).strftime("%Y%m%d")
+            try:
+                frame = await self._call_api("top_list", trade_date=trade_date)
+                if not frame.empty:
+                    return self._normalize_lhb(frame)
+            except Exception as error:
+                last_error = error
+        raise last_error or Exception("Tushare 龙虎榜数据为空")
+
+    async def get_lhb_detail(self, date: str) -> List[Dict]:
+        """获取指定交易日龙虎榜明细。"""
+        self._check_available()
+        frame = await self._call_api("top_list", trade_date=str(date).replace("-", ""))
+        return self._normalize_lhb(frame)
+
+    @staticmethod
+    def _normalize_lhb(frame: pd.DataFrame) -> List[Dict]:
+        if frame.empty:
+            return []
+        records = []
+        for row in frame.to_dict("records"):
+            record = dict(row)
+            record["stock_code"] = record.get("stock_code") or record.get("ts_code") or record.get("代码", "")
+            record["stock_name"] = record.get("stock_name") or record.get("name") or record.get("名称", "")
+            record["netBuy"] = record.get("netBuy", record.get("net_amount", 0)) or 0
+            record["amount"] = record.get("amount", record.get("net_amount", 0)) or 0
+            records.append(record)
+        return records
+
+    async def get_news(self, keyword: str = "财联社", limit: int = 50, api: str = "news") -> pd.DataFrame:
+        """获取 Tushare 新闻资讯并转换为事件页统一字段。"""
+        self._check_available()
+        endpoint = "major_news" if api in {"major_news", "tushare_major_news"} else "news"
+        now = datetime.now()
+        params = {
+            "start_date": (now - timedelta(days=2)).strftime("%Y%m%d%H%M%S"),
+            "end_date": now.strftime("%Y%m%d%H%M%S"),
+        }
+        source_map = {"财联社": "cls", "新浪财经": "sina", "华尔街见闻": "wallstreetcn"}
+        source = source_map.get(keyword, keyword if keyword in {"cls", "sina", "wallstreetcn"} else "")
+        if source:
+            params["src"] = source
+        frame = await self._call_api(endpoint, **params)
+        if frame.empty:
+            return frame
+
+        def first(row: Dict[str, Any], *keys: str) -> Any:
+            for key in keys:
+                if row.get(key) not in (None, ""):
+                    return row[key]
+            return ""
+
+        rows = []
+        # Tushare news / major_news 不接受 limit 参数，统一在本地截取结果。
+        for row in frame.to_dict("records")[:max(limit, 0)]:
+            title = first(row, "title", "新闻标题", "content")
+            content = first(row, "content", "新闻内容", "title")
+            rows.append({
+                "新闻标题": str(title),
+                "新闻内容": str(content),
+                "新闻链接": str(first(row, "url", "新闻链接")),
+                "发布时间": str(first(row, "pub_time", "pubTime", "datetime", "date", "trade_date")),
+                "来源": str(first(row, "src", "source")) or "Tushare",
+            })
+        return pd.DataFrame(rows)
 
     # ==================== 工具方法 ====================
 

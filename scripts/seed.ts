@@ -393,10 +393,10 @@ async function main() {
 
   // 创建持仓
   const holdings = [
-    { ticker: '510300', name: '沪深300ETF', quantity: 10000, avgCost: 4.25 },
-    { ticker: '512480', name: '半导体ETF', quantity: 5000, avgCost: 1.85 },
-    { ticker: '588000', name: '科创50ETF', quantity: 8000, avgCost: 1.12 },
-    { ticker: '515880', name: '通信ETF', quantity: 3000, avgCost: 1.45 },
+    { ticker: '510300', name: '沪深300ETF', quantity: 10000, unitNav: 4.25 },
+    { ticker: '512480', name: '半导体ETF', quantity: 5000, unitNav: 1.85 },
+    { ticker: '588000', name: '科创50ETF', quantity: 8000, unitNav: 1.12 },
+    { ticker: '515880', name: '通信ETF', quantity: 3000, unitNav: 1.45 },
   ]
 
   for (const holding of holdings) {

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db/prisma'
+import { fetchFundCategory } from '@/lib/services/fund-category.service'
+import { matchHoldingToGraphIndustry } from '@/lib/services/portfolio-industry-matcher.service'
 
 interface RouteContext {
   params: Promise<{ id: string }>
@@ -40,11 +42,12 @@ export async function POST(request: NextRequest, context: RouteContext) {
   try {
     const { id } = await context.params
     const body = await request.json()
-    const { ticker, name, quantity, avgCost, market } = body
+    const { ticker, name, quantity, market, industryDomain } = body
+    const { unitNav } = body
 
-    if (!ticker || !name || quantity == null || avgCost == null) {
+    if (!ticker || !name || quantity == null || unitNav == null) {
       return NextResponse.json(
-        { success: false, error: 'ETF代码、名称、份额和成本不能为空' },
+        { success: false, error: '基金代码、名称、份额和单位净值不能为空' },
         { status: 400 }
       )
     }
@@ -58,24 +61,34 @@ export async function POST(request: NextRequest, context: RouteContext) {
       )
     }
 
-    // 检查是否已存在同一ETF持仓，存在则合并
+    // 检查是否已存在同一基金持仓，存在则覆盖当前快照
     const existing = await prisma.holding.findFirst({
       where: { portfolioId: id, ticker },
     })
 
     let holding
+    const [category, aiMatch] = await Promise.all([
+      fetchFundCategory(ticker),
+      industryDomain ? Promise.resolve(null) : matchHoldingToGraphIndustry({ ticker, name, category: null }),
+    ])
+    const manualIndustry = typeof industryDomain === 'string' && industryDomain.trim()
+      ? { industryDomain: industryDomain.trim(), industryDomainCode: null, industryDomainSource: 'manual', industryDomainConfidence: 1 }
+      : null
+    const automaticIndustry = manualIndustry || (aiMatch ? {
+      industryDomain: aiMatch.industryDomain,
+      industryDomainCode: aiMatch.industryDomainCode ?? null,
+      industryDomainSource: aiMatch.source,
+      industryDomainConfidence: aiMatch.confidence ?? null,
+    } : null)
     if (existing) {
-      // 合并持仓：加权平均成本
-      const totalQuantity = existing.quantity + quantity
-      const totalCost = existing.avgCost * existing.quantity + avgCost * quantity
-      const newAvgCost = totalCost / totalQuantity
-
       holding = await prisma.holding.update({
         where: { id: existing.id },
         data: {
-          quantity: totalQuantity,
-          avgCost: newAvgCost,
-          currentPrice: body.currentPrice ?? existing.currentPrice,
+          name,
+          ...(category ? { category } : {}),
+          quantity,
+          unitNav,
+          ...(existing.industryDomainSource === 'manual' && !manualIndustry ? {} : automaticIndustry ? { ...automaticIndustry } : {}),
         },
       })
     } else {
@@ -85,9 +98,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ticker,
           market: market ?? 'A',
           name,
+          ...(category ? { category } : {}),
+          ...(automaticIndustry ? { ...automaticIndustry } : {}),
           quantity,
-          avgCost,
-          currentPrice: body.currentPrice ?? null,
+          unitNav,
         },
       })
     }
@@ -107,7 +121,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
   try {
     const { id } = await context.params
     const body = await request.json()
-    const { holdingId, quantity, avgCost, currentPrice } = body
+    const { holdingId, quantity, unitNav, industryDomain } = body
 
     if (!holdingId) {
       return NextResponse.json(
@@ -128,12 +142,26 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       )
     }
 
+    const hasIndustryDomain = Object.prototype.hasOwnProperty.call(body, 'industryDomain')
+    const normalizedIndustryDomain = typeof industryDomain === 'string' ? industryDomain.trim() : ''
+    const [category, aiMatch] = await Promise.all([
+      fetchFundCategory(existing.ticker),
+      hasIndustryDomain || existing.industryDomain ? Promise.resolve(null) : matchHoldingToGraphIndustry({ ticker: existing.ticker, name: existing.name, category: existing.category }),
+    ])
+    const industryUpdate = hasIndustryDomain
+      ? normalizedIndustryDomain
+        ? { industryDomain: normalizedIndustryDomain, industryDomainCode: null, industryDomainSource: 'manual', industryDomainConfidence: 1 }
+        : { industryDomain: null, industryDomainCode: null, industryDomainSource: null, industryDomainConfidence: null }
+      : aiMatch
+        ? { industryDomain: aiMatch.industryDomain, industryDomainCode: aiMatch.industryDomainCode ?? null, industryDomainSource: aiMatch.source, industryDomainConfidence: aiMatch.confidence ?? null }
+        : {}
     const holding = await prisma.holding.update({
       where: { id: holdingId },
       data: {
+        ...(category ? { category } : {}),
+        ...industryUpdate,
         ...(quantity != null && { quantity }),
-        ...(avgCost != null && { avgCost }),
-        ...(currentPrice != null && { currentPrice }),
+        ...(unitNav != null && { unitNav }),
       },
     })
 

@@ -165,7 +165,7 @@ async def get_etf_realtime(
     """获取ETF实时行情
 
     通过统一数据服务获取，自动按配置的优先级降级：
-    AKShare -> 雪球 -> Tushare -> 缓存
+    Tushare -> AKShare -> 雪球 -> 缓存
     """
     try:
         # 如果没有指定ticker，返回热门ETF
@@ -269,8 +269,7 @@ async def get_etf_detail(ticker: str):
 async def get_etf_holdings(ticker: str):
     """获取ETF持仓明细
 
-    注意：当前AKShare未提供ETF持仓明细的公开接口
-    建议使用定期报告或付费数据源获取持仓数据
+    返回统一的 ETF 底层股票及占比协议。
     """
     try:
         holdings = await etf_provider.get_holdings(ticker)
@@ -279,10 +278,20 @@ async def get_etf_holdings(ticker: str):
         return {
             "success": True,
             "data": holdings,
-            "message": "当前数据源暂不支持持仓明细查询，建议使用基金季报或付费API" if not holdings else None
+            "message": "当前数据源未返回持仓明细" if not holdings else None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/holdings/batch")
+async def get_etf_holdings_batch(tickers: str = Query(..., description="逗号分隔的 ETF 代码")):
+    """批量获取 ETF 持仓，供产业企业分析聚合使用。"""
+    symbols = list(dict.fromkeys(item.strip() for item in tickers.split(',') if item.strip()))
+    results = {}
+    for ticker in symbols[:50]:
+        results[ticker] = await etf_provider.get_holdings(ticker)
+    return {"success": True, "data": results, "requested": symbols}
 
 
 @router.get("/{ticker}/info")

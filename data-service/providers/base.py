@@ -170,6 +170,10 @@ class DataProvider(ABC):
         """获取指定日期龙虎榜详细数据（可选实现）"""
         raise NotImplementedError(f"{self.name} 不支持龙虎榜详细数据")
 
+    async def get_market_volume_amplification(self, lookback_days: int = 20) -> Dict:
+        """获取大盘成交额相对近期均值的放大倍数（可选实现）。"""
+        raise NotImplementedError(f"{self.name} 不支持大盘成交额放大分析")
+
     # ==================== 新闻 ====================
 
     async def get_news(self, keyword: str = "财联社", limit: int = 50, api: str = "stock_news_em") -> pd.DataFrame:

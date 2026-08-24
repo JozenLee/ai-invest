@@ -25,6 +25,76 @@ const anthropic = new Anthropic({
   baseURL: process.env.ANTHROPIC_BASE_URL,
 })
 
+function stripJsonFence(value: string) {
+  return value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+}
+
+function extractStringField(text: string, key: string, nextKeys: string[] = []) {
+  const marker = `"${key}"`
+  const markerStart = text.indexOf(marker)
+  if (markerStart < 0) return undefined
+  const colon = text.indexOf(':', markerStart + marker.length)
+  const valueStart = text.indexOf('"', colon + 1)
+  if (colon < 0 || valueStart < 0) return undefined
+  const boundaries = nextKeys.map((nextKey) => {
+    const match = new RegExp(`",\\s*"${nextKey}"\\s*:`).exec(text.slice(valueStart + 1))
+    return match ? valueStart + 1 + match.index : -1
+  }).filter((index) => index >= 0)
+  const valueEnd = boundaries.length > 0 ? Math.min(...boundaries) : text.lastIndexOf('"')
+  if (valueEnd <= valueStart) return undefined
+  return text.slice(valueStart + 1, valueEnd).replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+}
+
+function extractBalanced(text: string, start: number, open: string, close: string) {
+  let depth = 0
+  let quoted = false
+  let escaped = false
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index]
+    if (quoted) {
+      if (escaped) escaped = false
+      else if (char === '\\') escaped = true
+      else if (char === '"') quoted = false
+      continue
+    }
+    if (char === '"') quoted = true
+    else if (char === open) depth += 1
+    else if (char === close) {
+      depth -= 1
+      if (depth === 0) return text.slice(start, index + 1)
+    }
+  }
+  return undefined
+}
+
+function parseAdviceResponse(content: string) {
+  const text = stripJsonFence(content)
+  try {
+    return JSON.parse(text)
+  } catch {
+    const recommendationsMarker = text.indexOf('"recommendations"')
+    const arrayStart = recommendationsMarker >= 0 ? text.indexOf('[', recommendationsMarker) : -1
+    const arrayText = arrayStart >= 0 ? extractBalanced(text, arrayStart, '[', ']') : undefined
+    let recommendations: unknown[] = []
+    if (arrayText) {
+      try {
+        recommendations = JSON.parse(arrayText)
+      } catch {
+        recommendations = (arrayText.match(/\{[\s\S]*?\}/g) || []).map((item) => {
+          try { return JSON.parse(item) } catch { return {} }
+        })
+      }
+    }
+    return {
+      industry: extractStringField(text, 'industry', ['strategy']),
+      strategy: extractStringField(text, 'strategy', ['recommendations']),
+      recommendations,
+      riskWarning: extractStringField(text, 'riskWarning', ['summary']),
+      summary: extractStringField(text, 'summary'),
+    }
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -32,6 +102,7 @@ export async function POST(request: NextRequest) {
       industry,
       companyTrend,
       marketTrend,
+      newsTrend,
       etfAnalysis,
       preferences,
       positions,
@@ -39,6 +110,7 @@ export async function POST(request: NextRequest) {
       industry?: string
       companyTrend?: string
       marketTrend?: string
+      newsTrend?: string
       etfAnalysis?: ETFAnalysis[]
       preferences?: Preferences
       positions?: Position[]
@@ -87,6 +159,9 @@ ${companyTrend || '暂无数据'}
 ## 大盘趋势
 ${marketTrend || '暂无数据'}
 
+## 资讯与产业链影响
+${newsTrend || '暂无数据'}
+
 ## 相关ETF
 ${etfList}
 
@@ -130,25 +205,7 @@ ${etfList}
 
     const content = message.content[0].type === 'text' ? message.content[0].text : ''
 
-    // 尝试解析JSON
-    let advice
-    try {
-      const jsonMatch = content.match(/```json\n([\s\S]+?)\n```/)
-      if (jsonMatch) {
-        advice = JSON.parse(jsonMatch[1])
-      } else {
-        // 如果没有JSON格式，尝试直接解析
-        advice = JSON.parse(content)
-      }
-    } catch (parseError) {
-      // 如果解析失败，返回纯文本格式
-      advice = {
-        industry,
-        strategy: content,
-        recommendations: [],
-        summary: content
-      }
-    }
+    const advice = parseAdviceResponse(content)
 
     return NextResponse.json({ success: true, advice })
   } catch (error) {

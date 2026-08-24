@@ -81,4 +81,9 @@ data-service/__pycache__/
 .env-backups/
 .claude/
 
+# local runtime artifacts
+.xhs-mcp/
+/cookies.json
+/logs/
+
 /src/generated/prisma

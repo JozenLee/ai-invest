@@ -36,41 +36,41 @@ class CategoryConfig:
 DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     # 指数
     "index_spot": CategoryConfig(
-        sources=["akshare", "tushare", "xueqiu"],
+        sources=["tushare", "akshare", "xueqiu"],
         cache_ttl=30,
     ),
     "index_daily": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=300,
     ),
     "index_realtime": CategoryConfig(
-        sources=["akshare", "tushare", "xueqiu"],
+        sources=["tushare", "akshare", "xueqiu"],
         cache_ttl=30,
     ),
     "index_list": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=3600,  # 指数列表变化不频繁
     ),
     # 个股
     "stock_spot": CategoryConfig(
-        sources=["akshare", "tushare", "xueqiu"],
+        sources=["tushare", "akshare", "xueqiu"],
         cache_ttl=30,
     ),
     "stock_daily": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=300,
     ),
     # ETF
     "etf_realtime": CategoryConfig(
-        sources=["akshare", "xueqiu", "tushare"],
+        sources=["tushare", "akshare", "xueqiu"],
         cache_ttl=30,
     ),
     "etf_daily": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=300,
     ),
     "etf_nav": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=300,
     ),
     "etf_list": CategoryConfig(
@@ -79,52 +79,59 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(
-        sources=["eastmoney_direct", "akshare", "sina"],  # 东财直连优先，绕过代理问题
+        sources=["tushare"],
         cache_ttl=600,
-        fallback_to_file=True,
+        fallback_to_file=False,
     ),
     "sector_capital_flow": CategoryConfig(
-        sources=["akshare", "sina", "tushare"],
+        sources=["tushare"],
         cache_ttl=600,
+        fallback_to_file=False,
     ),
     "northbound_flow": CategoryConfig(
-        sources=["eastmoney_direct", "akshare", "sina", "tushare"],  # 东财直连优先
+        sources=["tushare"],
         cache_ttl=600,
+        fallback_to_file=False,
     ),
     "northbound_history": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=600,
     ),
     "stock_capital_flow": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=600,
     ),
     "margin_data": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=600,
     ),
     "market_fund_flow_rank": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=600,
     ),
     # 新闻资讯
     "news": CategoryConfig(
-        sources=["newsnow", "akshare", "xueqiu"],  # NewsNow优先：多平台聚合
+        sources=["tushare", "newsnow", "akshare", "xueqiu"],
         cache_ttl=300,
         fallback_to_file=False,
     ),
     "market_sentiment": CategoryConfig(
-        sources=["akshare", "tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=60,
     ),
     # 龙虎榜和个股资金流向
     "lhb_data": CategoryConfig(
-        sources=["akshare"],
+        sources=["tushare"],
         cache_ttl=600,
-        fallback_to_file=True,
+        fallback_to_file=False,
+    ),
+    "market_volume_amplification": CategoryConfig(
+        sources=["tushare"],
+        cache_ttl=600,
+        fallback_to_file=False,
     ),
     "lhb_detail": CategoryConfig(
-        sources=["akshare"],
+        sources=["tushare", "akshare"],
         cache_ttl=3600,
         fallback_to_file=True,
     ),
@@ -224,6 +231,7 @@ class ProviderRegistry:
 
     def __init__(self, custom_config: Optional[Dict[str, CategoryConfig]] = None):
         self._providers: Dict[str, DataProvider] = {}
+        self._last_sources: Dict[str, str] = {}
         self.cache = CacheManager()
         # 合并默认配置和自定义配置
         self._config = {**DEFAULT_CATEGORY_CONFIG}
@@ -242,6 +250,21 @@ class ProviderRegistry:
     def list_providers(self) -> List[str]:
         """列出所有已注册的数据源名称"""
         return list(self._providers.keys())
+
+    def get_last_source(self, category: str) -> str:
+        """返回某类数据最近一次实际命中的数据源。"""
+        return self._last_sources.get(category, "不可用")
+
+    @staticmethod
+    def _source_label(source_name: str) -> str:
+        return {
+            "tushare": "Tushare",
+            "akshare": "AKShare",
+            "eastmoney_direct": "东方财富",
+            "sina": "新浪财经",
+            "xueqiu": "雪球",
+            "cache": "缓存",
+        }.get(source_name, source_name)
 
     async def fetch(self, category: str, method: str, cache_key: Optional[str] = None,
                     cache_ttl: Optional[int] = None, **kwargs) -> Any:
@@ -271,7 +294,9 @@ class ProviderRegistry:
         # 先检查内存缓存
         if cache_key:
             cached = self.cache.get_memory(cache_key)
-            if cached is not None:
+            if cached is not None and self._is_valid_category_result(category, cached):
+                # 内存缓存保留首次获取时的真实来源；只有没有来源记录时才标记为缓存。
+                self._last_sources.setdefault(category, "缓存")
                 return cached
 
         last_error = None
@@ -285,7 +310,8 @@ class ProviderRegistry:
                 result = await getattr(provider, method)(**kwargs)
 
                 # 判断结果是否有效
-                if self._is_valid_result(result):
+                if self._is_valid_result(result) and self._is_valid_category_result(category, result):
+                    self._last_sources[category] = self._source_label(source_name)
                     # 写入缓存
                     if cache_key:
                         serializable = self._to_serializable(result)
@@ -303,14 +329,26 @@ class ProviderRegistry:
                 continue
 
         # 所有源都失败，尝试文件缓存降级
-        if cache_key and config.fallback_to_file:
+        # 交易时段禁止指数行情回退到文件缓存。文件缓存通常是上一交易日收盘，
+        # 若在盘中返回它会被上层误认为实时行情。
+        allow_file_fallback = not (
+            category == "index_spot" and self._is_market_open()
+        )
+        if cache_key and config.fallback_to_file and allow_file_fallback:
             cached = self.cache.get_file(cache_key)
-            if cached is not None:
+            if cached is not None and self._is_valid_category_result(category, cached):
                 print(f"[Registry] 所有数据源失败，使用文件缓存: {cache_key}")
+                self._last_sources[category] = "缓存"
                 self.cache.set_memory(cache_key, cached, ttl_seconds=ttl)
                 return cached
 
         raise last_error or Exception(f"无可用数据源: {category}")
+
+    @staticmethod
+    def _is_market_open() -> bool:
+        """判断是否处于A股交易时段，避免盘中使用收盘缓存。"""
+        from utils.trading_hours import is_trading_hours
+        return is_trading_hours()
 
     @staticmethod
     def _is_valid_result(result: Any) -> bool:
@@ -333,6 +371,14 @@ class ProviderRegistry:
             return len(result) > 0
         if isinstance(result, list):
             return len(result) > 0
+        return True
+
+    @staticmethod
+    def _is_valid_category_result(category: str, result: Any) -> bool:
+        """对北向资金占位零值做类别级校验。"""
+        if category in {"northbound_flow", "northbound_history"} and isinstance(result, dict):
+            value = result.get("value")
+            return value is not None and value != 0
         return True
 
     @staticmethod

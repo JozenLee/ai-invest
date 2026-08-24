@@ -133,7 +133,7 @@ class TestCategoryConfig:
         custom = {"index_spot": CategoryConfig(sources=["xueqiu"])}
         registry = ProviderRegistry(custom_config=custom)
 
-        assert registry._config["index_daily"].sources == ["akshare", "tushare"]
+        assert registry._config["index_daily"].sources == ["tushare", "akshare"]
 
     def test_unknown_category_raises(self):
         """未知的数据类别抛出异常"""

@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
+export const maxDuration = 600
+
+async function readPayload(response: Response) {
+  const text = await response.text()
+  if (!text) return {}
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    return { error: text }
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -25,25 +37,36 @@ export async function GET(
         headers: {
           'Content-Type': 'application/json',
         },
-        signal: AbortSignal.timeout(120000), // 120 second timeout for comprehensive analysis
+        signal: AbortSignal.timeout(600000),
       }
     )
 
+    const payload = await readPayload(response)
+
     if (!response.ok) {
-      const error = await response.json()
       return NextResponse.json(
-        { success: false, error: error.detail || 'Analysis failed' },
+        {
+          success: false,
+          error: payload.detail || payload.error || payload.error_detail || 'Analysis failed',
+          error_detail: payload.error_detail,
+          data_quality: payload.data_quality,
+        },
         { status: response.status }
       )
     }
 
-    const data = await response.json()
-    return NextResponse.json(data)
+    return NextResponse.json(payload)
   } catch (error) {
     console.error('Industry market analysis error:', error)
+    const isTimeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
-      { status: 500 }
+      {
+        success: false,
+        error: isTimeout
+          ? '大盘分析耗时较长，数据服务在600秒内未返回。请稍后重试。'
+          : error instanceof Error ? error.message : '大盘分析服务暂时不可用',
+      },
+      { status: isTimeout ? 504 : 502 }
     )
   }
 }

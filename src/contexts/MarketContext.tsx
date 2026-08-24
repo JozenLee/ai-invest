@@ -189,6 +189,8 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
   // 初始加载
   useEffect(() => {
+    // Intentional client-side initialization: hydrate the shared market context on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData()
   }, [fetchData])
 
@@ -226,11 +228,11 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
     const statusBadge: StatusBadge = marketMeta
       ? {
-          icon: marketMeta.isRealtime ? '🟢' : '⚪',
+          icon: marketMeta.isRealtime ? 'live' : 'closed',
           label: marketMeta.isRealtime ? '交易中' : marketMeta.statusText,
           variant: marketMeta.isRealtime ? 'default' : 'outline',
         }
-      : { icon: '⏳', label: '获取中...', variant: 'outline' }
+      : { icon: 'loader', label: '获取中...', variant: 'outline' }
 
     const sentimentDisplay: SentimentDisplay = {
       score: sentiment,

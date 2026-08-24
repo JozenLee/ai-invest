@@ -3,9 +3,20 @@ Stock Data Provider - 统一的股票数据提供者
 支持国内外股票的财报、公告、K线、实时行情等数据获取
 """
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
 import logging
-import akshare as ak
+import os
+import asyncio
+from datetime import datetime, timedelta
+
+import requests
+
+try:
+    import akshare as ak
+except ImportError:
+    ak = None
+
+from providers.openbb_provider import OpenBBProvider
+from providers.tushare_provider import TushareProvider
 
 
 class StockProvider:
@@ -13,8 +24,35 @@ class StockProvider:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.domestic_providers = ['akshare', 'tushare']  # 国内股票数据源
-        self.international_providers = ['yfinance']  # 国外股票数据源
+        self.domestic_providers = ['tushare', 'eastmoney_direct', 'akshare']
+        self.international_providers = ['openbb']
+        self.openbb = OpenBBProvider()
+        self.tushare = TushareProvider()
+        self.timeout_seconds = max(1, int(os.getenv('STOCK_PROVIDER_TIMEOUT_SECONDS', '20')))
+
+    def capabilities(self) -> Dict[str, Any]:
+        return {
+            'eastmoney_direct': {
+                'available': True,
+                'markets': ['cn'],
+                'datasets': ['kline', 'announcements'],
+            },
+            'akshare': {
+                'available': ak is not None,
+                'markets': ['cn'],
+                'datasets': ['info', 'kline', 'financial', 'announcements'],
+            },
+            'tushare': {
+                'available': self.tushare.available,
+                'markets': ['cn'] if self.tushare.available else [],
+                'datasets': ['kline', 'financial', 'announcements'],
+            },
+            'openbb': {
+                'available': self.openbb.available,
+                'markets': ['us', 'hk'] if self.openbb.available else [],
+                'datasets': ['info', 'kline', 'financial', 'announcements'],
+            },
+        }
 
     async def get_stock_info(self, symbol: str, market: str = 'cn') -> Optional[Dict[str, Any]]:
         """
@@ -27,18 +65,9 @@ class StockProvider:
         Returns:
             股票基本信息字典
         """
-        try:
-            if market == 'cn':
-                return await self._get_cn_stock_info(symbol)
-            elif market == 'us':
-                return await self._get_us_stock_info(symbol)
-            elif market == 'hk':
-                return await self._get_hk_stock_info(symbol)
-            else:
-                raise ValueError(f"Unsupported market: {market}")
-        except Exception as e:
-            self.logger.error(f"Error getting stock info for {symbol}: {e}")
-            return None
+        if market == 'cn':
+            return await self._get_tushare_stock_info(symbol)
+        return await self.openbb.get_stock_info(symbol, market)
 
     async def get_financial_report(
         self,
@@ -57,24 +86,9 @@ class StockProvider:
         Returns:
             财报数据列表
         """
-        try:
-            if market == 'cn':
-                if report_type == 'balance':
-                    df = ak.stock_financial_report_sina(stock=symbol, symbol="资产负债表")
-                elif report_type == 'income':
-                    df = ak.stock_financial_report_sina(stock=symbol, symbol="利润表")
-                elif report_type == 'cashflow':
-                    df = ak.stock_financial_report_sina(stock=symbol, symbol="现金流量表")
-                else:
-                    raise ValueError(f"Unsupported report type: {report_type}")
-
-                return df.to_dict('records') if not df.empty else []
-            else:
-                # TODO: 实现其他市场的财报数据获取
-                return []
-        except Exception as e:
-            self.logger.error(f"Error getting financial report for {symbol}: {e}")
-            return None
+        if market == 'cn':
+            return await self._get_tushare_financial_report(symbol, report_type)
+        return await self.openbb.get_financial_report(symbol, report_type, market)
 
     async def get_announcements(
         self,
@@ -95,24 +109,9 @@ class StockProvider:
         Returns:
             公告列表
         """
-        try:
-            if market == 'cn':
-                # 使用东方财富的公告数据
-                df = ak.stock_notice_report(symbol=symbol)
-
-                # 日期过滤
-                if start_date:
-                    df = df[df['公告日期'] >= start_date]
-                if end_date:
-                    df = df[df['公告日期'] <= end_date]
-
-                return df.to_dict('records') if not df.empty else []
-            else:
-                # TODO: 实现其他市场的公告数据获取
-                return []
-        except Exception as e:
-            self.logger.error(f"Error getting announcements for {symbol}: {e}")
-            return None
+        if market == 'cn':
+            return await self._get_tushare_announcements(symbol, start_date, end_date)
+        return await self.openbb.get_announcements(symbol, start_date, end_date, market)
 
     async def get_kline(
         self,
@@ -137,27 +136,17 @@ class StockProvider:
         Returns:
             K线数据列表
         """
-        try:
-            if market == 'cn':
-                if period == 'daily':
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date,
-                                           end_date=end_date, adjust=adjust)
-                elif period == 'weekly':
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="weekly", start_date=start_date,
-                                           end_date=end_date, adjust=adjust)
-                elif period == 'monthly':
-                    df = ak.stock_zh_a_hist(symbol=symbol, period="monthly", start_date=start_date,
-                                           end_date=end_date, adjust=adjust)
-                else:
-                    raise ValueError(f"Unsupported period: {period}")
-
-                return df.to_dict('records') if not df.empty else []
-            else:
-                # TODO: 实现其他市场的K线数据获取
+        if market == 'cn':
+            if not self.tushare.available:
                 return []
-        except Exception as e:
-            self.logger.error(f"Error getting kline for {symbol}: {e}")
-            return None
+            frame = await self.tushare.get_stock_kline(
+                symbol,
+                period=period,
+                start_date=self._tushare_date(start_date),
+                end_date=self._tushare_date(end_date),
+            )
+            return frame.to_dict('records') if frame is not None and not frame.empty else []
+        return await self.openbb.get_kline(symbol, start_date, end_date, market)
 
     async def get_realtime_quote(
         self,
@@ -174,39 +163,292 @@ class StockProvider:
         Returns:
             实时行情列表
         """
-        try:
-            if market == 'cn':
-                # 获取实时行情
-                df = ak.stock_zh_a_spot_em()
-
-                # 过滤指定股票
-                if symbols:
-                    df = df[df['代码'].isin(symbols)]
-
-                return df.to_dict('records') if not df.empty else []
-            else:
-                # TODO: 实现其他市场的实时行情获取
+        if market == 'cn':
+            if not self.tushare.available:
                 return []
-        except Exception as e:
-            self.logger.error(f"Error getting realtime quote: {e}")
-            return None
+            frame = await self.tushare.get_stock_spot(symbols)
+            return frame.to_dict('records') if frame is not None and not frame.empty else []
+        return None
 
     async def _get_cn_stock_info(self, symbol: str) -> Dict[str, Any]:
         """获取国内股票基本信息"""
         try:
             # 从实时行情中获取基本信息
             df = ak.stock_individual_info_em(symbol=symbol)
-            return df.to_dict('records')[0] if not df.empty else {}
+            if df.empty:
+                return {}
+            # AKShare 返回的是“item/value”纵表，旧逻辑只取第一行，导致 PE/PB 等字段全部被丢弃。
+            if {'item', 'value'}.issubset({str(column).lower() for column in df.columns}):
+                columns = {str(column).lower(): column for column in df.columns}
+                return {
+                    str(row.get(columns['item'])): row.get(columns['value'])
+                    for row in df.to_dict('records')
+                    if row.get(columns['item']) not in (None, '')
+                }
+            return df.to_dict('records')[0]
         except Exception as e:
             self.logger.error(f"Error getting CN stock info: {e}")
             return {}
 
+    @staticmethod
+    def _tushare_date(value: Optional[str]) -> str:
+        """把分析器使用的 ISO 日期转换为 Tushare 所需的 YYYYMMDD。"""
+        return str(value or '').replace('-', '')
+
+    async def _get_tushare_stock_info(self, symbol: str) -> Dict[str, Any]:
+        """通过 Tushare stock_basic 获取个股基础信息。"""
+        if not self.tushare.available:
+            return {}
+        try:
+            ts_code = self.tushare._to_ts_code(
+                symbol,
+                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
+            )
+            df = await self.tushare.request_dataframe('stock_basic', ts_code=ts_code)
+            return df.to_dict('records')[0] if df is not None and not df.empty else {}
+        except Exception as error:
+            self.logger.warning("Tushare基本信息失败 %s: %s", symbol, error)
+            return {}
+
+    async def _get_tushare_financial_report(self, symbol: str, report_type: str) -> List[Dict[str, Any]]:
+        """通过 Tushare 三大报表接口获取并归一化企业财报。"""
+        if not self.tushare.available:
+            return []
+        try:
+            ts_code = self.tushare._to_ts_code(
+                symbol,
+                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
+            )
+            endpoint = {
+                'balance': 'balancesheet',
+                'income': 'income',
+                'cashflow': 'cashflow',
+            }.get(report_type)
+            if not endpoint:
+                raise ValueError(f"Unsupported report type: {report_type}")
+            frame = await self.tushare.request_dataframe(endpoint, ts_code=ts_code)
+            if frame is None or frame.empty:
+                return []
+
+            # income 本身不包含毛利率、净利率等质量指标；补充同口径的
+            # fina_indicator，供综合分析器计算盈利质量和现金流信号。
+            if report_type == 'income':
+                try:
+                    indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+                    if indicator is not None and not indicator.empty and 'end_date' in frame.columns and 'end_date' in indicator.columns:
+                        indicator_fields = [
+                            'end_date', 'grossprofit_margin', 'netprofit_margin',
+                            'n_cashflow_act', 'ocf_to_or', 'roe', 'roa',
+                        ]
+                        available_fields = [field for field in indicator_fields if field in indicator.columns]
+                        frame = frame.merge(
+                            indicator[available_fields].drop_duplicates('end_date'),
+                            on='end_date',
+                            how='left',
+                            suffixes=('', '_indicator'),
+                        )
+                except Exception as error:
+                    self.logger.info("Tushare财务指标补充失败 %s: %s", symbol, error)
+            return [self._normalize_financial_row(row) for row in frame.to_dict('records')]
+        except Exception as error:
+            self.logger.warning("Tushare财报失败 %s: %s", symbol, error)
+            return []
+
+    async def _get_eastmoney_announcements(
+        self,
+        symbol: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """直接读取东方财富公告接口，绕过 AKShare 公告包装层。"""
+        def load() -> List[Dict[str, Any]]:
+            params = {
+                'sr': '-1',
+                'st': '公告日期',
+                'page_size': '100',
+                'page_index': '1',
+                'ann_type': 'SHA',
+                'client_source': 'web',
+                'f_node': '0',
+                'f_page': '0',
+                'stock_list': symbol,
+            }
+            response = requests.get(
+                'https://np-anotice-stock.eastmoney.com/api/security/ann',
+                params=params,
+                headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://data.eastmoney.com/'},
+                timeout=self.timeout_seconds,
+                proxies={'http': None, 'https': None},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = ((payload.get('data') or {}).get('list') or [])
+            normalized: List[Dict[str, Any]] = []
+            for row in rows:
+                date = str(row.get('notice_date') or row.get('公告日期') or '')[:10]
+                if start_date and date and date < start_date:
+                    continue
+                if end_date and date and date > end_date:
+                    continue
+                title = row.get('notice_title') or row.get('公告标题') or row.get('title')
+                if not title:
+                    continue
+                normalized.append({
+                    '公告标题': str(title),
+                    '公告日期': date,
+                    '网址': row.get('url') or row.get('art_url') or '',
+                    'source': 'eastmoney_direct',
+                })
+            return normalized
+
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as error:
+            self.logger.warning("东方财富公告失败 %s: %s", symbol, error)
+            return []
+
+    async def _get_eastmoney_kline(
+        self,
+        symbol: str,
+        period: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+        adjust: str,
+    ) -> List[Dict[str, Any]]:
+        """直接读取东方财富个股 K 线，作为企业行情的首选来源。"""
+        if period not in {'daily', 'weekly', 'monthly'}:
+            return []
+
+        def load() -> List[Dict[str, Any]]:
+            market_prefix = '1' if symbol.startswith(('5', '6', '688', '689')) else '0'
+            period_code = {'daily': '101', 'weekly': '102', 'monthly': '103'}[period]
+            adjust_code = {'': '0', 'qfq': '1', 'hfq': '2'}.get(adjust, '1')
+            params = {
+                'fields1': 'f1,f2,f3,f4,f5,f6',
+                'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f116',
+                'ut': '7eea3edcaed734bea9cbfc24409ed989',
+                'klt': period_code,
+                'fqt': adjust_code,
+                'secid': f'{market_prefix}.{symbol}',
+                'beg': self._tushare_date(start_date) or '0',
+                'end': self._tushare_date(end_date) or '20500101',
+            }
+            response = requests.get(
+                'https://push2his.eastmoney.com/api/qt/stock/kline/get',
+                params=params,
+                headers={'User-Agent': 'Mozilla/5.0', 'Referer': 'https://quote.eastmoney.com/'},
+                timeout=self.timeout_seconds,
+                proxies={'http': None, 'https': None},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            rows = ((payload.get('data') or {}).get('klines') or [])
+            result: List[Dict[str, Any]] = []
+            for row in rows:
+                values = str(row).split(',')
+                if len(values) < 7:
+                    continue
+                result.append({
+                    '日期': values[0],
+                    '开盘': self._to_number(values[1]),
+                    '收盘': self._to_number(values[2]),
+                    '最高': self._to_number(values[3]),
+                    '最低': self._to_number(values[4]),
+                    '成交量': self._to_number(values[5]),
+                    '成交额': self._to_number(values[6]),
+                    '涨跌幅': self._to_number(values[8]) if len(values) > 8 else None,
+                    'source': 'eastmoney_direct',
+                })
+            return result
+
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as error:
+            self.logger.info("东方财富行情不可用，继续回退 %s: %s", symbol, error)
+            return []
+
+    @staticmethod
+    def _to_number(value: Any) -> Optional[float]:
+        try:
+            return float(value) if value not in (None, '', '-') else None
+        except (TypeError, ValueError):
+            return None
+
+    async def _get_tushare_announcements(
+        self,
+        symbol: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """通过 Tushare anns_d 补充 A 股全量公告。"""
+        if not self.tushare.available:
+            return []
+        try:
+            ts_code = self.tushare._to_ts_code(
+                symbol,
+                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
+            )
+            # Promax 的 anns_d 要求 ann_date，不能直接传 start_date/end_date。
+            # 先取分析区间结束日，避免把不被接口接受的范围参数当作空公告。
+            ann_date = self._latest_business_date(end_date)
+            frame = await self.tushare.request_dataframe(
+                'anns_d',
+                ts_code=ts_code,
+                ann_date=ann_date,
+            )
+            if frame is None or frame.empty:
+                return []
+            return [
+                {
+                    '公告标题': str(row.get('title') or ''),
+                    '公告日期': str(row.get('ann_date') or ann_date),
+                    '网址': str(row.get('url') or ''),
+                    'source': 'tushare_anns_d',
+                }
+                for row in frame.to_dict('records')
+                if row.get('title')
+            ]
+        except Exception as error:
+            self.logger.info("Tushare公告不可用 %s: %s", symbol, error)
+            return []
+
+    @staticmethod
+    def _normalize_financial_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        """将 Tushare 原始字段补齐为综合分析器使用的中英文兼容字段。"""
+        normalized = dict(row)
+        aliases = {
+            'end_date': '报告期',
+            'ann_date': '报告日期',
+            'total_revenue': '营业收入',
+            'revenue': '营业收入',
+            'n_income': '净利润',
+            'n_income_attr_p': '归母净利润',
+            'n_cashflow_act': '经营现金流',
+            'grossprofit_margin': '毛利率',
+            'netprofit_margin': '净利率',
+        }
+        for source, target in aliases.items():
+            if source in row and target not in normalized:
+                normalized[target] = row.get(source)
+        normalized.setdefault('报告类型', 'Tushare')
+        return normalized
+
+    @staticmethod
+    def _latest_business_date(value: Optional[str]) -> str:
+        """将周末分析截止日调整为最近一个工作日，供 anns_d 使用。"""
+        raw = str(value or '').replace('-', '')
+        try:
+            current = datetime.strptime(raw, '%Y%m%d') if raw else datetime.now()
+        except ValueError:
+            current = datetime.now()
+        while current.weekday() >= 5:
+            current -= timedelta(days=1)
+        return current.strftime('%Y%m%d')
+
     async def _get_us_stock_info(self, symbol: str) -> Dict[str, Any]:
         """获取美股基本信息"""
-        # TODO: 使用yfinance或其他数据源实现
         return {}
 
     async def _get_hk_stock_info(self, symbol: str) -> Dict[str, Any]:
         """获取港股基本信息"""
-        # TODO: 使用akshare港股接口实现
         return {}

@@ -9,8 +9,12 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 import asyncio
+import re
+import httpx
 from providers.multi_source_provider import MultiSourceProvider
 from services.neo4j_service import Neo4jService
+from services.data_service import data_service
+from services.cache_service import cache_service
 from services.technical_indicators import (
     calculate_ma, calculate_ema, calculate_macd, calculate_boll, calculate_dmi,
     calculate_rsi, calculate_kdj, calculate_cci, calculate_wr,
@@ -121,12 +125,68 @@ class IndustryMarketAnalyzer:
         api_key = os.getenv("ANTHROPIC_API_KEY")
         base_url = os.getenv("ANTHROPIC_BASE_URL")
 
+        self.ai_timeout_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_AI_TIMEOUT_SECONDS", "180")))
+        self.ai_retries = max(0, int(os.getenv("MARKET_ANALYSIS_AI_RETRIES", "1")))
+        client_kwargs = {
+            "api_key": api_key,
+            "timeout": self.ai_timeout_seconds,
+            "max_retries": 0,
+        }
         if base_url:
-            self.anthropic = Anthropic(api_key=api_key, base_url=base_url)
-        else:
-            self.anthropic = Anthropic(api_key=api_key)
+            client_kwargs["base_url"] = base_url
+        self.anthropic = Anthropic(**client_kwargs)
+
+        self.analysis_cache_ttl_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_CACHE_TTL_SECONDS", "900")))
+        self.analysis_timeout_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_TIMEOUT_SECONDS", "480")))
+        self.source_timeout_seconds = max(15, int(os.getenv("MARKET_ANALYSIS_SOURCE_TIMEOUT_SECONDS", "120")))
+        self._analysis_locks: Dict[str, asyncio.Lock] = {}
+
+    def _analysis_cache_key(self, industry_id: str, industry_name: str, period_days: int) -> str:
+        normalized_name = " ".join(str(industry_name or "").strip().lower().split())
+        return f"industry-market:v2:{industry_id}:{normalized_name}:{period_days}"
 
     async def analyze_industry_market(
+        self,
+        industry_id: str,
+        industry_name: str,
+        analysis_period_days: int = 90
+    ) -> Dict[str, Any]:
+        """带快照缓存和同键并发合并的市场分析入口。"""
+        cache_key = self._analysis_cache_key(industry_id, industry_name, analysis_period_days)
+        cached_result = cache_service.get(cache_key)
+        if cached_result is not None:
+            return {**cached_result, "cache": {"hit": True, "key": cache_key}}
+
+        lock = self._analysis_locks.setdefault(cache_key, asyncio.Lock())
+        async with lock:
+            cached_result = cache_service.get(cache_key)
+            if cached_result is not None:
+                return {**cached_result, "cache": {"hit": True, "key": cache_key}}
+
+            try:
+                result = await asyncio.wait_for(
+                    self._compute_industry_market(industry_id, industry_name, analysis_period_days),
+                    timeout=self.analysis_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "市场分析超过总预算: industry_id=%s period_days=%s timeout=%ss",
+                    industry_id, analysis_period_days, self.analysis_timeout_seconds,
+                )
+                return {
+                    "success": False,
+                    "error_code": "MARKET_ANALYSIS_TIMEOUT",
+                    "error": f"市场分析超过{self.analysis_timeout_seconds}秒总预算，请稍后重试。",
+                    "industry_id": industry_id,
+                }
+            finally:
+                self._analysis_locks.pop(cache_key, None)
+
+            if result.get("success"):
+                cache_service.set(cache_key, result, self.analysis_cache_ttl_seconds)
+            return {**result, "cache": {"hit": False, "key": cache_key}}
+
+    async def _compute_industry_market(
         self,
         industry_id: str,
         industry_name: str,
@@ -146,47 +206,139 @@ class IndustryMarketAnalyzer:
         try:
             # 1. 从知识图谱中获取所有节点的ETF（已去重）
             etf_codes = await self._get_etfs_from_graph(industry_id)
+            etf_source = "knowledge_graph"
 
             if not etf_codes:
                 return {
                     "success": False,
-                    "error": "未从知识图谱中找到匹配的ETF"
+                    "error_code": "MARKET_GRAPH_ETF_UNAVAILABLE",
+                    "error": "市场分析失败：产业图谱未绑定有效ETF，拒绝使用产业映射规则兜底",
+                    "industry_id": industry_id,
                 }
 
-            logger.info(f"📊 ETFs from graph (unique): {etf_codes}")
+            graph_candidates = getattr(self, "_last_graph_etf_candidates", [])
+            candidate_codes = list(dict.fromkeys(item["code"] for item in graph_candidates for item in item.get("candidates", [])))
+            if not candidate_codes:
+                return {
+                    "success": False,
+                    "error_code": "MARKET_GRAPH_ETF_SELECTION_EMPTY",
+                    "error": "市场分析失败：知识图谱ETF候选未形成节点级选择结果",
+                    "industry_id": industry_id,
+                }
 
-            # 2. 获取ETF数据
-            etf_data = await self._fetch_etf_data(
-                etf_codes,
-                analysis_period_days
+            logger.info(
+                "📊 ETFs loaded from graph: candidates=%s, codes=%s",
+                len(etf_codes), len(candidate_codes), candidate_codes,
+            )
+
+            # 2. 先获取所有图谱候选ETF数据，再按规模、活跃度、收益、趋势和风险统一选择代表标的。
+            etf_data = await asyncio.wait_for(
+                self._fetch_etf_data(candidate_codes, analysis_period_days),
+                timeout=self.source_timeout_seconds,
             )
 
             # 3. 获取市场整体数据 - 包含大盘指数和板块资金流向
             market_overview, sector_flow = await asyncio.gather(
-                self._fetch_market_overview(),
-                self._fetch_sector_capital_flow(),
-                return_exceptions=True
+                asyncio.wait_for(self._fetch_market_overview(), timeout=self.source_timeout_seconds),
+                asyncio.wait_for(self._fetch_sector_capital_flow(), timeout=self.source_timeout_seconds),
             )
 
-            # 处理异常结果
-            if isinstance(market_overview, Exception):
-                logger.warning(f"Failed to fetch market overview: {market_overview}")
-                market_overview = None
-            if isinstance(sector_flow, Exception):
-                logger.warning(f"Failed to fetch sector flow: {sector_flow}")
-                sector_flow = None
+            if not market_overview or not market_overview.get("indices"):
+                return {
+                    "success": False,
+                    "error_code": "MARKET_OVERVIEW_UNAVAILABLE",
+                    "error": "市场分析失败：市场概览未返回有效指数数据",
+                    "industry_id": industry_id,
+                }
+            if not sector_flow or not isinstance(sector_flow, dict):
+                return {
+                    "success": False,
+                    "error_code": "SECTOR_FLOW_UNAVAILABLE",
+                    "error": "市场分析失败：板块资金流向未返回有效数据",
+                    "industry_id": industry_id,
+                }
 
             # 4. 计算关键指标
             etf_analysis_raw = await self._analyze_etfs(etf_data)
+            graph_etf_selection = self._rank_graph_etfs(graph_candidates, etf_analysis_raw)
+            selected_graph_codes = list(dict.fromkeys(item["code"] for item in graph_etf_selection if item.get("selected")))
+            if not selected_graph_codes:
+                return {
+                    "success": False,
+                    "error_code": "MARKET_GRAPH_ETF_SELECTION_EMPTY",
+                    "error": "市场分析失败：知识图谱ETF候选没有形成有效代表性排序",
+                    "industry_id": industry_id,
+                }
+            selected_code_set = set(selected_graph_codes)
+            analyzed_code_set = {str(row.get("code")) for row in etf_analysis_raw}
+            graph_etf_selection = [
+                {**item, "market_data_available": item["code"] in analyzed_code_set}
+                for item in graph_etf_selection
+            ]
+            etf_analysis_raw = [item for item in etf_analysis_raw if item.get("code") in selected_code_set]
+            etf_selection = [
+                item
+                for item in graph_etf_selection
+            ]
+
+            # 指数是大盘趋势分析的重要依据：匹配、抓取并计算完整技术指标。
+            # 之前这里虽然保留了相关方法，但主流程始终传入空列表，导致前端和 AI 报告都拿不到指数数据。
+            index_codes = self._match_indices(industry_name)
+            index_data = await asyncio.wait_for(
+                self._fetch_index_data(index_codes, analysis_period_days),
+                timeout=self.source_timeout_seconds,
+            )
+            index_analysis_raw = await self._analyze_indices(index_data)
 
             # 4.5 过滤无效数据：移除没有足够历史数据的ETF
             etf_analysis = self._filter_valid_data(etf_analysis_raw, min_data_points=20)
+            index_analysis = self._filter_valid_data(index_analysis_raw, min_data_points=20)
 
-            logger.info(f"📊 Data filtering: ETF {len(etf_analysis_raw)} → {len(etf_analysis)}")
+            if not etf_analysis or not index_analysis:
+                return {
+                    "success": False,
+                    "error_code": "MARKET_HISTORY_INCOMPLETE",
+                    "error": "市场分析失败：ETF或指数历史数据不足，无法生成完整分析",
+                    "industry_id": industry_id,
+                    "etf_count": len(etf_analysis),
+                    "index_count": len(index_analysis),
+                }
 
-            # 5. 评估数据质量和计算量化评分（只基于ETF数据）
-            data_quality = self._assess_data_quality(etf_analysis, [])
-            quantitative_scores = self._calculate_quantitative_scores(etf_analysis, [])
+            invalid_sources = [
+                item for item in [*etf_analysis, *index_analysis]
+                if item.get("is_fallback") or item.get("source") in {"fixed_mapping", "fallback_spot"}
+            ]
+            if invalid_sources:
+                return {
+                    "success": False,
+                    "error_code": "MARKET_SYNTHETIC_DATA_REJECTED",
+                    "error": "市场分析失败：检测到固定映射或实时点位构造的非历史数据",
+                    "industry_id": industry_id,
+                    "symbols": [item.get("code") for item in invalid_sources],
+                }
+
+            logger.info(
+                f"📊 Data filtering: ETF {len(etf_analysis_raw)} → {len(etf_analysis)}, "
+                f"Index {len(index_analysis_raw)} → {len(index_analysis)}"
+            )
+
+            # 5. 评估数据质量和计算量化评分
+            data_quality = self._assess_data_quality(etf_analysis, index_analysis)
+            eligible_etfs = [
+                item for item in etf_analysis
+                if not item.get("is_fallback", False)
+                and abs(float(item.get("price_change_pct") or 0)) <= 50
+                and float(item.get("volatility") or 0) <= 150
+                and float(item.get("max_drawdown") or 0) <= 70
+            ]
+            if not eligible_etfs:
+                return {
+                    "success": False,
+                    "error_code": "MARKET_VALID_SAMPLE_EMPTY",
+                    "error": "市场分析失败：有效ETF样本为空，无法计算量化评分",
+                    "industry_id": industry_id,
+                }
+            quantitative_scores = self._calculate_quantitative_scores(eligible_etfs, index_analysis)
 
             # ⚠️ 数据质量检查：如果数据质量太低，返回明确错误
             if data_quality["level"] == "低":
@@ -200,15 +352,20 @@ class IndustryMarketAnalyzer:
                     "success": False,
                     "error": error_msg,
                     "error_detail": f"数据质量问题：\n{issues_detail}\n\n建议：\n1. 配置Tushare Token以获取稳定的历史数据\n2. 检查网络连接和代理设置\n3. 稍后重试",
-                    "data_quality": data_quality,
-                    "etf_analysis": etf_analysis
-                }
+                "data_quality": data_quality,
+                "etf_analysis": etf_analysis,
+                    "index_analysis": index_analysis,
+                    "market_overview": market_overview,
+                    "market_indices": market_overview.get("indices", []) if market_overview else [],
+                    "sector_flow": sector_flow,
+                    "etf_source": etf_source,
+            }
 
             # 6. AI生成大盘趋势报告（传入市场指数和板块数据）
-            trend_report = await self._generate_market_report(
+            trend_report, report_source, report_warning = await self._generate_market_report(
                 industry_name,
                 etf_analysis,
-                [],  # 不再传入index_analysis
+                index_analysis,
                 market_overview,
                 sector_flow
             )
@@ -219,17 +376,33 @@ class IndustryMarketAnalyzer:
                 "industry_name": industry_name,
                 "analysis_period_days": analysis_period_days,
                 "etf_analysis": etf_analysis,
-                "index_analysis": [],  # 空列表，保持接口兼容
+                "index_analysis": index_analysis,
+                "market_overview": market_overview,
+                "market_indices": market_overview.get("indices", []) if market_overview else [],
+                "sector_flow": sector_flow,
                 "data_quality": data_quality,
                 "quantitative_scores": quantitative_scores,
                 "trend_report": trend_report,
+                "report_source": report_source,
+                "report_warning": report_warning,
+                "etf_source": etf_source,
+                "etf_selection": etf_selection,
                 "analyzed_at": datetime.now().isoformat()
             }
 
-        except Exception as e:
-            logger.error(f"Error analyzing industry market: {e}")
+        except asyncio.TimeoutError:
+            logger.error("市场分析数据采集阶段超时: industry_id=%s", industry_id)
             return {
                 "success": False,
+                "error_code": "MARKET_SOURCE_TIMEOUT",
+                "error": "市场行情数据源在阶段预算内未完成",
+                "industry_id": industry_id,
+            }
+        except Exception as e:
+            logger.exception("Error analyzing industry market: %s", e)
+            return {
+                "success": False,
+                "error_code": "MARKET_ANALYSIS_FAILED",
                 "error": str(e)
             }
 
@@ -245,16 +418,20 @@ class IndustryMarketAnalyzer:
         """
         try:
             import json
+            resolved_id = await self.neo4j_service.resolve_industry_id(industry_id)
+            if not resolved_id:
+                logger.warning("产业图谱引用无法解析，跳过图谱 ETF 绑定: industry_id=%s", industry_id)
+                return []
             async with self.neo4j_service.session() as s:
                 query = """
                 MATCH (ind:Industry {id: $industry_id})-[:HAS_STAGE]->(stage:Stage)-[:HAS_SEGMENT]->(seg:Segment)
                 WHERE seg.matched_etfs IS NOT NULL AND seg.matched_etfs <> '[]'
                 RETURN seg.name as segment_name, seg.matched_etfs as matched_etfs
                 """
-                result = await s.run(query, industry_id=industry_id)
+                result = await s.run(query, industry_id=resolved_id)
                 records = await result.data()
 
-                all_etf_codes = []
+                node_candidates = []
                 for record in records:
                     etfs = json.loads(record["matched_etfs"]) if isinstance(record["matched_etfs"], str) else record["matched_etfs"]
 
@@ -262,23 +439,131 @@ class IndustryMarketAnalyzer:
                     if isinstance(etfs, list) and len(etfs) > 0:
                         if isinstance(etfs[0], dict):
                             # 字典格式: [{"code": "159998", "name": "xxx", ...}]
-                            codes = [etf.get('code') for etf in etfs if isinstance(etf, dict) and etf.get('code')]
-                            all_etf_codes.extend(codes)
-                            logger.debug(f"  - {record['segment_name']}: {codes}")
+                            candidates = [{
+                                "code": str(etf.get("code")),
+                                "name": str(etf.get("name") or etf.get("code")),
+                                "relevance": float(etf.get("relevance") or 0),
+                            } for etf in etfs if isinstance(etf, dict) and etf.get("code")]
+                            node_candidates.append({"node": record["segment_name"], "candidates": candidates})
+                            logger.debug(f"  - {record['segment_name']}: {[item['code'] for item in candidates]}")
                         else:
                             # 字符串格式: ["159998", "159586"]
-                            all_etf_codes.extend(etfs)
+                            candidates = [{"code": str(code), "name": str(code), "relevance": 0.5} for code in etfs if code]
+                            node_candidates.append({"node": record["segment_name"], "candidates": candidates})
                             logger.debug(f"  - {record['segment_name']}: {etfs}")
 
                 # 去重
-                unique_etf_codes = list(set(all_etf_codes))
-                logger.info(f"从知识图谱获取ETF: 总共 {len(all_etf_codes)} 个, 去重后 {len(unique_etf_codes)} 个")
-
+                self._last_graph_etf_candidates = node_candidates
+                unique_etf_codes = list(dict.fromkeys(item["code"] for group in node_candidates for item in group["candidates"]))
+                logger.info("从知识图谱获取ETF候选: 节点%s个, 候选去重后%s个", len(node_candidates), len(unique_etf_codes))
                 return unique_etf_codes
 
         except Exception as e:
             logger.error(f"Failed to get ETFs from graph: {e}")
             return []
+
+    @staticmethod
+    def _rank_graph_etfs(
+        node_candidates: List[Dict[str, Any]],
+        etf_analysis: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """对所有图谱候选ETF统一评分，避免在获取行情前只按图谱相关度截断。"""
+        analysis_by_code = {str(item.get("code")): item for item in etf_analysis if item.get("code")}
+        node_by_code: Dict[str, List[str]] = {}
+        metadata: Dict[str, Dict[str, Any]] = {}
+        for group in node_candidates:
+            node = str(group.get("node") or "未命名节点")
+            for candidate in group.get("candidates", []):
+                code = str(candidate.get("code") or "")
+                if not code:
+                    continue
+                node_by_code.setdefault(code, []).append(node)
+                metadata.setdefault(code, {
+                    "name": str(candidate.get("name") or code),
+                    "relevance": float(candidate.get("relevance") or 0),
+                })
+
+        def percentile(values: List[float], value: Optional[float]) -> float:
+            if value is None or not values:
+                return 0.5
+            ordered = sorted(values)
+            rank = sum(1 for item in ordered if item <= value)
+            return rank / len(ordered)
+
+        rows = []
+        valid = [item for code, item in analysis_by_code.items() if code in metadata and not item.get("is_fallback")]
+        market_values = [float(item["market_value"]) for item in valid if item.get("market_value") is not None and float(item["market_value"]) > 0]
+        amounts = [float(item["amount"]) for item in valid if item.get("amount") is not None and float(item["amount"]) > 0]
+        for code, item in analysis_by_code.items():
+            if code not in metadata:
+                continue
+            price_change = float(item.get("price_change_pct") or 0)
+            volatility = float(item.get("volatility") or 0)
+            drawdown = float(item.get("max_drawdown") or 0)
+            trend = 0
+            if item.get("ma20") is not None and item.get("ma60") is not None:
+                trend += 0.5 if item["ma20"] >= item["ma60"] else 0
+            if item.get("macd_macd") is not None:
+                trend += 0.5 if item["macd_macd"] >= 0 else 0
+            score = (
+                percentile(market_values, item.get("market_value")) * 25
+                + percentile(amounts, item.get("amount")) * 15
+                + max(0, min(1, (price_change + 30) / 60)) * 20
+                + max(0, min(1, (volatility and (1 - min(volatility, 100) / 100) or 0.5))) * 15
+                + max(0, min(1, (drawdown and (1 - min(drawdown, 70) / 70) or 0.5))) * 10
+                + min(1, trend) * 10
+                + max(0, min(1, metadata[code]["relevance"])) * 5
+            )
+            rows.append({
+                "code": code,
+                "name": metadata[code]["name"],
+                "nodes": list(dict.fromkeys(node_by_code.get(code, []))),
+                "relevance": round(metadata[code]["relevance"], 3),
+                "representativeness_score": round(score, 2),
+                "selection_basis": "规模25%/成交活跃度15%/区间收益20%/波动风险25%/技术趋势10%/图谱相关度5%",
+                "selected": False,
+            })
+        rows.sort(key=lambda row: (row["representativeness_score"], row["relevance"], row["code"]), reverse=True)
+        max_selected = max(1, int(os.getenv("MARKET_ANALYSIS_MAX_ETFS", "8")))
+        for rank, row in enumerate(rows, 1):
+            row["global_rank"] = rank
+            row["selected"] = rank <= max_selected
+            row["selection_reason"] = "综合代表性排名入选" if row["selected"] else "候选样本未进入代表性分析TopN"
+        return rows
+
+    @staticmethod
+    def _select_graph_etfs(
+        node_candidates: List[Dict[str, Any]],
+        available_codes: Optional[set] = None,
+    ) -> List[Dict[str, Any]]:
+        """兼容旧调用方的节点级选择接口；主流程改用全候选综合评分。"""
+        selected: List[Dict[str, Any]] = []
+        seen_codes = set()
+        for group in node_candidates:
+            candidates = sorted(
+                [
+                    item for item in group.get("candidates", [])
+                    if item.get("code") and (available_codes is None or item["code"] in available_codes)
+                ],
+                key=lambda item: (float(item.get("relevance") or 0), str(item["code"])),
+                reverse=True,
+            )
+            if not candidates:
+                continue
+            for rank, item in enumerate(candidates[:2], 1):
+                code = str(item["code"])
+                if code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                selected.append({
+                    "node": str(group.get("node") or "未命名节点"),
+                    "code": code,
+                    "name": str(item.get("name") or code),
+                    "relevance": round(float(item.get("relevance") or 0), 3),
+                    "selection_rank": rank,
+                    "selection_reason": "节点代表性最高" if rank == 1 else "补充差异化覆盖",
+                })
+        return selected
 
 
     def _match_etfs(self, industry_name: str) -> List[str]:
@@ -303,9 +588,7 @@ class IndustryMarketAnalyzer:
             logger.info(f"🎯 Fuzzy match for '{industry_name}': score={best_score}, codes={best_match}")
             return best_match
 
-        # 默认返回科技类ETF
-        logger.warning(f"⚠️ No good match for '{industry_name}', using default tech ETFs")
-        return ["515700", "159995"]
+        return []
 
     def _match_indices(self, industry_name: str) -> List[str]:
         """匹配相关指数（增强版：支持关键词权重打分）"""
@@ -329,9 +612,7 @@ class IndustryMarketAnalyzer:
             logger.info(f"🎯 Fuzzy match for '{industry_name}': score={best_score}, codes={best_match}")
             return best_match
 
-        # 默认返回大盘指数
-        logger.warning(f"⚠️ No good match for '{industry_name}', using default indices")
-        return ["000688", "399006"]
+        return []
 
     def _calculate_match_score(self, industry_name: str, mapping_key: str) -> int:
         """计算产业名称与映射键的匹配分数
@@ -421,19 +702,50 @@ class IndustryMarketAnalyzer:
                     "涨跌幅": etf["change_pct"],
                 })
 
+            history_quality = self._validate_etf_history(kline)
             etf_data.append({
                 "code": etf["code"],
                 "info": {
                     "基金简称": etf["name"],
                     "基金代码": etf["code"],
                 },
+                "market_value": etf.get("market_value"),
+                "shares": etf.get("shares"),
+                "amount": etf.get("amount"),
+                "volume": etf.get("volume"),
                 "kline": kline,
                 "holdings": [],  # 暂不获取持仓数据
-                "is_fallback": etf.get("history_fallback", False) and len(kline) < 30  # 只有当历史数据不足30天时才标记为降级
+                "is_fallback": etf.get("history_fallback", False),
+                "source": etf.get("source", "unknown"),
+                "history_quality": history_quality,
             })
 
         logger.info(f"✅ Retrieved {len(etf_data)} ETFs successfully")
         return etf_data
+
+    @staticmethod
+    def _validate_etf_history(kline: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """在指标计算前识别复权、单位切换或拼接造成的历史序列断点。"""
+        closes = []
+        for row in kline:
+            value = row.get("收盘") or row.get("close")
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                closes.append(value)
+        flags: List[str] = []
+        jumps: List[float] = []
+        for previous, current in zip(closes, closes[1:]):
+            if previous <= 0:
+                continue
+            jumps.append(abs(current / previous - 1))
+        if any(jump > 0.35 for jump in jumps):
+            flags.append("相邻交易日价格跳变超过35%，疑似复权或单位切换")
+        if closes and max(closes) / min(closes) > 6:
+            flags.append("历史价格跨度超过6倍，需复核序列拼接与复权方式")
+        return {"valid": not flags, "flags": flags, "checked_points": len(closes)}
 
     async def _fetch_index_data(
         self,
@@ -447,64 +759,88 @@ class IndustryMarketAnalyzer:
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y%m%d")
 
-        # 批量获取指数历史数据
-        index_data = []
-        for code in index_codes:
+        async def fetch_one(code: str) -> Optional[Dict[str, Any]]:
             try:
-                # 使用新的 get_index_history 方法
-                index_hist = await self.multi_source.get_index_history(
-                    code,
-                    start_date,
-                    end_date
+                index_hist = await asyncio.wait_for(
+                    self.multi_source.get_index_history(code, start_date, end_date),
+                    timeout=self.source_timeout_seconds,
                 )
+                if not index_hist or not index_hist.get("history"):
+                    logger.warning("指数 %s 未返回历史数据", code)
+                    return None
 
-                if index_hist and index_hist.get("history"):
-                    # 转换为标准K线格式
-                    kline = []
-                    for record in index_hist["history"]:
-                        kline.append({
-                            "日期": str(record.get("日期", "")),
-                            "开盘": float(record.get("开盘", 0)),
-                            "收盘": float(record.get("收盘", 0)),
-                            "最高": float(record.get("最高", 0)),
-                            "最低": float(record.get("最低", 0)),
-                            "成交量": float(record.get("成交量", 0)),
-                            "涨跌幅": float(record.get("涨跌幅", 0))
-                        })
+                kline = [
+                    {
+                        "日期": str(record.get("日期", "")),
+                        "开盘": float(record.get("开盘", 0)),
+                        "收盘": float(record.get("收盘", 0)),
+                        "最高": float(record.get("最高", 0)),
+                        "最低": float(record.get("最低", 0)),
+                        "成交量": float(record.get("成交量", 0)),
+                        "涨跌幅": float(record.get("涨跌幅", 0)),
+                    }
+                    for record in index_hist["history"]
+                ]
+                return {
+                    "code": code,
+                    "name": index_hist.get("name", code),
+                    "kline": kline,
+                    "is_fallback": index_hist.get("source") in ["fallback_spot", "fixed_mapping"],
+                    "data_points": index_hist.get("data_points", len(kline)),
+                    "source": index_hist.get("source", "unknown"),
+                }
+            except Exception as error:
+                logger.warning("获取指数 %s 历史数据失败: %s", code, error)
+                return None
 
-                    index_data.append({
-                        "code": code,
-                        "name": index_hist.get("name", code),
-                        "kline": kline,
-                        "is_fallback": index_hist.get("source") in ["fallback_spot", "fixed_mapping"],
-                        "data_points": index_hist.get("data_points", len(kline)),
-                        "source": index_hist.get("source", "unknown")
-                    })
-                else:
-                    logger.warning(f"⚠️ No history data for index {code}")
-
-            except Exception as e:
-                logger.error(f"Failed to get index history for {code}: {e}")
-                continue
-
-        logger.info(f"✅ Retrieved {len(index_data)} indices with history data")
+        index_data = [
+            item for item in await asyncio.gather(*(fetch_one(code) for code in index_codes))
+            if item is not None
+        ]
+        logger.info("✅ Retrieved %s indices with history data", len(index_data))
         return index_data
 
     async def _fetch_market_overview(self) -> Optional[Dict[str, Any]]:
         """获取市场概览（大盘指数当日表现）"""
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "http://localhost:8000/api/market/overview",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("success") and data.get("data"):
-                            logger.info("✅ Retrieved market overview")
-                            return data["data"]
-            return None
+            # 与 /api/market/overview 使用同一个 DataService，避免在数据服务内部
+            # 回调 localhost:8000 导致分析请求拿不到宏观指数。
+            df = await data_service.get_index_spot()
+            if df is None or df.empty:
+                logger.warning("市场概览未返回指数行情")
+                return None
+
+            index_map = {
+                "000001": {"code": "sh000001", "name": "上证指数"},
+                "399001": {"code": "sz399001", "name": "深证成指"},
+                "399006": {"code": "sz399006", "name": "创业板指"},
+                "000688": {"code": "sh000688", "name": "科创50"},
+                "000300": {"code": "sh000300", "name": "沪深300"},
+            }
+            indices = []
+            for _, row in df.iterrows():
+                code = str(row.get("代码", row.get("code", "")))
+                pure_code = code.replace("sh", "").replace("sz", "")
+                if pure_code not in index_map:
+                    continue
+
+                info = index_map[pure_code]
+                price = float(row.get("最新价", row.get("price", 0)) or 0)
+                change = float(row.get("涨跌额", row.get("change", 0)) or 0)
+                change_pct = float(row.get("涨跌幅", row.get("changePct", 0)) or 0)
+                if price <= 0:
+                    continue
+                indices.append({
+                    "code": info["code"],
+                    "name": info["name"],
+                    "price": round(price, 2),
+                    "change": round(change, 2),
+                    "changePct": round(change_pct, 2),
+                    "source": "unified",
+                })
+
+            logger.info("✅ Retrieved market overview directly: %s indices", len(indices))
+            return {"indices": indices} if indices else None
         except Exception as e:
             logger.warning(f"Failed to fetch market overview: {e}")
             return None
@@ -518,21 +854,39 @@ class IndustryMarketAnalyzer:
     async def _fetch_sector_capital_flow(self) -> Optional[Dict[str, Any]]:
         """获取板块资金流向（TOP10流入和流出）"""
         try:
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    "http://localhost:8000/api/capital-flow/advanced/enhanced",
-                    timeout=aiohttp.ClientTimeout(total=10)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data.get("success") and data.get("data"):
-                            logger.info("✅ Retrieved sector capital flow (TOP10 inflow & outflow)")
-                            # 返回完整的板块数据结构
-                            return {
-                                "topInflowSectors": data["data"].get("topInflowSectors", []),
-                                "topOutflowSectors": data["data"].get("topOutflowSectors", [])
-                            }
+            rows = await data_service.get_sector_capital_flow("今日")
+            if rows:
+                logger.info("✅ Retrieved sector capital flow directly from DataService")
+                def numeric(value: Any) -> float:
+                    try:
+                        return float(value or 0)
+                    except (TypeError, ValueError):
+                        return 0.0
+
+                def normalize(row: Dict[str, Any]) -> Dict[str, Any]:
+                    raw_flow = row.get("netFlow")
+                    if raw_flow is None:
+                        raw_flow = row.get("今日主力净流入-净额", row.get("主力净流入", row.get("净流入", 0)))
+                    flow = numeric(raw_flow)
+                    if abs(flow) >= 1000000:
+                        flow /= 100000000
+                    return {
+                        "sector": row.get("sector") or row.get("名称") or row.get("name") or "未命名板块",
+                        "netFlow": round(flow, 2),
+                        "changePct": round(numeric(row.get("changePct", row.get("今日涨跌幅", row.get("涨跌幅", 0)))), 2),
+                        "trend": "inflow" if flow > 0 else "outflow" if flow < 0 else "flat",
+                    }
+
+                ordered = sorted(
+                    [normalize(row) for row in rows if isinstance(row, dict)],
+                    key=lambda row: row["netFlow"],
+                    reverse=True,
+                )
+                return {
+                    "topInflowSectors": [row for row in ordered if row["netFlow"] > 0][:10],
+                    "topOutflowSectors": sorted([row for row in ordered if row["netFlow"] < 0], key=lambda row: row["netFlow"])[:10],
+                    "source": "data_service",
+                }
             return None
         except Exception as e:
             logger.warning(f"Failed to fetch sector capital flow: {e}")
@@ -583,9 +937,16 @@ class IndustryMarketAnalyzer:
                     "code": etf['code'],
                     "name": info.get('基金简称', etf['code']),
                     "current_price": round(current_price, 3),
+                    "market_value": etf.get("market_value"),
+                    "shares": etf.get("shares"),
+                    "amount": etf.get("amount"),
+                    "volume": etf.get("volume"),
                     "data_points": len(closes),
                     "is_fallback": is_fallback,
                     "holdings_count": len(etf.get('holdings', [])),
+                    "history_quality": etf.get("history_quality") or {"valid": True, "flags": []},
+                    "data_quality_source": "数据源" if (etf.get("history_quality") or {}).get("flags") else None,
+                    "source": etf.get("source", "unknown"),
                 }
 
                 # 单日数据降级处理
@@ -1290,36 +1651,39 @@ class IndustryMarketAnalyzer:
         index_analysis: List[Dict[str, Any]],
         market_overview: Optional[Dict[str, Any]] = None,
         sector_flow: Optional[Dict[str, Any]] = None
-    ) -> str:
+    ) -> tuple[str, str, Optional[str]]:
         """使用AI生成大盘趋势报告（增强版：整合市场指数和板块数据）"""
+        data_quality: Dict[str, Any] = {}
+        scores: Dict[str, Any] = {}
         try:
             # 评估数据质量（只基于ETF）
-            data_quality = self._assess_data_quality(etf_analysis, [])
+            data_quality = self._assess_data_quality(etf_analysis, index_analysis)
 
             # 计算量化评分（只基于ETF）
-            scores = self._calculate_quantitative_scores(etf_analysis, [])
+            scores = self._calculate_quantitative_scores(etf_analysis, index_analysis)
 
             # 构建代号说明表（只包含ETF）
-            symbol_mapping = self._build_symbol_mapping(etf_analysis, [])
+            symbol_mapping = self._build_symbol_mapping(etf_analysis, index_analysis)
 
             # 构建增强上下文（包含市场指数和板块数据）
             context = self._build_enhanced_market_context(
                 industry_name,
                 etf_analysis,
-                [],  # 不传入指数分析
+                index_analysis,
                 data_quality,
                 scores,
                 market_overview,
                 sector_flow
             )
 
-            message = self.anthropic.messages.create(
-                model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
-                max_tokens=2500,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": f"""作为资深量化投资分析师，请基于完整技术指标体系分析{industry_name}领域的投资价值。
+            def generate() -> Any:
+                return self.anthropic.messages.create(
+                    model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                    max_tokens=2500,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": f"""作为资深量化投资分析师，请基于完整技术指标体系分析{industry_name}领域的投资价值。
 
 {context}
 
@@ -1394,25 +1758,122 @@ class IndustryMarketAnalyzer:
 - 数据驱动，重点分析技术指标的共振和背离
 - 识别关键买卖信号，给出可执行的技术面建议
 - 明确标识数据质量问题（如降级数据、指标缺失）
+- 全文只使用中文；趋势、质量、状态和操作标签不得输出 sideways、high、medium、success、buy、hold 等英文标签
 - 控制在1000字以内，突出核心发现
 """
-                    }
-                ]
-            )
+                        }
+                    ]
+                )
 
-            report = message.content[0].text
-            return report
+            message = None
+            last_error: Optional[Exception] = None
+            for attempt in range(self.ai_retries + 1):
+                try:
+                    message = await asyncio.wait_for(
+                        asyncio.to_thread(generate),
+                        timeout=self.ai_timeout_seconds,
+                    )
+                    break
+                except Exception as error:
+                    last_error = error
+                    error_name = type(error).__name__.lower()
+                    is_timeout = isinstance(error, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)) or "timeout" in error_name
+                    if attempt >= self.ai_retries or not is_timeout:
+                        raise
+                    delay = min(5 * (attempt + 1), 15)
+                    logger.warning(
+                        "市场 AI 报告第 %s 次调用超时，%s 秒后重试: %s",
+                        attempt + 1,
+                        delay,
+                        error,
+                    )
+                    await asyncio.sleep(delay)
+
+            if message is None and last_error:
+                raise last_error
+
+            report = message.content[0].text if message.content else ""
+            if not report.strip():
+                raise ValueError("AI 返回空报告")
+            return self._reconcile_market_report(report, data_quality, sector_flow), "ai", None
 
         except Exception as e:
             logger.error(f"Error generating market report: {e}")
-            return f"报告生成失败: {str(e)}"
+            raise RuntimeError(f"市场 AI 报告生成失败：{type(e).__name__}: {e}") from e
+
+    @staticmethod
+    def _reconcile_market_report(
+        report: str,
+        data_quality: Dict[str, Any],
+        sector_flow: Optional[Dict[str, Any]],
+    ) -> str:
+        """把 AI 文字报告中的口径收敛到本次结构化快照，避免事实冲突。"""
+        quality_level = data_quality.get("level", "未知")
+        total_etfs = int(data_quality.get("total_etfs", 0) or 0)
+        average_points = float(data_quality.get("avg_data_points", 0) or 0)
+        abnormal_etfs = int(data_quality.get("abnormal_etfs", 0) or 0)
+        if abnormal_etfs:
+            quality_detail = (
+                f"数据质量：{quality_level}（{total_etfs}只ETF，平均{average_points:.0f}天数据；"
+                f"其中{abnormal_etfs}只存在异常收益、波动或回撤，异常样本不参与动作排序）"
+            )
+        else:
+            quality_detail = f"数据质量：{quality_level}（{total_etfs}只ETF，平均{average_points:.0f}天数据，样本充足）"
+
+        normalized = report.strip()
+        normalized, quality_replacements = re.subn(
+            r"数据质量[：:]\s*\**(?:高|中|低|未知|high|medium|low|unknown)\**(?:（[^）\n]*）|\([^\)\n]*\))?",
+            quality_detail,
+            normalized,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+        if quality_replacements == 0:
+            marker = "## 一、数据质量评估"
+            normalized = normalized.replace(marker, f"{marker}\n{quality_detail}", 1)
+
+        inflow = (sector_flow or {}).get("topInflowSectors", []) if isinstance(sector_flow, dict) else []
+        outflow = (sector_flow or {}).get("topOutflowSectors", []) if isinstance(sector_flow, dict) else []
+        if inflow or outflow:
+            def flow_text(rows: List[Dict[str, Any]]) -> str:
+                return "、".join(
+                    f"{row.get('sector', '未命名板块')} {float(row.get('netFlow', 0) or 0):+.2f}亿元"
+                    for row in rows[:5]
+                ) or "暂无"
+
+            flow_block = (
+                "板块资金流向快照已获取，金额单位为亿元。\n"
+                f"- 净流入：{flow_text(inflow)}\n"
+                f"- 净流出：{flow_text(outflow)}"
+            )
+            normalized = re.sub(
+                r"(?:⚠️\s*)?板块资金流向数据(?:全部)?缺失[^\n]*|板块资金流向数据缺失[^\n]*|"
+                r"数据缺失无法判断资金轮动方向[^\n]*",
+                "板块资金流向快照已获取，可结合以下数据判断资金轮动。",
+                normalized,
+                flags=re.IGNORECASE,
+            )
+            if "板块资金流向快照已获取" not in normalized:
+                normalized = f"{normalized.rstrip()}\n\n## 板块资金流向校验\n{flow_block}"
+            else:
+                normalized = f"{normalized.rstrip()}\n\n## 板块资金流向校验\n{flow_block}"
+        else:
+            unavailable = "板块资金流向未获取，本报告不据此判断具体资金轮动方向。"
+            normalized = re.sub(
+                r"(?:⚠️\s*)?板块资金流向数据(?:全部)?缺失[^\n]*|板块资金流向数据缺失[^\n]*|"
+                r"数据缺失无法判断资金轮动方向[^\n]*|板块轮动：资金明显撤离[^\n]*",
+                unavailable,
+                normalized,
+                flags=re.IGNORECASE,
+            )
+        return re.sub(r"\n{3,}", "\n\n", normalized).strip()
 
     def _assess_data_quality(
         self,
         etf_analysis: List[Dict[str, Any]],
         index_analysis: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """评估数据质量（只基于ETF）"""
+        """评估数据质量，并隔离异常收益、波动率和回撤样本。"""
         if not etf_analysis:
             return {
                 "level": "低",
@@ -1425,6 +1886,12 @@ class IndustryMarketAnalyzer:
 
         total_etfs = len(etf_analysis)
         fallback_etfs = sum(1 for e in etf_analysis if e.get("is_fallback", False))
+        abnormal_etfs = [
+            e for e in etf_analysis
+            if abs(float(e.get("price_change_pct") or 0)) > 50
+            or float(e.get("volatility") or 0) > 150
+            or float(e.get("max_drawdown") or 0) > 70
+        ]
         avg_data_points = sum(e.get("data_points", 0) for e in etf_analysis) / total_etfs if total_etfs > 0 else 0
 
         quality_level = "高"
@@ -1450,6 +1917,11 @@ class IndustryMarketAnalyzer:
         elif fallback_etfs > 0:
             issues.append(f"{fallback_etfs}/{total_etfs}个ETF使用实时数据降级")
 
+        if abnormal_etfs:
+            if quality_level == "高":
+                quality_level = "中"
+            issues.append(f"{len(abnormal_etfs)}/{total_etfs}个ETF存在极端收益/波动/回撤，已隔离出投资动作排序")
+
         # 合并问题列表
         all_issues = critical_issues + issues
 
@@ -1461,6 +1933,8 @@ class IndustryMarketAnalyzer:
             "level": quality_level,
             "total_etfs": total_etfs,
             "fallback_etfs": fallback_etfs,
+            "abnormal_etfs": len(abnormal_etfs),
+            "eligible_etfs": total_etfs - len(abnormal_etfs),
             "avg_data_points": avg_data_points,
             "critical_issues": critical_issues,
             "issues": all_issues,
@@ -1700,6 +2174,7 @@ class IndustryMarketAnalyzer:
                 # TOP10 净流入板块
                 top_inflow = sector_flow.get('topInflowSectors', [])
                 if top_inflow:
+                    context += "板块资金流向数据状态: 已获取，以下金额单位为亿元。\n"
                     context += "板块资金流向 - TOP10净流入:\n"
                     for idx, sector in enumerate(top_inflow, 1):
                         name = sector.get('sector', 'N/A')
@@ -1718,6 +2193,10 @@ class IndustryMarketAnalyzer:
                         change_pct = sector.get('changePct', 0)
                         context += f"  {idx}. {name}: {net_flow:+.2f}亿 (涨跌: {change_pct:+.2f}%)\n"
                     context += "\n"
+                if not top_inflow and not top_outflow:
+                    context += "板块资金流向数据状态: 已返回但暂无正负方向样本，不得据此判断市场情绪。\n\n"
+            else:
+                context += "板块资金流向数据状态: 未获取，不得将其表述为已有完整数据。\n\n"
 
         # ETF分析（增强版 - 包含当日涨跌幅）
         if etf_analysis:

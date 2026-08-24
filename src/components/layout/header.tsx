@@ -1,7 +1,7 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
-import { Bell, Moon, Sun, User } from 'lucide-react'
+import { Bell, ChevronRight, Home, Menu, Moon, Sun, User } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import {
@@ -12,9 +12,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { getDomainByCode } from '@/config/etf-domains'
+import { cn } from '@/lib/utils'
 import { useEffect, useState } from 'react'
 
-export function Header() {
+export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
   const pathname = usePathname()
   const { setTheme } = useTheme()
   const [dynamicNames, setDynamicNames] = useState<Record<string, string>>({})
@@ -56,36 +57,50 @@ export function Header() {
   }, [pathname])
 
   return (
-    <header className="flex h-16 items-center justify-between border-b bg-card px-6">
+    <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between border-b border-border/80 bg-card/95 px-4 backdrop-blur md:px-6">
       {/* 面包屑 */}
-      <nav className="flex items-center space-x-2 text-sm">
-        <span className="text-muted-foreground">首页</span>
+      <div className="flex min-w-0 items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="lg:hidden"
+          onClick={onMenuOpen}
+          aria-label="打开主导航"
+        >
+          <Menu className="h-5 w-5" />
+        </Button>
+        <nav aria-label="面包屑" className="flex min-w-0 items-center gap-1.5 overflow-hidden text-sm">
+          <Home className="hidden h-4 w-4 shrink-0 text-muted-foreground sm:block" aria-hidden="true" />
+          <span className="hidden shrink-0 text-muted-foreground sm:inline">首页</span>
         {breadcrumbs.map((crumb, index) => (
-          <span key={crumb.href} className="flex items-center space-x-2">
-            <span className="text-muted-foreground">/</span>
+          <span key={crumb.href} className="flex min-w-0 items-center gap-1.5">
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" aria-hidden="true" />
             <span
-              className={
+              title={crumb.name}
+              className={cn(
+                'truncate',
                 index === breadcrumbs.length - 1
                   ? 'font-medium text-foreground'
                   : 'text-muted-foreground'
-              }
+              )}
             >
               {crumb.name}
             </span>
           </span>
         ))}
-      </nav>
+        </nav>
+      </div>
 
       {/* 右侧操作 */}
       <div className="flex items-center gap-2">
         {/* 通知 */}
-        <Button variant="ghost" size="icon">
+        <Button variant="ghost" size="icon" aria-label="查看通知">
           <Bell className="h-4 w-4" />
         </Button>
 
         {/* 主题切换 */}
         <DropdownMenu>
-          <DropdownMenuTrigger className="inline-flex h-9 w-9 items-center justify-center rounded-md text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50">
+          <DropdownMenuTrigger aria-label="切换主题" className="inline-flex h-10 w-10 items-center justify-center rounded-lg text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50">
             <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
             <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
             <span className="sr-only">切换主题</span>
@@ -105,8 +120,8 @@ export function Header() {
 
         {/* 用户菜单 */}
         <DropdownMenu>
-          <DropdownMenuTrigger className="relative inline-flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-            <Avatar className="h-8 w-8">
+          <DropdownMenuTrigger aria-label="打开用户菜单" className="relative inline-flex h-10 w-10 items-center justify-center rounded-full text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <Avatar className="h-9 w-9">
               <AvatarImage src="/avatars/01.png" alt="用户头像" />
               <AvatarFallback>
                 <User className="h-4 w-4" />
@@ -116,9 +131,6 @@ export function Header() {
           <DropdownMenuContent className="w-56" align="end">
             <DropdownMenuItem>
               <span>个人资料</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <span>设置</span>
             </DropdownMenuItem>
             <DropdownMenuItem>
               <span>退出登录</span>
@@ -147,15 +159,12 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
     trends: '领域趋势',
     graph: '知识图谱',
     industries: '产业图谱',
+    portfolio: '投资组合',
     create: '创建',
     edit: '编辑',
     stock: '个股分析',
     sector: '板块分析',
     report: '综合报告',
-    portfolio: '投资组合',
-    optimize: '组合优化',
-    risk: '风险分析',
-    settings: '设置',
     new: '新建',
   }
 

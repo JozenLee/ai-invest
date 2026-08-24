@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
+export const maxDuration = 600
+
+async function readPayload(response: Response) {
+  const text = await response.text()
+  if (!text) return {}
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    return { error: text }
+  }
+}
 
 export async function GET(
   request: NextRequest,
@@ -25,24 +37,32 @@ export async function GET(
         headers: {
           'Content-Type': 'application/json',
         },
+        signal: AbortSignal.timeout(600000),
       }
     )
 
+    const payload = await readPayload(response)
+    const detail = payload.detail as Record<string, unknown> | undefined
+
     if (!response.ok) {
-      const error = await response.json()
       return NextResponse.json(
-        { success: false, error: error.detail || 'Analysis failed' },
+        {
+          success: false,
+          error: typeof payload.detail === 'string'
+            ? payload.detail
+            : payload.error || detail?.message || 'Analysis failed',
+          error_detail: payload.detail,
+        },
         { status: response.status }
       )
     }
 
-    const data = await response.json()
-    return NextResponse.json(data)
+    return NextResponse.json(payload)
   } catch (error) {
     console.error('Comprehensive analysis error:', error)
     return NextResponse.json(
-      { success: false, error: 'Internal server error' },
-      { status: 500 }
+      { success: false, error: error instanceof Error ? error.message : '综合分析服务暂时不可用' },
+      { status: 502 }
     )
   }
 }

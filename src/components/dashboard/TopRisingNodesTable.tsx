@@ -69,12 +69,12 @@ export function TopRisingNodesTable({ nodes }: Props) {
                   <span className="text-muted-foreground">-</span>
                 )}
               </td>
-              <td className="py-3 px-4">
+              <td className="px-4 py-3">
                 <Link
-                  href={`/graph/nodes/${node.nodeId}`}
-                  className="text-primary hover:underline text-sm"
+                  href="/graph"
+                  className="inline-flex min-h-9 items-center rounded-md px-2 text-sm text-primary transition-colors hover:bg-primary/10 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  查看详情 →
+                  打开图谱
                 </Link>
               </td>
             </tr>

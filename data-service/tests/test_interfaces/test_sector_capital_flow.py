@@ -42,3 +42,17 @@ class TestSectorCapitalFlow:
 
         with pytest.raises(Exception):
             await data_service.get_sector_capital_flow("今日")
+
+    @pytest.mark.asyncio
+    async def test_uses_file_cache_when_live_sources_fail(self, registry, mock_akshare, mock_tushare, tmp_path):
+        from services.data_service import DataService
+
+        registry._config["sector_capital_flow"].fallback_to_file = True
+        registry.cache.set_file = lambda key, data: None
+        registry.cache.get_file = lambda key: [{"名称": "半导体", "今日主力净流入-净额": 100000000}]
+        mock_akshare.get_sector_capital_flow.side_effect = Exception("失败")
+        mock_tushare.get_sector_capital_flow.side_effect = Exception("失败")
+
+        result = await DataService(reg=registry).get_sector_capital_flow("今日")
+
+        assert result[0]["名称"] == "半导体"

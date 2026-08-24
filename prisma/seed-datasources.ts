@@ -18,9 +18,9 @@ async function main() {
       name: '财联社',
       type: 'financial',
       driverType: 'api',
-      provider: 'akshare',
+      provider: 'tushare',
       category: '综合财经媒体',
-      config: JSON.stringify({ keyword: '财联社', limit: 200 }),
+      config: JSON.stringify({ keyword: 'cls', api: 'news', limit: 200 }),
       updateFrequency: 60,
     },
     {
@@ -175,7 +175,9 @@ async function main() {
   for (const source of dataSources) {
     await prisma.dataSource.upsert({
       where: { id: source.id },
-      update: {},
+      update: source.id === 'ds_cls'
+        ? { provider: source.provider, config: source.config }
+        : {},
       create: source,
     })
     console.log(`✅ 数据源创建: ${source.name} (${source.category})`)

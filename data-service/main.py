@@ -19,9 +19,16 @@ for proxy_key in ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL
 # 加载环境变量（从项目根目录加载）
 project_root = Path(__file__).parent.parent
 env_path = project_root / '.env'
-load_dotenv(env_path)
+service_env_path = Path(__file__).parent / '.env'
+# 统一以项目根目录 .env 为单一运行时配置源；服务目录 .env 只补充根目录不存在的变量。
+# 这样不会因为历史遗留的 data-service/.env 覆盖 Neo4j、数据库和数据源配置。
+load_dotenv(service_env_path, override=False)
+load_dotenv(env_path, override=True)
 logger = logging.getLogger(__name__)
-logger.info(f"加载环境变量: {env_path}, ENABLE_AI_ANALYSIS={os.getenv('ENABLE_AI_ANALYSIS')}")
+logger.info(
+    f"加载环境变量: {env_path} + {service_env_path}, "
+    f"ENABLE_AI_ANALYSIS={os.getenv('ENABLE_AI_ANALYSIS')}"
+)
 
 # 修复：禁用系统代理，避免AKShare/requests库代理问题
 # macOS系统配置了HTTP代理(127.0.0.1:1082)但代理连接不稳定
@@ -33,7 +40,7 @@ os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact
-from routers import stocks, industry_analysis
+from routers import stocks, industry_analysis, fund
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -194,6 +201,37 @@ async def lifespan(app: FastAPI):
     )
     logger.info("已注册每日缓存刷新任务 (每天15:30执行)")
 
+    async def portfolio_sync_monitor():
+        """每分钟检查持仓同步计划；具体执行时间由 Next.js 中的组合配置决定。"""
+        try:
+            import aiohttp
+
+            next_js_url = os.getenv('NEXT_JS_URL', 'http://localhost:3000')
+            headers = {}
+            sync_secret = os.getenv('PORTFOLIO_SYNC_SECRET')
+            if sync_secret:
+                headers['x-portfolio-sync-secret'] = sync_secret
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{next_js_url}/api/portfolio/sync-scheduled",
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as response:
+                    result = await response.json(content_type=None)
+                    if response.status != 200 or not result.get('success'):
+                        logger.warning(f"持仓定时同步检查失败: HTTP {response.status}, {result}")
+                    elif result.get('data', {}).get('results'):
+                        logger.info(f"持仓定时同步执行结果: {result['data']['results']}")
+        except Exception as e:
+            logger.warning(f"无法检查持仓同步计划: {e}")
+
+    await scheduler_service.add_interval_job(
+        job_id="portfolio_sync_monitor",
+        func=portfolio_sync_monitor,
+        minutes=1,
+    )
+    logger.info("已注册持仓同步监控任务 (每分钟检查，到点执行)")
+
     # 注册数据清理任务（每天凌晨2:00执行）
     from workers.data_cleanup import run_cleanup_task
 
@@ -250,6 +288,7 @@ app.include_router(market.router, prefix="/api/market", tags=["market"])
 app.include_router(capital_flow.router, prefix="/api/capital-flow", tags=["capital-flow"])
 app.include_router(advanced_capital_flow.router, prefix="/api/capital-flow/advanced", tags=["advanced-capital-flow"])
 app.include_router(etf.router, prefix="/api/etf", tags=["etf"])
+app.include_router(fund.router, prefix="/api/fund", tags=["fund"])
 app.include_router(macro_flow.router, prefix="/api/macro-flow", tags=["macro-flow"])
 app.include_router(news.router, prefix="/api/news", tags=["news"])
 app.include_router(influencers.router, tags=["influencers"])

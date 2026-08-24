@@ -216,7 +216,7 @@ export interface NorthboundData {
 }
 
 // Data quality indicator for market data
-export type DataQuality = 'realtime' | 'estimated' | 'cached' | 'unavailable'
+export type DataQuality = 'realtime' | 'close' | 'estimated' | 'cached' | 'unavailable'
 
 // 持续多日大单净流入趋势
 export interface ConsecutiveTrend {
@@ -270,6 +270,12 @@ export interface CapitalFlowData {
   topInflowSectors: UnifiedSectorFlow[]
   topOutflowSectors: UnifiedSectorFlow[]
   source?: string
+  sourceDetails?: {
+    sectorFlow: string
+    northbound: string
+    volume?: string
+    dragonTiger: string
+  }
   dataDate?: string
   dataQuality?: DataQuality
 
@@ -339,13 +345,19 @@ export interface MarketContextValue {
 export type UnifiedSectorFlow = SectorFlow
 
 export const SOURCE_MAP: Record<string, SourceDisplay> = {
-  'akshare_realtime': { text: 'AKShare实时', icon: '📊', variant: 'default' },
-  'akshare': { text: 'AKShare', icon: '📊', variant: 'default' },
-  'realtime': { text: '实时数据', icon: '📊', variant: 'default' },
-  'cached': { text: '缓存数据', icon: '📋', variant: 'secondary' },
-  'yahoo': { text: 'Yahoo Finance', icon: '🌐', variant: 'outline' },
-  'unavailable': { text: '数据暂不可用', icon: '⚠️', variant: 'destructive' },
-  'loading': { text: '加载中...', icon: '⏳', variant: 'outline' },
+  'akshare_realtime': { text: 'AKShare实时', icon: 'database', variant: 'default' },
+  'akshare': { text: 'AKShare', icon: 'database', variant: 'default' },
+  'Tushare': { text: 'Tushare', icon: 'cloud', variant: 'default' },
+  'AKShare': { text: 'AKShare', icon: 'database', variant: 'default' },
+  '东方财富': { text: '东方财富', icon: 'database', variant: 'default' },
+  '新浪财经': { text: '新浪财经', icon: 'cloud', variant: 'outline' },
+  '缓存': { text: '缓存数据', icon: 'archive', variant: 'secondary' },
+  '多源': { text: '多数据源', icon: 'database', variant: 'default' },
+  'realtime': { text: '实时数据', icon: 'database', variant: 'default' },
+  'cached': { text: '缓存数据', icon: 'archive', variant: 'secondary' },
+  'yahoo': { text: 'Yahoo Finance', icon: 'cloud', variant: 'outline' },
+  'unavailable': { text: '数据暂不可用', icon: 'alert', variant: 'destructive' },
+  'loading': { text: '加载中...', icon: 'loader', variant: 'outline' },
 }
 
 export const SENTIMENT_THRESHOLDS = {

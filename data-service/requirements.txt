@@ -34,3 +34,7 @@ sse-starlette>=1.6.0
 # 知识图谱
 PyYAML>=6.0.0
 feedparser>=6.0.10
+
+# 可选国际股票数据 fallback：OpenBB 优先，直接 yfinance 作为兼容 fallback
+openbb>=4.4.2,<5.0.0
+yfinance>=0.2.55,<0.3.0

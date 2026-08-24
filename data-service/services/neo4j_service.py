@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, List
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
 from contextlib import asynccontextmanager
 from .cache_service import cache_service
+from db import db
 
 
 class Neo4jService:
@@ -16,6 +17,55 @@ class Neo4jService:
         self.password = os.getenv("NEO4J_PASSWORD")
         self.database = os.getenv("NEO4J_DATABASE", "neo4j")
         self._driver: Optional[AsyncDriver] = None
+
+    @staticmethod
+    def _reference_aliases(reference_id: str) -> List[str]:
+        """兼容 SQLite Domain ID 与 Neo4j Industry ID/code 的历史差异。"""
+        aliases = {
+            "dom_ai": ["ai_hardware", "AI算力硬件"],
+            "dom_new_energy": ["new_energy_vehicle", "新能源汽车"],
+            "dom_medical": ["innovative_drug", "创新药"],
+        }
+        return aliases.get(reference_id, [])
+
+    async def resolve_industry_id(self, reference_id: str) -> Optional[str]:
+        """将前端/SQLite 产业引用解析为 Neo4j 中真实的 Industry.id。"""
+        candidates = [str(reference_id or "").strip()]
+        aliases = self._reference_aliases(reference_id)
+        candidates.extend(aliases)
+
+        try:
+            domain_rows = db.execute(
+                "SELECT id, code, name FROM Domain WHERE id = ? OR code = ? LIMIT 1",
+                (reference_id, reference_id),
+            )
+            if domain_rows:
+                domain = domain_rows[0]
+                candidates.extend(
+                    str(value).strip()
+                    for value in (domain.get("code"), domain.get("name"))
+                    if value
+                )
+        except Exception:
+            # 图谱服务不能因为本地映射表不可用而失去按真实 ID 查询的能力。
+            pass
+
+        candidates = list(dict.fromkeys(value for value in candidates if value))
+        async with self.session() as session:
+            query = """
+            MATCH (i:Industry)
+            WHERE i.id IN $candidates
+               OR i.code IN $candidates
+               OR any(candidate IN $candidates WHERE toLower(i.name) = toLower(candidate))
+               OR any(candidate IN $candidates WHERE toLower(i.name) CONTAINS toLower(candidate))
+            RETURN i.id AS id
+            ORDER BY CASE WHEN i.id = $reference_id THEN 0 ELSE 1 END,
+                     CASE WHEN i.code = $reference_id THEN 0 ELSE 1 END
+            LIMIT 1
+            """
+            result = await session.run(query, candidates=candidates, reference_id=reference_id)
+            record = await result.single()
+            return record["id"] if record else None
 
     async def connect(self):
         """建立Neo4j连接"""
@@ -218,12 +268,15 @@ class Neo4jService:
             Dict: 产业基本信息，包含 id, code, name, description
             None: 产业不存在
         """
+        resolved_id = await self.resolve_industry_id(industry_id)
+        if not resolved_id:
+            return None
         async with self.session() as s:
             query = """
             MATCH (i:Industry {id: $industry_id})
             RETURN i.id as id, i.code as code, i.name as name, i.description as description
             """
-            result = await s.run(query, industry_id=industry_id)
+            result = await s.run(query, industry_id=resolved_id)
             record = await result.single()
             if record:
                 return dict(record)
@@ -240,10 +293,13 @@ class Neo4jService:
             Dict: 嵌套结构 {industry: {}, stages: [{stage: {}, segments: [{segment: {}, companies: []}]}]}
             None: 产业不存在
         """
+        resolved_id = await self.resolve_industry_id(industry_id)
+        if not resolved_id:
+            return None
         async with self.session() as s:
             # 1. 验证产业是否存在
             check_query = "MATCH (i:Industry {id: $industry_id}) RETURN i"
-            check_result = await s.run(check_query, industry_id=industry_id)
+            check_result = await s.run(check_query, industry_id=resolved_id)
             if not await check_result.single():
                 return None
 
@@ -278,7 +334,7 @@ class Neo4jService:
                 company.description as company_description
             ORDER BY stage.code, segment.code, company.market_position, company.name
             """
-            result = await s.run(query, industry_id=industry_id)
+            result = await s.run(query, industry_id=resolved_id)
             records = await result.data()
 
             # 3. 组织嵌套数据结构
@@ -363,10 +419,13 @@ class Neo4jService:
             Dict: 扁平化结构 {industry: {}, lanes: {stage_code: {stage: {}, segments: [...]}}}
             None: 产业不存在
         """
+        resolved_id = await self.resolve_industry_id(industry_id)
+        if not resolved_id:
+            return None
         async with self.session() as s:
             # 1. 验证产业是否存在
             check_query = "MATCH (i:Industry {id: $industry_id}) RETURN i"
-            check_result = await s.run(check_query, industry_id=industry_id)
+            check_result = await s.run(check_query, industry_id=resolved_id)
             if not await check_result.single():
                 return None
 
@@ -409,7 +468,7 @@ class Neo4jService:
                 companies
             ORDER BY stage.order, segment.order
             """
-            result = await s.run(query, industry_id=industry_id)
+            result = await s.run(query, industry_id=resolved_id)
             records = await result.data()
 
             # 3. 组织泳道数据结构

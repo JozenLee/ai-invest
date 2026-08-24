@@ -16,7 +16,7 @@ async def get_market_overview():
     """获取市场概览（主要指数行情）
 
     通过统一数据服务获取，自动按配置的优先级降级：
-    AKShare -> Tushare -> 雪球 -> 缓存
+    Tushare -> AKShare -> 雪球 -> 缓存
     """
     try:
         df = await data_service.get_index_spot()
@@ -65,19 +65,33 @@ async def get_market_overview():
             }
 
         # 判断数据新鲜度
-        data_date = market_status["lastTradingDate"]
-        is_stale = not market_status["isRealtime"]
+        actual_source = data_service.registry.get_last_source("index_spot")
+        data_dates = [
+            str(row.get("数据日期", ""))
+            for _, row in df.iterrows()
+            if str(row.get("数据日期", ""))
+        ]
+        data_date = data_dates[0] if data_dates else market_status["lastTradingDate"]
+        # 实时状态必须同时满足：当前处于交易时段，且本次请求命中了实时源。
+        # 缓存数据只能在非交易时段作为最近收盘数据返回。
+        is_realtime = market_status["isRealtime"] and actual_source not in {"缓存", "不可用"}
+        is_stale = not is_realtime
 
         return {
             "success": True,
             "data": {
                 "indices": indices,
-                "source": "unified",
+                "source": actual_source,
                 "timestamp": datetime.now().isoformat(),
                 "meta": {
                     **market_status,
+                    "isRealtime": is_realtime,
                     "dataDate": data_date,
-                    "staleReason": "market_closed" if is_stale else None,
+                    "staleReason": (
+                        "market_closed" if not market_status["isRealtime"]
+                        else "cached_or_realtime_source_unavailable" if is_stale
+                        else None
+                    ),
                 },
             },
         }

@@ -74,25 +74,10 @@ for i in {1..30}; do
     sleep 1
 done
 
-# 启动 Next.js 开发服务器
-echo -e "${GREEN}启动 Next.js 开发服务器...${NC}"
-npm run dev > logs/nextjs.log 2>&1 &
-NEXTJS_PID=$!
-echo "  PID: $NEXTJS_PID"
-
-# 等待 Next.js 启动
-echo -n "等待 Next.js 就绪 ... "
-for i in {1..60}; do
-    if curl -s http://localhost:3000 > /dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC}"
-        break
-    fi
-    if [ $i -eq 60 ]; then
-        echo -e "${YELLOW}⚠ 超时（但可能正常）${NC}"
-        break
-    fi
-    sleep 1
-done
+# 启动 Next.js 开发服务器，并接管当前项目占用的 3000 端口
+echo -e "${GREEN}刷新 Next.js 开发服务器...${NC}"
+./scripts/refresh-ui.sh
+NEXTJS_PID=$(cat logs/nextjs.pid)
 
 echo ""
 echo "=========================================="

@@ -11,6 +11,7 @@ Multi-Source Data Provider - 多数据源智能提供者
 from typing import Optional, List, Dict, Any
 import logging
 import asyncio
+import os
 from datetime import datetime, timedelta
 import pandas as pd
 
@@ -37,6 +38,7 @@ class MultiSourceProvider:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
+        self.etf_fetch_concurrency = max(1, int(os.getenv("MARKET_ETF_FETCH_CONCURRENCY", "6")))
 
         # 延迟导入避免循环依赖
         from providers.akshare_provider import AKShareProvider
@@ -53,6 +55,15 @@ class MultiSourceProvider:
         self._etf_cache: Optional[Dict[str, Any]] = None
         self._index_cache: Optional[Dict[str, Any]] = None
         self._cache_loaded = False
+
+    @staticmethod
+    def _to_float(value: Any) -> Optional[float]:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     async def warmup_cache(self):
         """启动时预加载缓存（减少首次请求延迟）"""
@@ -119,11 +130,32 @@ class MultiSourceProvider:
         """
         self.logger.info(f"🔍 Fetching history for ETF {code} ({start_date} to {end_date})")
 
-        # 方案1: AKShare（新浪财经，免费且稳定）
+        # 方案1: Tushare Promax（综合分析统一主数据源）
+        if self.tushare.available:
+            try:
+                self.logger.info(f"[Tushare] Fetching ETF {code} history...")
+                df = await self.tushare.get_etf_daily(code, start_date, end_date)
+                if not df.empty:
+                    date_column = '日期' if '日期' in df.columns else 'date' if 'date' in df.columns else 'trade_date' if 'trade_date' in df.columns else None
+                    if date_column:
+                        df = df.copy()
+                        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+                        df = df.sort_values(date_column, ascending=True).reset_index(drop=True)
+                    self.logger.info(f"✅ Tushare returned {len(df)} rows for {code}")
+                    return df
+            except Exception as e:
+                self.logger.warning(f"⚠️ [Tushare] ETF {code} failed: {e}")
+
+        # 方案2: AKShare（仅作为 Promax 不可用时的降级）
         try:
             self.logger.info(f"[AKShare] Fetching ETF {code} history...")
             df = await self.akshare.get_etf_daily(code, start_date, end_date)
             if not df.empty:
+                date_column = '日期' if '日期' in df.columns else 'date' if 'date' in df.columns else None
+                if date_column:
+                    df = df.copy()
+                    df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+                    df = df.sort_values(date_column, ascending=True).reset_index(drop=True)
                 self.logger.info(f"✅ AKShare returned {len(df)} rows for {code}")
 
                 # 统一列名（新浪财经返回英文列名）
@@ -146,19 +178,6 @@ class MultiSourceProvider:
                 return df
         except Exception as e:
             self.logger.warning(f"⚠️ [AKShare] ETF {code} failed: {e}")
-
-        # 方案2: Tushare（需要权限，作为备用）
-        if self.tushare.available:
-            try:
-                self.logger.info(f"[Tushare] Fetching ETF {code} history...")
-                df = await self.tushare.get_etf_daily(code, start_date, end_date)
-                if not df.empty:
-                    self.logger.info(f"✅ Tushare returned {len(df)} rows for {code}")
-                    return df
-            except Exception as e:
-                self.logger.warning(f"[Tushare] ETF {code} failed: {e}")
-        else:
-            self.logger.info(f"[Tushare] Not available (TUSHARE_TOKEN not configured)")
 
         # 方案3: 降级到实时数据（单日）
         try:
@@ -202,10 +221,32 @@ class MultiSourceProvider:
                 "change_pct": float(row.get("涨跌幅", 0)),
                 "volume": float(row.get("成交量", 0)),
                 "amount": float(row.get("成交额", 0)),
+                "market_value": self._to_float(row.get("总市值")),
+                "shares": self._to_float(row.get("最新份额")),
                 "source": "cache"
             }
 
-        # 方案2: 实时查询
+        # 方案2: Tushare Promax 实时查询
+        if self.tushare.available:
+            try:
+                frame = await self.tushare.get_etf_realtime([code])
+                if frame is not None and not frame.empty:
+                    row = frame.iloc[0]
+                    return {
+                        "code": code,
+                        "name": str(row.get("名称") or code),
+                        "price": float(row.get("最新价", 0) or 0),
+                        "change_pct": float(row.get("涨跌幅", 0) or 0),
+                        "volume": float(row.get("成交量", 0) or 0),
+                        "amount": float(row.get("成交额", 0) or 0),
+                        "market_value": self._to_float(row.get("总市值")),
+                        "shares": self._to_float(row.get("最新份额")),
+                        "source": "tushare",
+                    }
+            except Exception as e:
+                self.logger.warning(f"[Tushare] ETF spot data failed for {code}: {e}")
+
+        # 方案3: 其他实时查询降级
         try:
             spot_data = await self.fallback.get_etf_spot_data(code)
             if spot_data:
@@ -217,6 +258,8 @@ class MultiSourceProvider:
                     "change_pct": kline["涨跌幅"],
                     "volume": kline["成交量"],
                     "amount": kline["成交额"],
+                    "market_value": self._to_float(spot_data.get("info", {}).get("总市值")),
+                    "shares": self._to_float(spot_data.get("info", {}).get("最新份额")),
                     "source": "realtime"
                 }
         except Exception as e:
@@ -320,46 +363,46 @@ class MultiSourceProvider:
         Returns:
             ETF数据列表
         """
-        results = []
+        semaphore = asyncio.Semaphore(self.etf_fetch_concurrency)
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y%m%d")
 
-        for code in codes:
-            try:
-                # 获取基本信息
-                spot = await self.get_etf_spot_data(code)
-                if not spot:
-                    continue
+        async def fetch_one(code: str) -> Optional[Dict[str, Any]]:
+            async with semaphore:
+                try:
+                    spot = await self.get_etf_spot_data(code)
+                    if not spot:
+                        self.logger.warning("ETF %s 未获取到实时数据", code)
+                        return None
 
-                etf_data = {
-                    "code": code,
-                    "name": spot["name"],
-                    "current_price": spot["price"],
-                    "change_pct": spot["change_pct"],
-                    "volume": spot["volume"],
-                    "amount": spot["amount"],
-                    "source": spot["source"],
-                }
+                    etf_data = {
+                        "code": code,
+                        "name": spot["name"],
+                        "current_price": spot["price"],
+                        "change_pct": spot["change_pct"],
+                        "volume": spot["volume"],
+                        "amount": spot["amount"],
+                        "market_value": spot.get("market_value"),
+                        "shares": spot.get("shares"),
+                        "source": spot["source"],
+                    }
 
-                # 如果需要历史数据
-                if with_history:
-                    end_date = datetime.now().strftime("%Y%m%d")
-                    start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y%m%d")
+                    if with_history:
+                        hist_df = await self.get_etf_hist_data(code, start_date, end_date)
+                        if hist_df is not None and not hist_df.empty:
+                            etf_data["history"] = hist_df.to_dict("records")
+                            etf_data["history_days"] = len(hist_df)
+                        else:
+                            etf_data["history"] = []
+                            etf_data["history_days"] = 0
+                            etf_data["history_fallback"] = True
+                    return etf_data
+                except Exception as error:
+                    self.logger.error("Failed to get ETF %s: %s", code, error)
+                    return None
 
-                    hist_df = await self.get_etf_hist_data(code, start_date, end_date)
-                    if hist_df is not None and not hist_df.empty:
-                        etf_data["history"] = hist_df.to_dict("records")
-                        etf_data["history_days"] = len(hist_df)
-                    else:
-                        etf_data["history"] = []
-                        etf_data["history_days"] = 0
-                        etf_data["history_fallback"] = True
-
-                results.append(etf_data)
-
-            except Exception as e:
-                self.logger.error(f"Failed to get ETF {code}: {e}")
-                continue
-
-        return results
+        results = await asyncio.gather(*(fetch_one(code) for code in dict.fromkeys(codes)))
+        return [result for result in results if result is not None]
 
     async def get_index_history(
         self,
@@ -370,7 +413,7 @@ class MultiSourceProvider:
         """
         获取指数历史数据（多数据源）
 
-        优先级: AKShare新浪财经 > AKShare东方财富 > 固定映射降级
+        优先级: Tushare Promax > AKShare > 单点降级
 
         Args:
             code: 指数代码（如 000688, 399006, 399303, 931079）
@@ -397,7 +440,37 @@ class MultiSourceProvider:
         elif normalized_code in self.INDEX_FIXED_MAPPING:
             index_name = self.INDEX_FIXED_MAPPING[normalized_code]["name"]
 
-        # 方案1: AKShare stock_zh_index_daily（新浪财经，最稳定）
+        # 方案1: Tushare Promax index_daily（综合分析主数据源）
+        if self.tushare.available:
+            try:
+                ts_code = self.tushare._to_ts_code(
+                    normalized_code,
+                    default_market='SZ' if normalized_code.startswith(('3', '399')) else 'SH',
+                )
+                df = await self.tushare.get_index_daily(ts_code, start_date, end_date)
+                if not df.empty:
+                    history = []
+                    for _, row in df.iterrows():
+                        history.append({
+                            "日期": str(row.get("date", "")),
+                            "开盘": float(row.get("open", 0) or 0),
+                            "收盘": float(row.get("close", 0) or 0),
+                            "最高": float(row.get("high", 0) or 0),
+                            "最低": float(row.get("low", 0) or 0),
+                            "成交量": float(row.get("volume", 0) or 0),
+                            "涨跌幅": float(row.get("pct_chg", 0) or 0),
+                        })
+                    return {
+                        "code": code,
+                        "name": index_name or code,
+                        "history": history,
+                        "source": "tushare_index_daily",
+                        "data_points": len(history),
+                    }
+            except Exception as e:
+                self.logger.warning(f"⚠️ [Tushare index_daily] Index {code} failed: {e}")
+
+        # 方案2: AKShare stock_zh_index_daily（仅作降级）
         try:
             # 转换代码格式：添加市场前缀
             sina_code = self._normalize_index_code(code)
@@ -439,7 +512,7 @@ class MultiSourceProvider:
         except Exception as e:
             self.logger.warning(f"⚠️ [AKShare stock_zh_index_daily] Index {code} failed: {e}")
 
-        # 方案2: AKShare index_zh_a_hist（东方财富，支持更多指数）
+        # 方案3: AKShare index_zh_a_hist（东方财富，支持更多指数）
         try:
             import akshare as ak
             self.logger.info(f"[AKShare] Trying index_zh_a_hist for {normalized_code}...")
@@ -480,7 +553,7 @@ class MultiSourceProvider:
         except Exception as e:
             self.logger.warning(f"⚠️ [AKShare index_zh_a_hist] Index {code} failed: {e}")
 
-        # 方案3: 降级到实时数据（单日）
+        # 方案4: 降级到实时数据（单日）
         try:
             self.logger.warning(f"⚠️ [Fallback] Using spot data for index {code} (no history available)...")
             spot_data = await self.get_index_data(code)

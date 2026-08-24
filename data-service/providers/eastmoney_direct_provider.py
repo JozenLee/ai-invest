@@ -279,6 +279,9 @@ class EastmoneyDirectProvider(DataProvider):
                 sz_net = float(result.get('hk2sz', {}).get('dayNetAmtIn', 0)) / 10000
                 date_str = result.get('hk2sh', {}).get('date2', datetime.now().strftime("%Y-%m-%d"))
 
+                if sh_net == 0 and sz_net == 0:
+                    raise Exception("东方财富历史北向资金返回零值")
+
                 return {
                     "date": date_str,
                     "value": sh_net + sz_net,

@@ -6,6 +6,10 @@ echo "停止 AI投资分析系统服务"
 echo "=========================================="
 echo ""
 
+if command -v pm2 >/dev/null 2>&1; then
+    pm2 delete ai-invest-web-dev 2>/dev/null || true
+fi
+
 # 颜色定义
 GREEN='\033[0;32m'
 RED='\033[0;31m'

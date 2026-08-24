@@ -59,9 +59,27 @@ model Portfolio {
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  cashBalance Float @default(0)
+  lastSyncedAt DateTime?
+  lastSyncEmail String?
 
   user     User      @relation(fields: [userId], references: [id])
   holdings Holding[]
+  syncSchedule PortfolioSyncSchedule?
+}
+
+model PortfolioSyncSchedule {
+  id          String   @id @default(cuid())
+  portfolioId String   @unique
+  enabled     Boolean  @default(true)
+  timezone    String   @default("Asia/Shanghai")
+  syncTimes   String   @default("[\"00:00\",\"12:00\"]")
+  lastRunAt   DateTime?
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
 }
 
 model Holding {
@@ -70,12 +88,18 @@ model Holding {
   ticker       String // ETF代码
   market       String // A（MVP仅支持A股ETF）
   name         String // ETF名称
-  quantity     Int // 持有份额
-  avgCost      Float // 平均成本
-  currentPrice Float? // 当前价格(缓存)
+  category     String? // 基金类别，如 股票型-行业指数、QDII-混合
+  industryDomain     String? // 知识图谱产业领域名称
+  industryDomainCode String? // 知识图谱产业领域代码或ID
+  industryDomainSource String? // ai/manual
+  industryDomainConfidence Float? // AI匹配置信度 0-1
+  quantity     Float // 持有份额（基金可能包含小数份额）
+  unitNav      Float // 邮箱资产证明中的单位净值
   updatedAt    DateTime @updatedAt
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id])
+
+  @@unique([portfolioId, ticker])
 }
 
 // ==================== 市场数据缓存 ====================
@@ -984,6 +1008,49 @@ model Analysis {
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId, type])
+}
+
+// ==================== AI分析报告（无需登录的投研报告历史） ====================
+
+model AIAnalysisReport {
+  id          String   @id @default(cuid())
+  type        String   // market/news/comprehensive
+  industryId  String
+  industryName String
+  title       String
+  summary     String?
+  content     String   // Markdown格式的完整AI报告
+  dataJson    String?  // JSON格式的分析依据和结构化数据
+  createdAt   DateTime @default(now())
+
+  @@index([industryId, type, createdAt])
+  @@index([createdAt])
+}
+
+// ==================== 小红书发布账号 ====================
+
+model XiaohongshuAccount {
+  id                 String   @id @default(cuid())
+  displayName        String
+  accountId          String
+  authType           String   @default("oauth") // oauth/token
+  appId              String?
+  appSecret          String?
+  redirectUri        String?
+  accessToken        String?
+  refreshToken       String?
+  tokenExpiresAt     DateTime?
+  defaultVisibility  String   @default("public") // public/private
+  allowComments      Boolean  @default(true)
+  watermarkEnabled   Boolean  @default(true)
+  defaultTopics      String   @default("[]")
+  enabled            Boolean  @default(true)
+  lastVerifiedAt     DateTime?
+  lastVerifyError    String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([enabled, updatedAt])
 }
 
 // ==================== 关注列表 ====================

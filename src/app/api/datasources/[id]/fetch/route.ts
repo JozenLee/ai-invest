@@ -12,11 +12,10 @@ import { prisma } from '@/lib/db/prisma'
  */
 export async function POST(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> | { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const resolvedParams = await Promise.resolve(params)
-    const { id } = resolvedParams
+    const { id } = await params
 
     // 1. 验证数据源是否存在
     const dataSource = await prisma.dataSource.findUnique({

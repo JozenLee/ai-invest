@@ -137,8 +137,8 @@ class TestDataSourcePriority:
 
     def test_market_capital_flow_source_priority(self):
         """
-        测试: market_capital_flow应该优先使用AKShare（真实数据）
-        防止: 优先使用Sina估算数据
+        测试: market_capital_flow应该优先使用Tushare（已购买正式接口）
+        防止: 实时数据绕过Tushare
         """
         from providers.registry import DEFAULT_CATEGORY_CONFIG
 
@@ -146,10 +146,22 @@ class TestDataSourcePriority:
         assert config is not None, "market_capital_flow配置不存在"
 
         sources = config.sources
-        assert sources[0] == "akshare", \
-            f"market_capital_flow应优先使用akshare，当前: {sources}"
+        assert sources[0] == "tushare", \
+            f"market_capital_flow应优先使用tushare，当前: {sources}"
         assert "sina" in sources, \
             "market_capital_flow应包含sina作为备用"
+
+    def test_index_spot_does_not_use_file_cache_during_trading(self):
+        """盘中指数不能使用可能是上一交易日收盘的文件缓存。"""
+        from providers.registry import DEFAULT_CATEGORY_CONFIG
+
+        assert DEFAULT_CATEGORY_CONFIG["index_spot"].fallback_to_file is True
+        # 实际是否允许回退由 Registry.fetch 根据交易时段动态判断。
+        import inspect
+        from providers.registry import ProviderRegistry
+        source = inspect.getsource(ProviderRegistry.fetch)
+        assert 'category == "index_spot"' in source
+        assert "_is_market_open" in source
 
 
 class TestDataIntegrity:

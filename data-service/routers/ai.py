@@ -131,11 +131,14 @@ async def health_check():
     client = get_anthropic_client()
     api_key = os.getenv("ANTHROPIC_API_KEY")
     model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+    provider = os.getenv("AI_PROVIDER", "anthropic").strip().lower()
 
     return {
         "status": "healthy" if client else "unavailable",
         "api_key_configured": bool(api_key),
         "model": model,
+        "provider": provider,
+        "chatgpt_model": os.getenv("CHATGPT_MODEL"),
         "base_url": os.getenv("ANTHROPIC_BASE_URL"),
         "timestamp": datetime.now().isoformat(),
     }

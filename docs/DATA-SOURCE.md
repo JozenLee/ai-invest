@@ -67,8 +67,9 @@ DATA_SERVICE_URL=http://localhost:8000
 # Yahoo Finance代理（可选）
 YAHOO_FINANCE_PROXY=http://your-proxy:port
 
-# Tushare token（可选）
-TUSHARE_TOKEN=your_token_here
+# Tushare Promax（可选）
+TUSHARE_API_URL=https://your-promax-host/tushare/pro
+TUSHARE_API_KEY=your_api_key_here
 ```
 
 ## 验证数据源

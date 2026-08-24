@@ -1,19 +1,20 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 
 /**
  * Helper function to convert snake_case to camelCase
  */
-function toCamelCase(obj: any): any {
+function toCamelCase(obj: unknown): unknown {
   if (Array.isArray(obj)) {
     return obj.map(item => toCamelCase(item))
   } else if (obj !== null && typeof obj === 'object') {
-    return Object.keys(obj).reduce((acc, key) => {
+    const record = obj as Record<string, unknown>
+    return Object.keys(record).reduce<Record<string, unknown>>((acc, key) => {
       const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())
-      acc[camelKey] = toCamelCase(obj[key])
+      acc[camelKey] = toCamelCase(record[key])
       return acc
-    }, {} as any)
+    }, {})
   }
   return obj
 }
@@ -24,7 +25,7 @@ function toCamelCase(obj: any): any {
  *
  * Proxies to: GET /api/v1/industries
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
     const response = await fetch(`${DATA_SERVICE_URL}/api/v1/industries`, {
       method: 'GET',

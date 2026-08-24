@@ -6,6 +6,7 @@ export interface Portfolio {
   id: string
   userId: string
   name: string
+  category?: string | null
   isDefault: boolean
   createdAt: string
   updatedAt: string
@@ -19,16 +20,15 @@ export interface Holding {
   market: string
   name: string
   quantity: number
-  avgCost: number
-  currentPrice?: number
+  unitNav: number
   updatedAt: string
 }
 
 export interface PortfolioSummary {
   totalAssets: number
-  totalCost: number
-  totalPnl: number
-  totalPnlPct: number
+  totalCost?: number
+  totalPnl?: number
+  totalPnlPct?: number
   cashRatio: number
   holdings: HoldingSummary[]
   sectorAllocation: { sector: string; weight: number }[]
@@ -43,11 +43,8 @@ export interface HoldingSummary {
   ticker: string
   name: string
   quantity: number
-  avgCost: number
-  currentPrice: number
+  unitNav: number
   marketValue: number
-  pnl: number
-  pnlPct: number
   weight: number
 }
 
@@ -70,11 +67,10 @@ export interface HoldingCreateInput {
   market: string
   name: string
   quantity: number
-  avgCost: number
+  unitNav: number
 }
 
 export interface HoldingUpdateInput {
   quantity?: number
-  avgCost?: number
-  currentPrice?: number
+  unitNav?: number
 }

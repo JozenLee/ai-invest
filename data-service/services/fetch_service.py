@@ -179,6 +179,9 @@ class FetchService:
             # 直接使用AKShareProvider实例，而不是data_service
             from providers.akshare_provider import AKShareProvider
             return AKShareProvider()
+        elif provider_name == "tushare":
+            from providers.tushare_provider import TushareProvider
+            return TushareProvider()
         else:
             # 默认使用 AKShare
             logger.warning(f"未知的provider: {provider_name}，使用默认的akshare")

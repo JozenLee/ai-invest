@@ -6,9 +6,8 @@
 # 4. 机构行为数据（龙虎榜、北向资金等）
 
 from fastapi import APIRouter, HTTPException
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Dict, Optional
-import statistics
 
 from services.data_service import data_service
 
@@ -16,7 +15,9 @@ router = APIRouter()
 
 
 def _analyze_consecutive_trend(sector_data: List[Dict]) -> Dict:
-    """分析板块连续流入趋势
+    """统计单日资金绝对值最大的 Top5 板块。
+
+    当前接口只请求一个交易日，因此这里不能解释为连续多日流入趋势。
 
     Args:
         sector_data: 板块资金流向历史数据
@@ -33,7 +34,7 @@ def _analyze_consecutive_trend(sector_data: List[Dict]) -> Dict:
             "strength": "weak"
         }
 
-    # 按净流入排序，取Top 5板块
+    # 按净流入绝对值排序，取 Top5 板块
     top_sectors = sorted(sector_data, key=lambda x: abs(x.get("netFlow", 0)), reverse=True)[:5]
 
     if not top_sectors:
@@ -60,58 +61,17 @@ def _analyze_consecutive_trend(sector_data: List[Dict]) -> Dict:
         strength = "weak"
 
     return {
-        "days": 1,  # 当前仅支持单日数据，后续可扩展多日
-        "totalNet": round(avg_net, 2),
+        "days": 1,
+        "sampleSize": len(top_sectors),
+        "totalNet": round(total_net, 2),
         "avgDaily": round(avg_net, 2),
         "direction": direction,
         "strength": strength
     }
 
 
-def _analyze_volume_amplification(sector_data: List[Dict]) -> Dict:
-    """分析成交量放大情况
-
-    Args:
-        sector_data: 板块资金流向数据
-
-    Returns:
-        包含成交量放大倍数等信息的字典
-    """
-    if not sector_data:
-        return {
-            "currentVolume": 0,
-            "avgVolume": 0,
-            "amplification": 1.0,
-            "isAmplified": False
-        }
-
-    # 使用板块净流入的绝对值作为成交活跃度的代理指标
-    volumes = [abs(s.get("netFlow", 0)) for s in sector_data if s.get("netFlow")]
-
-    if not volumes:
-        return {
-            "currentVolume": 0,
-            "avgVolume": 0,
-            "amplification": 1.0,
-            "isAmplified": False
-        }
-
-    current_volume = volumes[0] if volumes else 0
-    avg_volume = statistics.mean(volumes) if len(volumes) > 1 else current_volume
-
-    amplification = current_volume / avg_volume if avg_volume > 0 else 1.0
-    is_amplified = amplification >= 1.5
-
-    return {
-        "currentVolume": round(current_volume, 2),
-        "avgVolume": round(avg_volume, 2),
-        "amplification": round(amplification, 2),
-        "isAmplified": is_amplified
-    }
-
-
 def _analyze_price_flow_divergence(sector_data: List[Dict]) -> Dict:
-    """分析股价与资金流向背离
+    """分析资金绝对值最大的单个板块的涨跌幅与资金方向是否背离。
 
     Args:
         sector_data: 板块资金流向数据（包含涨跌幅）
@@ -128,7 +88,7 @@ def _analyze_price_flow_divergence(sector_data: List[Dict]) -> Dict:
             "signal": "无明显背离"
         }
 
-    # 取净流入最大的板块
+    # 取资金净额绝对值最大的板块，不代表整个市场或指数。
     top_sector = max(sector_data, key=lambda x: abs(x.get("netFlow", 0))) if sector_data else {}
 
     price_change = top_sector.get("changePct", 0)
@@ -163,11 +123,24 @@ async def get_enhanced_capital_flow():
     try:
         # 并行获取数据
         sector_data_today = await data_service.get_sector_capital_flow("今日")
+        sector_source = data_service.registry.get_last_source("sector_capital_flow")
         northbound_data = await data_service.get_northbound_flow()
+        northbound_source = data_service.registry.get_last_source("northbound_flow")
+        volume_amplification = await data_service.get_market_volume_amplification(20)
+        volume_source = data_service.registry.get_last_source("market_volume_amplification")
 
-        # 龙虎榜数据暂时禁用（AKShare API结构变化）
-        lhb_data = []
-        # lhb_data = await data_service.get_lhb_data()
+        lhb_data = await data_service.get_lhb_data()
+        lhb_source = data_service.registry.get_last_source("lhb_data")
+
+        sources = {
+            "sectorFlow": sector_source,
+            "northbound": northbound_source,
+            "volume": volume_source,
+            "dragonTiger": lhb_source,
+        }
+        non_tushare = {name: source for name, source in sources.items() if source != "Tushare"}
+        if non_tushare:
+            raise RuntimeError(f"资金流向数据未全部命中 Tushare: {non_tushare}")
 
         # 转换为统一格式
         sectors_formatted = []
@@ -182,7 +155,6 @@ async def get_enhanced_capital_flow():
 
         # 分析各项指标
         consecutive_trend = _analyze_consecutive_trend(sectors_formatted)
-        volume_amplification = _analyze_volume_amplification(sectors_formatted)
         price_flow_divergence = _analyze_price_flow_divergence(sectors_formatted)
 
         # 构建机构行为数据
@@ -191,7 +163,7 @@ async def get_enhanced_capital_flow():
 
         # 龙虎榜数据统计
         lhb_count = len(lhb_data) if lhb_data else 0
-        lhb_net_buy = 0  # 简化处理，后续可根据买卖方向计算
+        lhb_net_buy = 0
         lhb_top_stocks = []
 
         if lhb_data:
@@ -199,8 +171,9 @@ async def get_enhanced_capital_flow():
             for item in lhb_data[:5]:
                 lhb_top_stocks.append({
                     "name": item.get("stock_name", ""),
-                    "netBuy": round(item.get("amount", 0) / 1e8, 2)
+                    "netBuy": round(float(item.get("netBuy", item.get("net_amount", 0)) or 0) / 1e8, 2)
                 })
+            lhb_net_buy = round(sum(float(item.get("netBuy", item.get("net_amount", 0)) or 0) for item in lhb_data) / 1e8, 2)
 
         institutional_behavior = {
             "dragonTiger": {
@@ -225,8 +198,15 @@ async def get_enhanced_capital_flow():
 
         # 板块流向（保留原有逻辑）
         sectors_formatted.sort(key=lambda x: x["netFlow"], reverse=True)
-        top_inflow = sectors_formatted[:10]
-        top_outflow = sorted(sectors_formatted, key=lambda x: x["netFlow"])[:10]
+        top_inflow = [item for item in sectors_formatted if item["netFlow"] > 0][:10]
+        top_outflow = [item for item in sorted(sectors_formatted, key=lambda x: x["netFlow"]) if item["netFlow"] < 0][:10]
+
+        has_close_data = bool(northbound_data.get("stale")) if has_northbound else False
+        data_quality = "close" if has_close_data else "realtime"
+        sector_date = str(sector_data_today[0].get("日期", "")) if sector_data_today else ""
+        volume_date = str(volume_amplification.get("date", ""))
+        data_dates = [date for date in (sector_date, northbound_data.get("date", ""), volume_date) if date]
+        data_date = max(data_dates) if data_dates else datetime.now().strftime("%Y-%m-%d")
 
         return {
             "success": True,
@@ -237,9 +217,16 @@ async def get_enhanced_capital_flow():
                 "institutionalBehavior": institutional_behavior,
                 "topInflowSectors": top_inflow,
                 "topOutflowSectors": top_outflow,
-                "source": "realtime",
-                "dataDate": datetime.now().strftime("%Y-%m-%d"),
-                "dataQuality": "realtime",
+                "source": "Tushare",
+                "sourceDetails": {
+                    "sectorFlow": sector_source,
+                    "northbound": northbound_source,
+                    "volume": volume_source,
+                    "dragonTiger": lhb_source,
+                },
+                "dataDate": data_date,
+                "dataQuality": data_quality,
+                "dataSources": sources,
                 "timestamp": datetime.now().isoformat()
             }
         }

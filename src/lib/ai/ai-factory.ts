@@ -4,7 +4,7 @@
 import { ClaudeClient } from './claude'
 import { OpenAIClient } from './openai'
 
-export type AIProvider = 'claude' | 'openai'
+export type AIProvider = 'anthropic' | 'claude' | 'chatgpt' | 'openai'
 
 export interface AIClient {
   analyzeEvent: ClaudeClient['analyzeEvent']
@@ -16,11 +16,13 @@ export interface AIClient {
  * 根据环境变量 AI_PROVIDER 决定使用哪个提供商
  */
 export function getAIClient(): AIClient {
-  const provider = (process.env.AI_PROVIDER || 'claude') as AIProvider
+  const provider = (process.env.AI_PROVIDER || 'anthropic') as AIProvider
 
   switch (provider) {
+    case 'chatgpt':
     case 'openai':
       return new OpenAIClient()
+    case 'anthropic':
     case 'claude':
     default:
       return new ClaudeClient()

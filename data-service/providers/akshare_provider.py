@@ -387,13 +387,20 @@ class AKShareProvider(DataProvider):
                     start_dt = pd.to_datetime(start_date, format='%Y%m%d')
                     end_dt = pd.to_datetime(end_date, format='%Y%m%d')
                     df = df[(df['date'] >= start_dt) & (df['date'] <= end_dt)]
+                    # 不同接口返回顺序不一致；统一为从旧到新，避免区间涨跌、回撤和技术指标反算。
+                    df = df.sort_values('date', ascending=True).reset_index(drop=True)
 
                     # 统一列名到东方财富格式（如果需要）
                     # 新浪格式: date, open, high, low, close, volume, amount
                     # 保持不变，因为multi_source_provider会处理
 
-                    print(f"[AKShare] ETF {ticker}: 新浪财经接口成功，{len(df)}行")
-                    return df
+                    # 新浪接口是不复权序列；拆分/分红后可能出现价格断点。
+                    # 这类数据不能用于区间收益和回撤，交给东方财富前复权源重取。
+                    if self._has_price_discontinuity(df):
+                        print(f"[AKShare] ETF {ticker}: 新浪历史序列存在价格断点，切换前复权源")
+                    else:
+                        print(f"[AKShare] ETF {ticker}: 新浪财经接口成功，{len(df)}行")
+                        return df
         except Exception as e:
             print(f"[AKShare] 新浪财经接口失败: {e}")
 
@@ -406,14 +413,32 @@ class AKShareProvider(DataProvider):
                 timeout=10.0
             )
             if not df.empty:
-                print(f"[AKShare] ETF {ticker}: 东方财富接口成功，{len(df)}行")
-                return df
+                close_column = "收盘" if "收盘" in df.columns else "close"
+                normalized = df.rename(columns={close_column: "close"}) if close_column in df.columns else df
+                if self._has_price_discontinuity(normalized):
+                    print(f"[AKShare] ETF {ticker}: 东方财富历史序列也存在价格断点，放弃该历史源")
+                else:
+                    print(f"[AKShare] ETF {ticker}: 东方财富接口成功，{len(df)}行")
+                    return df
         except Exception as e:
             print(f"[AKShare] 东方财富接口失败: {e}")
 
         # 所有接口都失败
         print(f"[AKShare] ETF {ticker}: 所有接口都失败")
         return pd.DataFrame()
+
+    @staticmethod
+    def _has_price_discontinuity(df: pd.DataFrame) -> bool:
+        """识别历史价格拼接/复权断点，避免异常序列进入投资结论。"""
+        if df is None or df.empty or ("close" not in df.columns and "收盘" not in df.columns):
+            return True
+        close_column = "close" if "close" in df.columns else "收盘"
+        closes = pd.to_numeric(df[close_column], errors="coerce").dropna()
+        closes = closes[closes > 0]
+        if len(closes) < 2:
+            return False
+        jumps = (closes / closes.shift(1) - 1).abs().dropna()
+        return bool((jumps > 0.35).any() or (closes.max() / closes.min() > 6))
 
     def _to_sina_symbol(self, ticker: str) -> str:
         """将ticker转换为新浪财经格式

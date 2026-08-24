@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Loader2, TrendingUp, TrendingDown, AlertCircle, BarChart3, Building2, Newspaper, RefreshCw, Info, ChevronDown, ChevronUp, FileText } from 'lucide-react'
+import { Loader2, TrendingUp, AlertCircle, BarChart3, Building2, Newspaper, Info, ChevronDown, ChevronUp, FileText, Activity, Sparkles, CircleCheck, CircleX, TriangleAlert, Network } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
@@ -14,6 +14,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { Progress } from '@/components/ui/progress'
+import { NewsAnalysisSection } from '@/components/analysis/NewsAnalysisSection'
+import { AnalysisModuleCard } from '@/components/analysis/AnalysisModuleCard'
+import { buildAIAnalysisEndpoint, getAIAnalysisModule } from '@/config/ai-analysis-modules'
 
 interface Industry {
   id: string
@@ -21,14 +24,72 @@ interface Industry {
   description?: string
 }
 
+interface CompanyTrendCompany {
+  id?: string
+  name: string
+  symbol?: string
+  market?: string
+  market_position?: string
+  node_refs?: Array<{ stage_name?: string; segment_name?: string }>
+  price_metrics?: {
+    current_price?: number | null
+    price_change_pct?: number | null
+    volatility?: number | null
+    max_drawdown?: number | null
+    data_points?: number
+  }
+  financial_metrics?: {
+    latest_period?: string | null
+    revenue?: number | null
+    net_profit?: number | null
+    revenue_growth?: number | null
+    profit_growth?: number | null
+    records?: number
+  }
+  announcement_count?: number
+  important_announcements?: number
+  announcement_samples?: Array<{ title: string; date?: string; url?: string }>
+  data_availability?: {
+    quote?: boolean
+    financial?: boolean
+    announcements?: boolean
+    financial_records?: number
+    announcement_records?: number
+  }
+  price_change_pct?: number
+  priceChangePct?: number
+  composite_score?: number
+  compositeScore?: number
+}
+
 interface CompanyTrend {
   totalCompanies: number
-  topCompanies: Array<{
-    name: string
-    symbol: string
-    priceChangePct: number
-    compositeScore: number
-  }>
+  analyzedCompanies?: number
+  topCompanies: CompanyTrendCompany[]
+  company_summaries?: CompanyTrendCompany[]
+  graph?: {
+    stage_count?: number
+    segment_count?: number
+    company_count?: number
+    stages?: Array<{ id?: string; name: string; segments: string[]; company_count: number }>
+  }
+  data_coverage?: {
+    graph_companies?: number
+    fetched_companies?: number
+    analyzed_companies?: number
+    companies_with_any_data?: number
+    quote_coverage?: number
+    financial_coverage?: number
+    announcement_coverage?: number
+    missing_symbol?: number
+  }
+  source?: {
+    provider?: string
+    adapter?: string
+    status?: string
+    note?: string
+    capabilities?: Record<string, { available?: boolean; markets?: string[]; datasets?: string[] }>
+  }
   trendReport: string
 }
 
@@ -74,29 +135,49 @@ interface MarketTrend {
     priceChangePct: number
     trend: string
   }>
+  marketOverview?: {
+    indices?: Array<Record<string, unknown>>
+  } | null
+  marketIndices?: Array<Record<string, unknown>>
   trendReport: string
 }
 
-interface NewsItem {
-  title: string
-  summary: string
-  published_at: string
-  source: string
-  url?: string
-}
-
-interface AnalysisSection {
+interface AnalysisSection<T = unknown> {
   loading: boolean
   error: string | null
-  data: any
+  data: T | null
 }
 
-interface MarketReport {
+interface SavedMarketReport {
   id: string
   timestamp: string
   industryId: string
   industryName: string
+  title: string
   data: MarketTrend
+}
+
+interface SavedCompanyReport {
+  id: string
+  timestamp: string
+  industryId: string
+  industryName: string
+  title: string
+  data: CompanyTrend
+}
+
+function getMarketReportTitle(report: Pick<SavedMarketReport, 'title' | 'industryName'>) {
+  const title = typeof report.title === 'string' ? report.title.trim() : ''
+  return title && /[\u4e00-\u9fff]/.test(title)
+    ? title
+    : `${report.industryName} 大盘趋势分析报告`
+}
+
+function getCompanyReportTitle(report: Pick<SavedCompanyReport, 'title' | 'industryName'>) {
+  const title = typeof report.title === 'string' ? report.title.trim() : ''
+  return title && /[\u4e00-\u9fff]/.test(title) && !/^[a-z0-9_-]{16,}$/i.test(title)
+    ? title
+    : `${report.industryName} 企业发展趋势分析报告`
 }
 
 export function IndustryAnalysis() {
@@ -104,42 +185,88 @@ export function IndustryAnalysis() {
   const [industries, setIndustries] = useState<Industry[]>([])
   const [selectedIndustry, setSelectedIndustry] = useState<string>('')
   const [loadingIndustries, setLoadingIndustries] = useState(true)
+  const [industriesError, setIndustriesError] = useState<string | null>(null)
   const [expandedETFs, setExpandedETFs] = useState<Set<string>>(new Set())
+  const [showCurrentMarketReport, setShowCurrentMarketReport] = useState(false)
 
   // 报告缓存（最多保存5份）
-  const [savedReports, setSavedReports] = useState<MarketReport[]>([])
+  const [savedReports, setSavedReports] = useState<SavedMarketReport[]>([])
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null)
+  const [savedCompanyReports, setSavedCompanyReports] = useState<SavedCompanyReport[]>([])
+  const [selectedCompanyReportId, setSelectedCompanyReportId] = useState<string | null>(null)
 
-  // 从 localStorage 加载历史报告
+  // 从服务端加载历史报告，报告内容和分析依据可跨浏览器保留。
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem('market_reports')
-      if (stored) {
-        const reports = JSON.parse(stored) as MarketReport[]
-        setSavedReports(reports)
+    let cancelled = false
+
+    async function loadReports() {
+      if (!selectedIndustry) return
+
+      try {
+        const response = await fetch(`/api/analysis/reports?industryId=${encodeURIComponent(selectedIndustry)}&type=market&limit=20`)
+        const payload = await response.json().catch(() => ({}))
+        if (!cancelled && response.ok && payload.success) {
+          setSavedReports((payload.reports || []).map((report: { id: string; title?: string; createdAt: string; industryId: string; industryName: string; data?: MarketTrend }) => ({
+            id: report.id,
+            timestamp: report.createdAt,
+            industryId: report.industryId,
+            industryName: report.industryName,
+            title: report.title || `${report.industryName} 大盘趋势分析报告`,
+            data: report.data || { etfAnalysis: [], indexAnalysis: [], trendReport: '' },
+          })))
+        }
+      } catch (error) {
+        console.error('Failed to load market analysis reports:', error)
       }
-    } catch (err) {
-      console.error('Failed to load saved reports:', err)
     }
-  }, [])
+
+    loadReports()
+    return () => { cancelled = true }
+  }, [selectedIndustry])
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadCompanyReports() {
+      if (!selectedIndustry) return
+
+      try {
+        const response = await fetch(`/api/analysis/reports?industryId=${encodeURIComponent(selectedIndustry)}&type=company&limit=20`)
+        const payload = await response.json().catch(() => ({}))
+        if (!cancelled && response.ok && payload.success) {
+          setSavedCompanyReports((payload.reports || []).map((report: { id: string; title?: string; createdAt: string; industryId: string; industryName: string; data?: CompanyTrend }) => ({
+            id: report.id,
+            timestamp: report.createdAt,
+            industryId: report.industryId,
+            industryName: report.industryName,
+            title: getCompanyReportTitle({
+              title: report.title || '',
+              industryName: report.industryName,
+            }),
+            data: report.data || { totalCompanies: 0, topCompanies: [], trendReport: '' },
+          })))
+        }
+      } catch (error) {
+        console.error('Failed to load company analysis reports:', error)
+      }
+    }
+
+    loadCompanyReports()
+    return () => { cancelled = true }
+  }, [selectedIndustry])
 
   // 各分析模块的独立状态
-  const [newsSection, setNewsSection] = useState<AnalysisSection>({
+  const [companySection, setCompanySection] = useState<AnalysisSection<CompanyTrend>>({
     loading: false,
     error: null,
     data: null
   })
-  const [companySection, setCompanySection] = useState<AnalysisSection>({
+  const [marketSection, setMarketSection] = useState<AnalysisSection<MarketTrend>>({
     loading: false,
     error: null,
     data: null
   })
-  const [marketSection, setMarketSection] = useState<AnalysisSection>({
-    loading: false,
-    error: null,
-    data: null
-  })
-  const [comprehensiveSection, setComprehensiveSection] = useState<AnalysisSection>({
+  const [comprehensiveSection, setComprehensiveSection] = useState<AnalysisSection<string>>({
     loading: false,
     error: null,
     data: null
@@ -150,17 +277,27 @@ export function IndustryAnalysis() {
     async function loadIndustries() {
       try {
         const response = await fetch('/api/graph/industries')
-        if (!response.ok) throw new Error('Failed to load industries')
+        const result = await response.json().catch(() => ({}))
 
-        const result = await response.json()
-        if (result.success && result.data && Array.isArray(result.data)) {
-          setIndustries(result.data)
-          if (result.data.length > 0) {
-            setSelectedIndustry(result.data[0].id)
-          }
+        if (!response.ok || result.success === false) {
+          throw new Error(
+            result.message || result.error ||
+            '产业列表加载失败，请确认 Python 数据服务已启动（localhost:8000）'
+          )
+        }
+
+        if (!Array.isArray(result.data)) {
+          throw new Error('产业列表返回格式异常，请刷新页面重试')
+        }
+
+        setIndustriesError(null)
+        setIndustries(result.data)
+        if (result.data.length > 0) {
+          setSelectedIndustry(result.data[0].id)
         }
       } catch (err) {
         console.error('Error loading industries:', err)
+        setIndustriesError(err instanceof Error ? err.message : '产业列表加载失败')
       } finally {
         setLoadingIndustries(false)
       }
@@ -173,19 +310,19 @@ export function IndustryAnalysis() {
     return industries.find(i => i.id === selectedIndustry)
   }
 
+  const marketData = marketSection.data
+
   const toggleETF = (code: string) => {
-    setExpandedETFs(prev => {
-      const next = new Set(prev)
-      if (next.has(code)) {
-        next.delete(code)
-      } else {
-        next.add(code)
-      }
+    setExpandedETFs((previous) => {
+      const next = new Set(previous)
+      if (next.has(code)) next.delete(code)
+      else next.add(code)
       return next
     })
   }
 
-  // 渲染技术指标详情
+  // 保留技术指标组件代码，供后续在完整报告页复用。
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const renderTechnicalIndicators = (etf: ETFAnalysis) => {
     return (
       <Collapsible open={expandedETFs.has(etf.code)} onOpenChange={() => toggleETF(etf.code)}>
@@ -293,12 +430,14 @@ export function IndustryAnalysis() {
                   {/* MACD信号 */}
                   <div className="pt-2 border-t">
                     {etf.macd.dif > etf.macd.dea && etf.macd.macd > 0 ? (
-                      <Badge variant="default" className="text-xs bg-green-500">
-                        🟢 金叉(看涨)
-                      </Badge>
-                    ) : etf.macd.dif < etf.macd.dea && etf.macd.macd < 0 ? (
-                      <Badge variant="secondary" className="text-xs bg-red-500 text-white">
-                        🔴 死叉(看跌)
+                        <Badge variant="default" className="flex w-fit items-center gap-1 text-xs bg-green-500">
+                          <CircleCheck className="h-3 w-3" aria-hidden="true" />
+                          金叉(看涨)
+                        </Badge>
+                      ) : etf.macd.dif < etf.macd.dea && etf.macd.macd < 0 ? (
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-red-500 text-white">
+                        <CircleX className="h-3 w-3" aria-hidden="true" />
+                        死叉(看跌)
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-xs">
@@ -342,12 +481,14 @@ export function IndustryAnalysis() {
                     <div className="pt-2 border-t">
                       <div className="text-xs text-muted-foreground mb-1">当前价格位置:</div>
                       {etf.current_price >= etf.boll.upper ? (
-                        <Badge variant="secondary" className="text-xs bg-orange-500 text-white">
-                          ⚠️ 接近上轨(可能超买)
+                        <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-orange-500 text-white">
+                          <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                          接近上轨(可能超买)
                         </Badge>
                       ) : etf.current_price <= etf.boll.lower ? (
-                        <Badge variant="secondary" className="text-xs bg-blue-500 text-white">
-                          ⚠️ 接近下轨(可能超卖)
+                        <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-blue-500 text-white">
+                          <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                          接近下轨(可能超卖)
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-xs">
@@ -540,12 +681,14 @@ export function IndustryAnalysis() {
                   </div>
                   <div className="pt-2 border-t">
                     {etf.rsi > 70 ? (
-                      <Badge variant="secondary" className="text-xs bg-orange-500 text-white">
-                        ⚠️ 超买警告
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-orange-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超买警告
                       </Badge>
                     ) : etf.rsi < 30 ? (
-                      <Badge variant="secondary" className="text-xs bg-blue-500 text-white">
-                        ⚠️ 超卖警告
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-blue-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超卖警告
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-xs">
@@ -588,12 +731,14 @@ export function IndustryAnalysis() {
                   </div>
                   <div className="pt-2 border-t">
                     {etf.kdj.k > etf.kdj.d ? (
-                      <Badge variant="default" className="text-xs bg-green-500">
-                        🟢 金叉(看涨)
+                      <Badge variant="default" className="flex w-fit items-center gap-1 text-xs bg-green-500">
+                        <CircleCheck className="h-3 w-3" aria-hidden="true" />
+                        金叉(看涨)
                       </Badge>
                     ) : (
-                      <Badge variant="secondary" className="text-xs bg-red-500 text-white">
-                        🔴 死叉(看跌)
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-red-500 text-white">
+                        <CircleX className="h-3 w-3" aria-hidden="true" />
+                        死叉(看跌)
                       </Badge>
                     )}
                     {etf.kdj.j > 100 && (
@@ -632,12 +777,14 @@ export function IndustryAnalysis() {
                   </div>
                   <div className="pt-2 border-t">
                     {etf.cci > 100 ? (
-                      <Badge variant="secondary" className="text-xs bg-orange-500 text-white">
-                        ⚠️ 超买区域
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-orange-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超买区域
                       </Badge>
                     ) : etf.cci < -100 ? (
-                      <Badge variant="secondary" className="text-xs bg-blue-500 text-white">
-                        ⚠️ 超卖区域
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-blue-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超卖区域
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-xs">
@@ -670,12 +817,14 @@ export function IndustryAnalysis() {
                   </div>
                   <div className="pt-2 border-t">
                     {etf.wr > -20 ? (
-                      <Badge variant="secondary" className="text-xs bg-orange-500 text-white">
-                        ⚠️ 超买区域
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-orange-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超买区域
                       </Badge>
                     ) : etf.wr < -80 ? (
-                      <Badge variant="secondary" className="text-xs bg-blue-500 text-white">
-                        ⚠️ 超卖区域
+                      <Badge variant="secondary" className="flex w-fit items-center gap-1 text-xs bg-blue-500 text-white">
+                        <TriangleAlert className="h-3 w-3" aria-hidden="true" />
+                        超卖区域
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-xs">
@@ -763,61 +912,61 @@ export function IndustryAnalysis() {
     )
   }
 
-  // 1. 获取新闻资讯
-  const fetchNews = async () => {
+  // 1. 获取企业发展趋势
+  const fetchCompanyTrend = async () => {
     const industry = getSelectedIndustry()
     if (!industry) return
 
-    setNewsSection({ loading: true, error: null, data: null })
-
-    try {
-      const response = await fetch(
-        `/api/analysis/industry/${selectedIndustry}/news?industry_name=${encodeURIComponent(industry.name)}&limit=10`
-      )
-
-      if (!response.ok) throw new Error('Failed to fetch news')
-
-      const data = await response.json()
-
-      setNewsSection({
-        loading: false,
-        error: null,
-        data: data.success ? data.news : []
-      })
-    } catch (err) {
-      setNewsSection({
-        loading: false,
-        error: err instanceof Error ? err.message : '获取新闻失败',
-        data: null
-      })
-    }
-  }
-
-  // 2. 获取企业发展趋势
-  const fetchCompanyTrend = async () => {
     setCompanySection({ loading: true, error: null, data: null })
+    setSelectedCompanyReportId(null)
 
     try {
       const response = await fetch(
-        `/api/analysis/industry/${selectedIndustry}/companies?period_days=90`
+        buildAIAnalysisEndpoint(getAIAnalysisModule('company'), selectedIndustry, industry.name)
       )
 
-      if (!response.ok) throw new Error('Failed to fetch company data')
-
-      const data = await response.json()
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || '获取企业数据失败')
 
       if (data.success) {
+        const companyData: CompanyTrend = {
+          totalCompanies: data.total_companies || 0,
+          analyzedCompanies: data.analyzed_companies || 0,
+          topCompanies: data.top_companies || [],
+          company_summaries: data.company_summaries || [],
+          graph: data.graph,
+          data_coverage: data.data_coverage,
+          source: data.source,
+          trendReport: data.trend_report || '',
+        }
+
         setCompanySection({
           loading: false,
           error: null,
-          data: {
-            totalCompanies: data.total_companies,
-            topCompanies: data.top_companies || [],
-            trendReport: data.trend_report
-          }
+          data: companyData,
         })
+        try {
+          await saveCompanyReport(industry.id, industry.name, companyData)
+        } catch (saveError) {
+          setCompanySection((current) => ({
+            ...current,
+            error: saveError instanceof Error ? saveError.message : '数据已完成，但历史报告保存失败',
+          }))
+        }
       } else {
-        throw new Error(data.error || 'Analysis failed')
+        const stageLabel: Record<string, string> = {
+          graph: '图谱读取',
+          company_data: '企业数据获取',
+          ai_report: 'AI报告生成',
+          service: '分析服务',
+        }
+        const stage = data.stage ? `${stageLabel[data.stage] || data.stage}环节异常：` : ''
+        const errorMessage = typeof data.error === 'string' && data.error.trim()
+          ? data.error.trim()
+          : data.error_code
+            ? `服务未返回具体原因（错误码：${data.error_code}）`
+            : '服务未返回具体原因'
+        throw new Error(`${stage}${errorMessage}`)
       }
     } catch (err) {
       setCompanySection({
@@ -828,7 +977,46 @@ export function IndustryAnalysis() {
     }
   }
 
-  // 3. 获取大盘走势
+  const saveCompanyReport = async (industryId: string, industryName: string, data: CompanyTrend) => {
+    const response = await fetch('/api/analysis/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'company',
+        industryId,
+        industryName,
+        title: `${industryName} 企业发展趋势分析报告`,
+        summary: `基于知识图谱中的 ${data.totalCompanies} 家企业，完成 ${data.analyzedCompanies || 0} 家企业的行情、财报和公告分析`,
+        content: data.trendReport,
+        data,
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || payload.success === false || !payload.report?.id) {
+      throw new Error(payload.error || '企业分析完成，但报告保存失败')
+    }
+
+    const report = payload.report
+    const newReport: SavedCompanyReport = {
+      id: report.id,
+      timestamp: report.createdAt,
+      industryId,
+      industryName,
+      title: report.title || `${industryName} 企业发展趋势分析报告`,
+      data,
+    }
+    setSavedCompanyReports((previous) => [newReport, ...previous.filter((item) => item.id !== newReport.id)].slice(0, 20))
+    setSelectedCompanyReportId(newReport.id)
+  }
+
+  const loadCompanyReport = (reportId: string) => {
+    // 与“资讯与产业链分析”保持一致：历史报告只用于选择和跳转，
+    // 不把历史报告的数据重新注入当前分析页，完整内容统一在独立报告页查看。
+    if (!savedCompanyReports.some((item) => item.id === reportId)) return
+    setSelectedCompanyReportId(reportId)
+  }
+
+  // 2. 获取大盘走势
   const fetchMarketTrend = async () => {
     const industry = getSelectedIndustry()
     if (!industry) return
@@ -838,7 +1026,7 @@ export function IndustryAnalysis() {
 
     try {
       const response = await fetch(
-        `/api/analysis/industry/${selectedIndustry}/market?industry_name=${encodeURIComponent(industry.name)}&period_days=90`
+        buildAIAnalysisEndpoint(getAIAnalysisModule('market'), selectedIndustry, industry.name)
       )
 
       if (!response.ok) {
@@ -857,6 +1045,8 @@ export function IndustryAnalysis() {
       const marketData = {
         etfAnalysis: data.etf_analysis || [],
         indexAnalysis: data.index_analysis || [],
+        marketOverview: data.market_overview || null,
+        marketIndices: data.market_indices || [],
         trendReport: data.trend_report
       }
 
@@ -865,9 +1055,10 @@ export function IndustryAnalysis() {
         error: null,
         data: marketData
       })
+      setShowCurrentMarketReport(true)
 
-      // 保存报告到缓存
-      saveReport(industry.id, industry.name, marketData)
+      // 保存完整报告和结构化依据，成功后将报告ID用于详情页跳转。
+      await saveReport(industry.id, industry.name, marketData)
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : '获取市场数据失败'
@@ -880,34 +1071,37 @@ export function IndustryAnalysis() {
     }
   }
 
-  // 保存报告到缓存（最多5份）
-  const saveReport = (industryId: string, industryName: string, data: MarketTrend) => {
-    const newReport: MarketReport = {
-      id: `${industryId}-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      industryId,
-      industryName,
-      data
+  const saveReport = async (industryId: string, industryName: string, data: MarketTrend) => {
+    const response = await fetch('/api/analysis/reports', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'market',
+        industryId,
+        industryName,
+        title: `${industryName} 大盘趋势分析报告`,
+        summary: `基于 ${data.etfAnalysis.length} 个 ETF 和 ${data.indexAnalysis.length} 个指数生成的市场分析报告`,
+        content: data.trendReport || `# ${industryName} 大盘趋势分析报告\n\n暂无 AI 报告内容。`,
+        data,
+      }),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok || payload.success === false || !payload.report?.id) {
+      throw new Error(payload.error || '市场分析完成，但报告保存失败')
     }
 
-    setSavedReports(prev => {
-      // 添加新报告到开头
-      const updated = [newReport, ...prev]
-      // 只保留最新的5份
-      const limited = updated.slice(0, 5)
-
-      // 持久化到 localStorage
-      try {
-        localStorage.setItem('market_reports', JSON.stringify(limited))
-      } catch (err) {
-        console.error('Failed to save reports to localStorage:', err)
-      }
-
-      return limited
-    })
-
-    // 自动选中新生成的报告
+    const report = payload.report
+    const newReport: SavedMarketReport = {
+      id: report.id,
+      timestamp: report.createdAt,
+      industryId,
+      industryName,
+      title: report.title || `${industryName} 大盘趋势分析报告`,
+      data,
+    }
+    setSavedReports((prev) => [newReport, ...prev.filter((item) => item.id !== newReport.id)].slice(0, 20))
     setSelectedReportId(newReport.id)
+    setShowCurrentMarketReport(true)
   }
 
   // 加载历史报告
@@ -920,10 +1114,11 @@ export function IndustryAnalysis() {
         data: report.data
       })
       setSelectedReportId(reportId)
+      setShowCurrentMarketReport(false)
     }
   }
 
-  // 4. 获取综合分析报告
+  // 3. 获取综合分析报告
   const fetchComprehensiveAnalysis = async () => {
     const industry = getSelectedIndustry()
     if (!industry) return
@@ -932,7 +1127,7 @@ export function IndustryAnalysis() {
 
     try {
       const response = await fetch(
-        `/api/analysis/industry/${selectedIndustry}/comprehensive?industry_name=${encodeURIComponent(industry.name)}&period_days=90`
+        buildAIAnalysisEndpoint(getAIAnalysisModule('comprehensive'), selectedIndustry, industry.name)
       )
 
       if (!response.ok) throw new Error('Failed to fetch comprehensive analysis')
@@ -973,6 +1168,23 @@ export function IndustryAnalysis() {
 
   return (
     <div className="space-y-6">
+      {industriesError && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <span>{industriesError}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => window.location.reload()}
+              className="shrink-0"
+            >
+              刷新重试
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* 产业选择 */}
       <Card>
         <CardHeader>
@@ -1009,418 +1221,101 @@ export function IndustryAnalysis() {
       </Card>
 
       {/* 大盘趋势分析 */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5" />
-              <CardTitle>大盘趋势分析</CardTitle>
-              <Dialog>
-                <DialogTrigger className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
-                  <Info className="h-4 w-4 text-muted-foreground" />
-                </DialogTrigger>
-                <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>大盘趋势分析处理流程</DialogTitle>
-                    <DialogDescription>
-                      系统如何分析产业领域的大盘市场表现
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 text-sm">
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">1</span>
-                        匹配相关ETF和指数
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        根据产业名称匹配对应的ETF代码和指数代码。系统维护了产业到ETF/指数的映射表，支持精确匹配和模糊匹配。
-                      </p>
-                      <div className="ml-8 p-3 bg-muted rounded-md">
-                        <code className="text-xs">
-                          示例：AI芯片 → [159995(AI芯片ETF), 512480(半导体ETF)] + [000688(科技龙头), 399303(国证半导体)]
-                        </code>
-                      </div>
-                    </div>
+      <AnalysisModuleCard
+        icon={TrendingUp}
+        title={getAIAnalysisModule('market').title}
+        description={getAIAnalysisModule('market').description}
+        canAnalyze={Boolean(selectedIndustry)}
+        loading={marketSection.loading}
+        hasResult={Boolean(marketData)}
+        error={marketSection.error}
+        onAnalyze={fetchMarketTrend}
+        steps={[
+          { icon: Activity, label: '市场数据', detail: '匹配 ETF 与指数行情', active: Boolean(marketData) },
+          { icon: TrendingUp, label: '技术指标', detail: '计算均线、动量与波动', active: Boolean(marketData) },
+          { icon: FileText, label: 'AI分析报告', detail: '总结趋势、机会与风险', active: Boolean(marketData?.trendReport) },
+        ]}
+        loadingMessage="正在匹配标的、计算技术指标并生成市场报告..."
+        reportTitle="AI大盘趋势分析报告"
+        reportBadge="基于当前领域数据"
+        reportDescription="报告已经生成，点击“查看完整报告”了解指数、ETF 数据和 AI 趋势结论。"
+        reportReady={Boolean(marketData && showCurrentMarketReport && selectedReportId)}
+        onOpenReport={() => {
+          const industry = getSelectedIndustry()
+          if (!industry || !selectedReportId) return
+          router.push(`/analysis/market-report?reportId=${selectedReportId}&industryId=${selectedIndustry}&industryName=${encodeURIComponent(industry.name)}`)
+        }}
+        history={{
+          label: '历史大盘报告',
+          value: selectedReportId ?? '',
+          placeholder: '选择历史大盘趋势报告',
+          options: savedReports.map((report) => ({
+            id: report.id,
+            label: `${getMarketReportTitle(report)} · ${new Date(report.timestamp).toLocaleString('zh-CN', {
+              month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+            })}`,
+          })),
+          onChange: (value) => value && loadReport(value),
+          onOpen: () => {
+            const industry = getSelectedIndustry()
+            if (!industry || !selectedReportId) return
+            router.push(`/analysis/market-report?reportId=${selectedReportId}&industryId=${selectedIndustry}&industryName=${encodeURIComponent(industry.name)}`)
+          },
+        }}
+        emptyTitle="点击“开始分析”获取大盘趋势解读"
+        emptyDescription="分析完成后，可在完整报告中查看市场数据和分析结论"
+      />
 
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">2</span>
-                        获取市场数据
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        并行获取匹配到的ETF和指数的历史数据，包括：
-                      </p>
-                      <ul className="ml-8 space-y-1 list-disc list-inside text-muted-foreground">
-                        <li>ETF基本信息（名称、规模、管理费率）</li>
-                        <li>日K线数据（开高低收、成交量、成交额）</li>
-                        <li>ETF持仓明细（前十大重仓股）</li>
-                        <li>指数K线数据（点位、涨跌幅）</li>
-                      </ul>
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">3</span>
-                        计算技术指标
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        对每个ETF和指数计算关键技术指标：
-                      </p>
-                      <div className="ml-8 grid grid-cols-2 gap-2">
-                        <div className="p-2 bg-muted rounded-md">
-                          <div className="font-medium text-xs mb-1">价格指标</div>
-                          <ul className="text-xs text-muted-foreground space-y-0.5">
-                            <li>• 期间涨跌幅</li>
-                            <li>• 年化波动率</li>
-                            <li>• 最大回撤</li>
-                          </ul>
-                        </div>
-                        <div className="p-2 bg-muted rounded-md">
-                          <div className="font-medium text-xs mb-1">趋势指标</div>
-                          <ul className="text-xs text-muted-foreground space-y-0.5">
-                            <li>• MA5/MA20/MA60均线</li>
-                            <li>• RSI相对强弱指标</li>
-                            <li>• 趋势判断（上涨/下跌/震荡）</li>
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">4</span>
-                        AI生成分析报告
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        将计算结果提交给Claude AI，从专业投资分析师角度生成报告，包含：
-                      </p>
-                      <ul className="ml-8 space-y-1 list-disc list-inside text-muted-foreground">
-                        <li>大盘整体走势评估</li>
-                        <li>ETF表现对比分析</li>
-                        <li>相关指数联动分析</li>
-                        <li>技术面分析（均线、支撑压力位）</li>
-                        <li>投资机会与风险提示</li>
-                      </ul>
-                    </div>
-
-                    <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-md border border-blue-200 dark:border-blue-800">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5" />
-                        <div className="text-xs text-blue-900 dark:text-blue-100">
-                          <div className="font-medium mb-1">数据来源</div>
-                          <div>使用AKShare获取实时市场数据，分析周期默认为90天，可调整30-365天范围。</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={fetchMarketTrend}
-              disabled={marketSection.loading || !selectedIndustry}
-            >
-              {marketSection.loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  分析中
-                </>
-              ) : (
-                <>
-                  <TrendingUp className="mr-2 h-4 w-4" />
-                  开始分析
-                </>
-              )}
-            </Button>
-          </div>
-          <CardDescription>
-            相关ETF和指数的市场表现
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {/* 历史报告选择器 - 始终显示 */}
-          {savedReports.length > 0 && (
-            <div className="space-y-2">
-              <div className="text-sm font-medium text-muted-foreground">历史报告</div>
-              <Select value={selectedReportId ?? ''} onValueChange={(value) => {
-                if (value) loadReport(value)
-              }}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="选择历史报告">
-                    {selectedReportId && (() => {
-                      const report = savedReports.find(r => r.id === selectedReportId)
-                      if (report) {
-                        const dateStr = new Date(report.timestamp).toLocaleString('zh-CN', {
-                          month: '2-digit',
-                          day: '2-digit',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })
-                        return `${report.industryName}，${dateStr}`
-                      }
-                      return '选择历史报告'
-                    })()}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {savedReports.map((report) => (
-                    <SelectItem key={report.id} value={report.id}>
-                      <div className="flex flex-col">
-                        <span className="font-medium">{report.industryName}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(report.timestamp).toLocaleString('zh-CN', {
-                            month: '2-digit',
-                            day: '2-digit',
-                            hour: '2-digit',
-                            minute: '2-digit'
-                          })}
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {marketSection.loading && (
-            <div className="space-y-2">
-              <Skeleton className="h-16 w-full" />
-              <Skeleton className="h-16 w-full" />
-            </div>
-          )}
-          {marketSection.error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription className="whitespace-pre-wrap">{marketSection.error}</AlertDescription>
-            </Alert>
-          )}
-          {marketSection.data && (
-            <>
-              {/* 分析完成提示 */}
-              <Alert>
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  大盘趋势分析已完成，包含相关ETF和指数的详细市场表现与技术指标。
-                </AlertDescription>
-              </Alert>
-
-              {/* 查看完整报告按钮 */}
-              <div className="flex justify-center pt-2">
-                <Button
-                  onClick={() => {
-                    const industry = getSelectedIndustry()
-                    if (industry && marketSection.data) {
-                      // 将当前报告数据存储到sessionStorage
-                      sessionStorage.setItem('currentMarketReport', JSON.stringify({
-                        industryId: selectedIndustry,
-                        industryName: industry.name,
-                        data: marketSection.data,
-                        timestamp: selectedReportId ? savedReports.find(r => r.id === selectedReportId)?.timestamp : new Date().toISOString()
-                      }))
-
-                      // 跳转到完整报告页面
-                      router.push(`/analysis/market-report?industryId=${selectedIndustry}&industryName=${encodeURIComponent(industry.name)}`)
-                    }
-                  }}
-                  className="gap-2"
-                  size="lg"
-                >
-                  <FileText className="h-4 w-4" />
-                  查看完整报告
-                </Button>
-              </div>
-            </>
-          )}
-          {!marketSection.loading && !marketSection.data && !marketSection.error && (
-            <div className="text-sm text-muted-foreground text-center py-8">
-              点击右上角"开始分析"按钮获取大盘趋势分析
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* 相关资讯分析 */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Newspaper className="h-5 w-5" />
-              <CardTitle>相关资讯分析</CardTitle>
-              <Dialog>
-                <DialogTrigger className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
-                  <Info className="h-4 w-4 text-muted-foreground" />
-                </DialogTrigger>
-                <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>相关资讯分析处理流程</DialogTitle>
-                    <DialogDescription>
-                      系统如何采集和过滤产业相关新闻资讯
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4 text-sm">
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">1</span>
-                        新闻数据采集
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        使用产业名称作为关键词，通过数据服务获取相关新闻资讯。
-                      </p>
-                      <div className="ml-8 p-3 bg-muted rounded-md">
-                        <code className="text-xs">
-                          数据来源：财联社、新浪财经、东方财富等金融资讯平台<br />
-                          采集量：默认获取30条原始新闻用于后续过滤
-                        </code>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">2</span>
-                        关键词过滤
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        对新闻标题和内容进行关键词匹配，筛选出与产业高度相关的资讯：
-                      </p>
-                      <ul className="ml-8 space-y-1 list-disc list-inside text-muted-foreground">
-                        <li>将产业名称拆分为关键词列表</li>
-                        <li>检查新闻标题是否包含关键词</li>
-                        <li>检查新闻内容是否包含关键词</li>
-                        <li>保留至少匹配一个关键词的新闻</li>
-                      </ul>
-                      <div className="ml-8 p-3 bg-muted rounded-md mt-2">
-                        <code className="text-xs">
-                          示例：产业"AI芯片" → 关键词["AI", "芯片"]<br />
-                          匹配标题包含"AI"或"芯片"的新闻
-                        </code>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">3</span>
-                        内容结构化
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        将筛选后的新闻转换为标准化格式：
-                      </p>
-                      <div className="ml-8 grid grid-cols-2 gap-2">
-                        <div className="p-2 bg-muted rounded-md">
-                          <div className="font-medium text-xs mb-1">基础信息</div>
-                          <ul className="text-xs text-muted-foreground space-y-0.5">
-                            <li>• 新闻标题</li>
-                            <li>• 来源平台</li>
-                            <li>• 发布时间</li>
-                            <li>• 原文链接</li>
-                          </ul>
-                        </div>
-                        <div className="p-2 bg-muted rounded-md">
-                          <div className="font-medium text-xs mb-1">内容处理</div>
-                          <ul className="text-xs text-muted-foreground space-y-0.5">
-                            <li>• 提取前200字作为摘要</li>
-                            <li>• 按时间倒序排列</li>
-                            <li>• 限制返回数量（默认10条）</li>
-                          </ul>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <h4 className="font-semibold flex items-center gap-2">
-                        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">4</span>
-                        前端展示
-                      </h4>
-                      <p className="text-muted-foreground ml-8">
-                        在界面上以卡片形式展示过滤后的新闻列表，包含：
-                      </p>
-                      <ul className="ml-8 space-y-1 list-disc list-inside text-muted-foreground">
-                        <li>新闻标题（加粗显示）</li>
-                        <li>内容摘要（灰色文本）</li>
-                        <li>来源和时间（小字体底部信息）</li>
-                      </ul>
-                    </div>
-
-                    <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-md border border-blue-200 dark:border-blue-800">
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5" />
-                        <div className="text-xs text-blue-900 dark:text-blue-100">
-                          <div className="font-medium mb-1">实时性说明</div>
-                          <div>新闻数据实时从金融资讯平台获取，通常延迟在5-15分钟内。关键词过滤采用简单字符串匹配，确保响应速度。</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </DialogContent>
-              </Dialog>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={fetchNews}
-              disabled={newsSection.loading || !selectedIndustry}
-            >
-              {newsSection.loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  分析中
-                </>
-              ) : (
-                <>
-                  <Newspaper className="mr-2 h-4 w-4" />
-                  开始分析
-                </>
-              )}
-            </Button>
-          </div>
-          <CardDescription>
-            最新行业动态和新闻
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {newsSection.loading && (
-            <div className="space-y-2">
-              <Skeleton className="h-24 w-full" />
-              <Skeleton className="h-24 w-full" />
-            </div>
-          )}
-          {newsSection.error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{newsSection.error}</AlertDescription>
-            </Alert>
-          )}
-          {newsSection.data && newsSection.data.length > 0 && (
-            <div className="space-y-3">
-              {newsSection.data.map((news: NewsItem, idx: number) => (
-                <div key={idx} className="p-3 rounded-lg border">
-                  <div className="font-medium mb-1">{news.title}</div>
-                  <div className="text-sm text-muted-foreground mb-2">{news.summary}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {news.source} · {new Date(news.published_at).toLocaleString('zh-CN')}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {newsSection.data && newsSection.data.length === 0 && (
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>暂无相关新闻资讯</AlertDescription>
-            </Alert>
-          )}
-          {!newsSection.loading && !newsSection.data && !newsSection.error && (
-            <div className="text-sm text-muted-foreground text-center py-8">
-              点击右上角"开始分析"按钮加载相关新闻
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* 资讯与产业链分析 */}
+      {getSelectedIndustry() && (
+        <NewsAnalysisSection
+          key={selectedIndustry}
+          industryId={selectedIndustry}
+          industryName={getSelectedIndustry()!.name}
+        />
+      )}
 
       {/* 企业发展趋势 */}
-      <Card>
+      <AnalysisModuleCard
+        icon={Building2}
+        title={getAIAnalysisModule('company').title}
+        description={getAIAnalysisModule('company').description}
+        canAnalyze={Boolean(selectedIndustry)}
+        loading={companySection.loading}
+        hasResult={Boolean(companySection.data)}
+        error={companySection.error}
+        onAnalyze={fetchCompanyTrend}
+        steps={[
+          { icon: Network, label: '知识图谱企业', detail: '读取产业阶段、环节与全部企业', active: Boolean(companySection.data?.graph) },
+          { icon: Newspaper, label: '企业级资讯', detail: '汇总行情、财报与公告信息', active: Boolean(companySection.data?.data_coverage) },
+          { icon: BarChart3, label: '指标与对比', detail: '计算覆盖度、增长与综合评分', active: Boolean(companySection.data?.analyzedCompanies) },
+          { icon: FileText, label: 'AI分析报告', detail: '生成可追溯的完整趋势报告', active: Boolean(companySection.data?.trendReport) },
+        ]}
+        loadingMessage="正在读取企业图谱、整理行情财报并生成趋势报告..."
+        reportTitle="AI企业发展趋势分析报告"
+        reportBadge="AI生成"
+        reportDescription="报告已经生成，点击“查看完整报告”进入独立页面查看完整企业数据、产业链上下文和 AI 趋势结论。"
+        reportReady={Boolean(companySection.data && selectedCompanyReportId)}
+        onOpenReport={() => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`)}
+        history={{
+          label: '历史企业趋势报告',
+          value: selectedCompanyReportId ?? '',
+          placeholder: '选择历史企业发展趋势报告',
+          options: savedCompanyReports.map((report) => ({
+            id: report.id,
+            label: `${getCompanyReportTitle(report)} · ${new Date(report.timestamp).toLocaleString('zh-CN', {
+              month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+            })}`,
+          })),
+          onChange: (value) => value && loadCompanyReport(value),
+          onOpen: () => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`),
+        }}
+        emptyTitle="点击“开始分析”获取企业发展趋势解读"
+        emptyDescription="分析过程会读取知识图谱企业，并整理行情、财报和公告数据"
+      />
+
+      {/* 旧版企业分析内容保留在代码中，待完整报告页稳定后移除。 */}
+      <Card className="hidden">
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -1444,17 +1339,18 @@ export function IndustryAnalysis() {
                         获取产业节点
                       </h4>
                       <p className="text-muted-foreground ml-8">
-                        从Neo4j知识图谱中查询指定产业的所有节点：
+                        从现行知识图谱结构读取指定产业的全部阶段和环节：
                       </p>
                       <div className="ml-8 p-3 bg-muted rounded-md">
                         <code className="text-xs">
-                          MATCH (n:IndustryNode)<br />
-                          WHERE n.industry_id = $industry_id<br />
-                          RETURN n.id, n.name, n.layer, n.type
+                          MATCH (i:Industry)-[:HAS_STAGE]-&gt;(stage:Stage)<br />
+                          -[:HAS_SEGMENT]-&gt;(segment:Segment)<br />
+                          WHERE i.id = $industry_id<br />
+                          RETURN stage.name, segment.name, segment.code
                         </code>
                       </div>
                       <p className="text-muted-foreground ml-8 mt-2">
-                        获取产业泳道图的所有节点（设计层、材料层、制造层、应用层等）
+                        获取产业泳道图中的阶段/环节，保留企业所属的图谱位置。
                       </p>
                     </div>
 
@@ -1464,12 +1360,15 @@ export function IndustryAnalysis() {
                         提取关联企业
                       </h4>
                       <p className="text-muted-foreground ml-8">
-                        遍历每个节点，获取其关联的上市公司：
+                        遍历每个环节，获取其下配置的全部企业：
                       </p>
                       <div className="ml-8 p-3 bg-muted rounded-md">
                         <code className="text-xs">
-                          MATCH (n:IndustryNode)-[:HAS_COMPANY]-&gt;(c:Company)<br />
-                          RETURN c.symbol, c.name, c.market
+                          MATCH (i:Industry)-[:HAS_STAGE]-&gt;(:Stage)<br />
+                          -[:HAS_SEGMENT]-&gt;(segment:Segment)<br />
+                          -[:INCLUDES]-&gt;(c:Company)<br />
+                          WHERE i.id = $industry_id<br />
+                          RETURN c.ticker, c.name, segment.name
                         </code>
                       </div>
                       <p className="text-muted-foreground ml-8 mt-2">
@@ -1652,6 +1551,75 @@ export function IndustryAnalysis() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-4">
+            {[
+              { icon: Network, label: '知识图谱企业', detail: '读取产业阶段、环节与全部企业' },
+              { icon: Newspaper, label: '企业级资讯', detail: '汇总行情、财报与公告信息' },
+              { icon: BarChart3, label: '指标与对比', detail: '计算覆盖度、增长与综合评分' },
+              { icon: FileText, label: 'AI分析报告', detail: '生成可追溯的完整趋势报告' },
+            ].map((step, index) => {
+              const Icon = step.icon
+              const active = companySection.loading
+                || (index === 0 && companySection.data?.graph)
+                || (index === 1 && companySection.data?.data_coverage)
+                || (index === 2 && companySection.data?.analyzedCompanies)
+                || (index === 3 && companySection.data?.trendReport)
+
+              return (
+                <div
+                  key={step.label}
+                  className={`rounded-lg border p-3 transition-colors ${active ? 'border-primary/40 bg-primary/5' : 'bg-muted/30'}`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Icon className={`h-4 w-4 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
+                    <span className="text-sm font-medium">{index + 1}. {step.label}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{step.detail}</p>
+                </div>
+              )
+            })}
+          </div>
+
+          {savedCompanyReports.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-lg border bg-muted/20 p-3 sm:flex-row sm:items-center">
+              <div className="flex-1">
+                <div className="mb-1 text-xs font-medium text-muted-foreground">历史报告</div>
+                <Select value={selectedCompanyReportId ?? ''} onValueChange={(value) => value && loadCompanyReport(value)}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="选择历史企业发展趋势报告">
+                      {savedCompanyReports.find((report) => report.id === selectedCompanyReportId)
+                        ? `${getCompanyReportTitle(savedCompanyReports.find((report) => report.id === selectedCompanyReportId)!)} · ${new Date(savedCompanyReports.find((report) => report.id === selectedCompanyReportId)!.timestamp).toLocaleString('zh-CN', {
+                          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+                        })}`
+                        : undefined}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedCompanyReports.map((report) => (
+                      <SelectItem key={report.id} value={report.id}>
+                        {getCompanyReportTitle(report)} · {new Date(report.timestamp).toLocaleString('zh-CN', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="outline"
+                className="shrink-0 gap-2"
+                onClick={() => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`)}
+                disabled={!selectedCompanyReportId}
+              >
+                <FileText className="h-4 w-4" />
+                查看报告
+              </Button>
+            </div>
+          )}
+
           {companySection.loading && (
             <div className="space-y-2">
               <Skeleton className="h-20 w-full" />
@@ -1665,60 +1633,46 @@ export function IndustryAnalysis() {
             </Alert>
           )}
           {companySection.data && (
-            <>
-              {/* 头部企业 */}
-              <div>
-                <h4 className="text-sm font-semibold mb-3">头部企业表现</h4>
-                <div className="space-y-2">
-                  {companySection.data.topCompanies.slice(0, 5).map((company: any, idx: number) => {
-                    const priceChangePct = company.price_change_pct ?? company.priceChangePct ?? 0
-                    const compositeScore = company.composite_score ?? company.compositeScore ?? 0
-                    return (
-                      <div key={company.symbol} className="flex items-center justify-between p-3 rounded-lg border">
-                        <div className="flex items-center gap-3">
-                          <Badge variant="outline">{idx + 1}</Badge>
-                          <div>
-                            <div className="font-medium">{company.name}</div>
-                            <div className="text-sm text-muted-foreground">{company.symbol}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className={`flex items-center gap-1 ${priceChangePct >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                            {priceChangePct >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-                            <span className="font-semibold">{(priceChangePct ?? 0).toFixed(2)}%</span>
-                          </div>
-                          <Badge>{compositeScore}分</Badge>
-                        </div>
-                      </div>
-                    )
-                  })}
+              <div className="rounded-lg border border-primary/20 bg-primary/[0.03] p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <h4 className="text-sm font-semibold">AI企业发展趋势分析报告</h4>
+                    <Badge variant="secondary">AI生成</Badge>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`)}
+                    disabled={!selectedCompanyReportId}
+                  >
+                    <FileText className="h-4 w-4" />
+                    查看完整报告
+                  </Button>
                 </div>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                  报告已经生成，点击“查看完整报告”进入独立页面查看完整企业数据、产业链上下文和 AI 趋势结论。
+                </p>
               </div>
-
-              {/* 趋势报告 */}
-              <div>
-                <h4 className="text-sm font-semibold mb-3">发展趋势分析</h4>
-                <div className="prose prose-sm max-w-none dark:prose-invert">
-                  <div className="whitespace-pre-wrap text-sm">{companySection.data.trendReport}</div>
-                </div>
-              </div>
-            </>
           )}
           {!companySection.loading && !companySection.data && !companySection.error && (
-            <div className="text-sm text-muted-foreground text-center py-8">
-              点击右上角"开始分析"按钮获取企业发展趋势
+            <div className="rounded-lg border border-dashed py-10 text-center">
+              <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />
+              <p className="mt-3 text-sm font-medium">点击“开始分析”获取企业发展趋势解读</p>
+              <p className="mt-1 text-xs text-muted-foreground">分析过程会读取知识图谱企业，并整理行情、财报和公告数据</p>
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* 综合投资分析 */}
+      {false && <>
+      {/* 综合投资分析（已移至综合分析 Tab） */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <BarChart3 className="h-5 w-5" />
-              <CardTitle>综合投资分析</CardTitle>
+              <CardTitle>{getAIAnalysisModule('comprehensive').title}</CardTitle>
               <Dialog>
                 <DialogTrigger className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors">
                   <Info className="h-4 w-4 text-muted-foreground" />
@@ -1850,16 +1804,16 @@ export function IndustryAnalysis() {
                     <div className="space-y-2">
                       <h4 className="font-semibold flex items-center gap-2">
                         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground text-xs">4</span>
-                        报告渲染与展示
+                        报告内容展示
                       </h4>
                       <p className="text-muted-foreground ml-8">
-                        在前端将Markdown格式的综合报告渲染为富文本：
+                        系统会将分析结果整理成清晰易读的报告，方便查看重点结论：
                       </p>
                       <ul className="ml-8 space-y-1 list-disc list-inside text-muted-foreground">
-                        <li>支持Markdown语法（标题、列表、段落）</li>
-                        <li>保留原始换行和段落结构（whitespace-pre-wrap）</li>
-                        <li>适配深色模式（prose-invert）</li>
-                        <li>限制最大宽度，确保可读性</li>
+                        <li>重点结论、趋势和风险清晰呈现</li>
+                        <li>保留清晰的段落和层次结构</li>
+                        <li>适配深色模式，阅读更舒适</li>
+                        <li>限制内容宽度，确保阅读体验</li>
                       </ul>
                     </div>
 
@@ -1955,11 +1909,12 @@ export function IndustryAnalysis() {
           )}
           {!comprehensiveSection.loading && !comprehensiveSection.data && !comprehensiveSection.error && (
             <div className="text-sm text-muted-foreground text-center py-8">
-              点击右上角"开始分析"按钮生成综合投资分析报告
+              点击右上角“开始分析”按钮生成综合投资分析报告
             </div>
           )}
         </CardContent>
       </Card>
+      </>}
     </div>
   )
 }

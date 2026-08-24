@@ -1,15 +1,13 @@
 'use client'
 
 import { useState } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { IndustryAnalysis } from '@/components/analysis/IndustryAnalysis'
 import { InvestmentAdvice } from '@/components/analysis/InvestmentAdvice'
 import { TrendingUp, Briefcase } from 'lucide-react'
 
 export default function AIAnalysisPage() {
-  const [activeTab, setActiveTab] = useState<'industry' | 'advice'>('industry')
+  const [activeTab, setActiveTab] = useState<'industry' | 'advice'>('advice')
 
   return (
     <div className="space-y-6 p-6">
@@ -30,7 +28,7 @@ export default function AIAnalysisPage() {
           </TabsTrigger>
           <TabsTrigger value="advice" className="flex items-center gap-2">
             <Briefcase className="h-4 w-4" />
-            投资建议
+            综合分析
           </TabsTrigger>
         </TabsList>
 

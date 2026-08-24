@@ -49,11 +49,11 @@ export class OpenAIClient {
   private maxTokens: number
 
   constructor(config?: OpenAIConfig) {
-    this.model = config?.model || process.env.OPENAI_MODEL || 'gpt-4o'
+    this.model = config?.model || process.env.CHATGPT_MODEL || process.env.OPENAI_MODEL || 'gpt-4o'
     this.maxTokens = config?.maxTokens || 4096
 
-    const apiKey = config?.apiKey || process.env.OPENAI_API_KEY
-    const baseURL = config?.baseURL || process.env.OPENAI_BASE_URL
+    const apiKey = config?.apiKey || process.env.CHATGPT_API_KEY || process.env.OPENAI_API_KEY
+    const baseURL = config?.baseURL || process.env.CHATGPT_BASE_URL || process.env.OPENAI_BASE_URL
 
     if (apiKey) {
       this.client = new OpenAI({

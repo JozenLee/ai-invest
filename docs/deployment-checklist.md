@@ -25,8 +25,43 @@
 
 ### Step 1: 启动服务
 - [ ] Python 数据服务已启动 (端口 8000)
-- [ ] Next.js 开发服务器已启动 (端口 3000)
+- [ ] Next.js 生产服务器已启动 (端口 3000)
 - [ ] 服务日志无错误
+
+生产部署建议使用项目根目录的闭环脚本：
+
+```bash
+npm install
+npm run build:production
+./scripts/deploy-production.sh
+npm run verify:production
+```
+
+`deploy-production.sh` 会执行类型检查、生产构建，并在存在 PM2 时重载
+`ecosystem.config.js`。Web 服务使用 `next start` 读取 `.next` 生产构建产物，
+不会使用开发服务器或旧的热更新缓存。
+
+如果页面仍显示旧导航，请确认访问的 3000 端口确实由当前项目启动，并执行：
+
+```bash
+pm2 restart ai-invest-web --update-env
+npm run verify:production
+```
+
+验证脚本会检查新导航存在、旧导航不存在，以及四个已删除路由返回 404。
+
+### 开发环境 UI 刷新
+
+日常开发完成一次修改后执行：
+
+```bash
+npm run refresh:ui
+```
+
+该命令会安全接管当前项目占用的 3000 端口，并通过 PM2 持久托管 `next dev` 开发服务。
+因此终端命令结束后服务仍会继续运行，不会再出现旧进程或端口自动释放的问题。
+服务启动后，继续保存源码会由 Next.js HMR 自动刷新页面；如果浏览器仍显示旧内容，
+执行一次硬刷新（macOS：`Cmd+Shift+R`，Windows/Linux：`Ctrl+Shift+R`）。
 
 ### Step 2: 运行初始化
 - [ ] 已执行 `cd data-service && ./scripts/init_kg_news_integration.sh`

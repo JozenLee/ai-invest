@@ -240,6 +240,17 @@ class DataService:
         )
         return result if isinstance(result, list) else []
 
+    async def get_market_volume_amplification(self, lookback_days: int = 20) -> Dict:
+        """获取大盘成交额相对近期均值的放大倍数。"""
+        result = await self.registry.fetch(
+            category="market_volume_amplification",
+            method="get_market_volume_amplification",
+            cache_key=f"market_volume_amplification_{lookback_days}",
+            cache_ttl=600,
+            lookback_days=lookback_days,
+        )
+        return result if isinstance(result, dict) else {}
+
     async def get_lhb_detail(self, date: str) -> List[Dict]:
         """获取龙虎榜详细数据"""
         cache_key = f"lhb_detail_{date}"

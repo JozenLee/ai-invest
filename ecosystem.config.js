@@ -1,3 +1,5 @@
+require('dotenv').config({ path: './.env' })
+
 module.exports = {
   apps: [
     {
@@ -8,6 +10,10 @@ module.exports = {
       env: {
         // 数据库配置
         DATABASE_URL: process.env.DATABASE_URL || 'file:../prisma/dev.db',
+        NEO4J_URI: process.env.NEO4J_URI,
+        NEO4J_USER: process.env.NEO4J_USER,
+        NEO4J_PASSWORD: process.env.NEO4J_PASSWORD,
+        NEO4J_DATABASE: process.env.NEO4J_DATABASE || 'neo4j',
 
         // AI 服务配置（第三方 API）
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
@@ -26,7 +32,7 @@ module.exports = {
     {
       name: 'ai-invest-web',
       script: 'npm',
-      args: 'run dev',
+      args: 'run start',
       env: {
         // 数据库配置
         DATABASE_URL: process.env.DATABASE_URL || 'file:./prisma/dev.db',
