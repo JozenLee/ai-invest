@@ -89,6 +89,10 @@ class DataProvider(ABC):
         """获取ETF净值和份额（可选实现）"""
         raise NotImplementedError(f"{self.name} 不支持 ETF 净值数据")
 
+    async def get_etf_scale(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """获取 ETF 最新份额和规模（可选实现）。"""
+        raise NotImplementedError(f"{self.name} 不支持 ETF 规模数据")
+
     # ==================== 资金流向 ====================
 
     @abstractmethod

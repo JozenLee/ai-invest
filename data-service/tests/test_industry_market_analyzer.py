@@ -27,6 +27,17 @@ def test_market_analysis_cache_coalesces_repeated_requests(monkeypatch):
     cache_key = analyzer._analysis_cache_key("dom_ai", "AI算力", 90)
     cache_service.delete(cache_key)
 
+
+def test_market_analysis_cache_separates_ai_and_data_modes():
+    analyzer = object.__new__(IndustryMarketAnalyzer)
+
+    ai_key = analyzer._analysis_cache_key("dom_ai", "AI算力", 90, True)
+    data_key = analyzer._analysis_cache_key("dom_ai", "AI算力", 90, False)
+
+    assert ai_key != data_key
+    assert ai_key.endswith(":ai")
+    assert data_key.endswith(":data")
+
     first = asyncio.run(analyzer.analyze_industry_market("dom_ai", "AI算力", 90))
     second = asyncio.run(analyzer.analyze_industry_market("dom_ai", "AI算力", 90))
 
@@ -147,10 +158,16 @@ def test_graph_etf_selection_keeps_one_primary_and_one_diversifier_per_node():
 
 
 def test_graph_etf_ranking_uses_all_candidates_and_selects_representative_rows(monkeypatch):
-    monkeypatch.setenv("MARKET_ANALYSIS_MAX_ETFS", "2")
     ranked = IndustryMarketAnalyzer._rank_graph_etfs(
         [{
             "node": "AI芯片",
+            "candidates": [
+                {"code": "A", "name": "大规模高活跃ETF", "relevance": 0.6},
+                {"code": "B", "name": "小规模低活跃ETF", "relevance": 0.95},
+                {"code": "C", "name": "中规模ETF", "relevance": 0.7},
+            ],
+        }, {
+            "node": "半导体设备",
             "candidates": [
                 {"code": "A", "name": "大规模高活跃ETF", "relevance": 0.6},
                 {"code": "B", "name": "小规模低活跃ETF", "relevance": 0.95},
@@ -164,6 +181,60 @@ def test_graph_etf_ranking_uses_all_candidates_and_selects_representative_rows(m
         ],
     )
 
-    assert [row["code"] for row in ranked] == ["A", "C", "B"]
-    assert [row["code"] for row in ranked if row["selected"]] == ["A", "C"]
+    assert [row["code"] for row in ranked] == ["A", "C", "B", "A", "C", "B"]
+    assert [row["code"] for row in ranked if row["selected"]] == ["A", "C", "A", "C"]
+    assert {row["node"] for row in ranked if row["selected"]} == {"AI芯片", "半导体设备"}
     assert ranked[0]["representativeness_score"] > ranked[2]["representativeness_score"]
+
+
+def test_tushare_field_normalization_preserves_volume_and_amount():
+    record = {
+        "date": "20260821",
+        "open": 1.0,
+        "high": 1.1,
+        "low": 0.9,
+        "close": 1.05,
+        "vol": 123456,
+        "amount": 789012.5,
+        "pct_chg": 1.2,
+    }
+
+    normalized = IndustryMarketAnalyzer._normalize_etf_kline_record(record, 0, [record])
+
+    assert normalized["成交量"] == 123456
+    assert normalized["成交额"] == 789012.5
+    assert normalized["涨跌幅"] == 1.2
+
+
+def test_graph_selection_ranks_only_valid_history_rows():
+    analyzer = object.__new__(IndustryMarketAnalyzer)
+    rows = analyzer._filter_valid_data([
+        {"code": "A", "name": "有效ETF", "data_points": 63, "is_fallback": False},
+        {"code": "B", "name": "单日降级ETF", "data_points": 1, "is_fallback": True},
+    ])
+
+    ranked = IndustryMarketAnalyzer._rank_graph_etfs([{
+        "node": "半导体",
+        "candidates": [
+            {"code": "A", "name": "有效ETF", "relevance": 0.9},
+            {"code": "B", "name": "单日降级ETF", "relevance": 1.0},
+        ],
+    }], rows)
+
+    assert [row["code"] for row in ranked] == ["A"]
+    assert ranked[0]["selected"] is True
+
+
+def test_graph_selection_uses_volume_when_amount_is_missing():
+    ranked = IndustryMarketAnalyzer._rank_graph_etfs([{
+        "node": "云计算",
+        "candidates": [
+            {"code": "A", "name": "高成交量ETF", "relevance": 0.8},
+            {"code": "B", "name": "低成交量ETF", "relevance": 0.8},
+        ],
+    }], [
+        {"code": "A", "market_value": 100, "volume": 1000, "amount": None, "price_change_pct": 0, "volatility": 10, "max_drawdown": 5, "ma20": 2, "ma60": 2, "macd_macd": 1, "is_fallback": False},
+        {"code": "B", "market_value": 100, "volume": 10, "amount": None, "price_change_pct": 0, "volatility": 10, "max_drawdown": 5, "ma20": 2, "ma60": 2, "macd_macd": 1, "is_fallback": False},
+    ])
+
+    assert ranked[0]["code"] == "A"

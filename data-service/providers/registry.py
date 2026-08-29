@@ -85,7 +85,7 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     "sector_capital_flow": CategoryConfig(
         sources=["tushare"],
-        cache_ttl=600,
+        cache_ttl=30,
         fallback_to_file=False,
     ),
     "northbound_flow": CategoryConfig(
@@ -267,7 +267,8 @@ class ProviderRegistry:
         }.get(source_name, source_name)
 
     async def fetch(self, category: str, method: str, cache_key: Optional[str] = None,
-                    cache_ttl: Optional[int] = None, **kwargs) -> Any:
+                    cache_ttl: Optional[int] = None, force_refresh: bool = False,
+                    **kwargs) -> Any:
         """按优先级尝试各数据源，自动降级
 
         Args:
@@ -292,7 +293,7 @@ class ProviderRegistry:
         ttl = cache_ttl or config.cache_ttl
 
         # 先检查内存缓存
-        if cache_key:
+        if cache_key and not force_refresh:
             cached = self.cache.get_memory(cache_key)
             if cached is not None and self._is_valid_category_result(category, cached):
                 # 内存缓存保留首次获取时的真实来源；只有没有来源记录时才标记为缓存。

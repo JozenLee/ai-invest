@@ -23,6 +23,7 @@ export async function GET(
     const searchParams = request.nextUrl.searchParams
     const industryName = searchParams.get('industry_name')
     const periodDays = searchParams.get('period_days') || '90'
+    const marketIndexCodes = searchParams.get('market_index_codes') || ''
 
     if (!industryName) {
       return NextResponse.json(
@@ -32,7 +33,7 @@ export async function GET(
     }
 
     const response = await fetch(
-      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/market?industry_name=${encodeURIComponent(industryName)}&period_days=${periodDays}`,
+      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/market?industry_name=${encodeURIComponent(industryName)}&period_days=${periodDays}&market_index_codes=${encodeURIComponent(marketIndexCodes)}`,
       {
         headers: {
           'Content-Type': 'application/json',

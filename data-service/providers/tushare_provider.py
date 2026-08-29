@@ -5,13 +5,25 @@
 import asyncio
 import os
 import requests
+import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+try:
+    import tushare as tushare_sdk
+except ImportError:
+    tushare_sdk = None
+
 from providers.base import DataProvider
 from utils.trading_hours import is_trading_hours
+
+
+_TUSHARE_GATEWAY_SEMAPHORE = threading.Semaphore(
+    max(1, int(os.getenv("TUSHARE_MAX_CONCURRENCY", "1")))
+)
 
 
 class TushareProvider(DataProvider):
@@ -29,10 +41,33 @@ class TushareProvider(DataProvider):
     def __init__(self, token: Optional[str] = None):
         self._api_url = os.getenv("TUSHARE_API_URL", "").rstrip("/")
         self._api_key = os.getenv("TUSHARE_API_KEY", "") or token or ""
+        self._sdk_url = os.getenv("TUSHARE_HTTP_URL", "").rstrip("/")
+        self._gateway_token = os.getenv("TUSHARE_GATEWAY_TOKEN", "")
+        self._transport = os.getenv("TUSHARE_TRANSPORT", "auto").strip().lower()
+        self._sdk = None
+        if self._should_use_sdk() and tushare_sdk is not None:
+            try:
+                self._sdk = tushare_sdk.pro_api(
+                    self._gateway_token,
+                    timeout=float(os.getenv("TUSHARE_TIMEOUT_SECONDS", "30")),
+                )
+                self._sdk._DataApi__http_url = self._sdk_url
+            except Exception as error:
+                print(f"[Tushare] SDK 网关初始化失败，将回退 REST: {error}")
         if self._api_url and self._api_key:
-            print("[Tushare] Promax 聚合接口初始化成功")
+            mode = "sdk" if self._sdk is not None else "rest"
+            print(f"[Tushare] Promax 聚合接口初始化成功，transport={mode}")
         else:
             print("[Tushare] 未配置 TUSHARE_API_URL/TUSHARE_API_KEY，数据源不可用")
+
+    def _should_use_sdk(self) -> bool:
+        """仅在显式配置 ``TUSHARE_TRANSPORT=sdk`` 时使用 SDK。
+
+        Promax 聚合接口的标准调用方式是 REST ``GET /{api}`` 搭配
+        ``X-API-Key``。默认/auto 模式不能因为环境中残留了旧 SDK 网关参数
+        就切换传输层，否则会绕过已验证可用的聚合接口。
+        """
+        return self._transport == "sdk"
 
     @property
     def available(self) -> bool:
@@ -41,6 +76,7 @@ class TushareProvider(DataProvider):
 
     async def _call_api(self, api: str, **params) -> pd.DataFrame:
         """调用 Tushare SDK 或 Promax 聚合接口，并统一返回 DataFrame。"""
+        request_timeout = float(params.pop("_timeout_seconds", os.getenv("TUSHARE_TIMEOUT_SECONDS", "30")))
         def normalize(frame: pd.DataFrame) -> pd.DataFrame:
             if "date" in frame.columns and "trade_date" not in frame.columns:
                 frame = frame.rename(columns={"date": "trade_date"})
@@ -75,19 +111,38 @@ class TushareProvider(DataProvider):
             return pd.DataFrame()
 
         self._check_available()
+
+        if self._sdk is not None:
+            sdk_params = dict(params)
+            try:
+                return await asyncio.to_thread(self._sdk.query, api, **sdk_params)
+            except Exception as error:
+                raise RuntimeError(f"Tushare SDK API {api} 调用失败: {error}") from error
+
         def _request():
-            response = requests.get(
-                f"{self._api_url}/{api}",
-                params=params,
-                headers={"X-API-Key": self._api_key},
-                verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
-                timeout=float(os.getenv("TUSHARE_TIMEOUT_SECONDS", "30")),
-            )
-            response.raise_for_status()
-            payload = response.json()
-            if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
-                raise RuntimeError(payload.get("msg") or f"Tushare API {api} 返回错误码 {payload.get('code')}")
-            return frame_from_payload(payload)
+            # 网关对 upstream_busy 通常会固定等待约 8 秒；重复重试只会放大
+            # 综合分析耗时，应立即交给本地/其他数据源降级。
+            busy_retries = max(0, int(os.getenv("TUSHARE_BUSY_RETRIES", "0")))
+            with _TUSHARE_GATEWAY_SEMAPHORE:
+                for attempt in range(busy_retries + 1):
+                    response = requests.get(
+                        f"{self._api_url}/{api}",
+                        params=params,
+                        headers={"X-API-Key": self._api_key},
+                        verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
+                        timeout=request_timeout,
+                    )
+                    if response.status_code == 503 and "upstream concurrency" in response.text.lower():
+                        if attempt < busy_retries:
+                            time.sleep(1.0 * (attempt + 1))
+                            continue
+                        raise RuntimeError(f"Tushare API {api} 上游并发受限: {response.text[:240]}")
+                    response.raise_for_status()
+                    payload = response.json()
+                    if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
+                        raise RuntimeError(payload.get("msg") or f"Tushare API {api} 返回错误码 {payload.get('code')}")
+                    return frame_from_payload(payload)
+            raise RuntimeError(f"Tushare API {api} 未返回数据")
         return await asyncio.to_thread(_request)
 
     async def request_dataframe(self, api: str, **params) -> pd.DataFrame:
@@ -273,12 +328,17 @@ class TushareProvider(DataProvider):
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
         records = []
+        trading = is_trading_hours()
         for symbol in symbols:
             try:
                 ts_code = self._to_ts_code(symbol, default_market="SZ" if symbol.startswith(("0", "3")) else "SH")
-                try:
-                    df = await self._call_api("rt_k", ts_code=ts_code)
-                except Exception:
+                if trading:
+                    try:
+                        df = await self._call_api("rt_k", ts_code=ts_code)
+                    except Exception:
+                        df = await self._call_api("daily", ts_code=ts_code, start_date=start, end_date=today)
+                else:
+                    # 非交易时间没有实时快照，直接取最近交易日日线，避免 rt_k 等待上游超时。
                     df = await self._call_api("daily", ts_code=ts_code, start_date=start, end_date=today)
                 if not df.empty:
                     latest = df.iloc[0]
@@ -360,13 +420,18 @@ class TushareProvider(DataProvider):
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 
         records = []
+        trading = is_trading_hours()
         for symbol in symbols:
             try:
                 # ETF 代码格式：510300.SH / 159919.SZ
                 ts_code = self._to_ts_code(symbol, default_market="SH" if symbol.startswith("5") else "SZ")
-                try:
-                    df = await self._call_api("rt_k", ts_code=ts_code)
-                except Exception:
+                if trading:
+                    try:
+                        df = await self._call_api("rt_k", ts_code=ts_code)
+                    except Exception:
+                        df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start, end_date=today)
+                else:
+                    # 非交易时间使用最近交易日的 ETF 日线，不调用实时快照接口。
                     df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start, end_date=today)
                 if not df.empty:
                     latest = df.iloc[0]
@@ -384,6 +449,49 @@ class TushareProvider(DataProvider):
 
         return pd.DataFrame(records) if records else pd.DataFrame()
 
+    async def get_etf_scale(self, ticker: str) -> Optional[Dict[str, Any]]:
+        """获取 ETF 最新份额，供上层计算可用于排序的规模值。
+
+        Tushare fund_share 的 fd_share 单位由接口定义保持原样；规模只用于同批
+        ETF 的相对排序，因此使用份额×最新价即可避免缺失规模字段导致排序失真。
+        """
+        self._check_available()
+        ts_code = self._to_ts_code(ticker, default_market="SH" if ticker.startswith("5") else "SZ")
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+        frame = await self.request_dataframe(
+            "fund_share",
+            ts_code=ts_code,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if frame.empty:
+            return None
+
+        share_column = next(
+            (column for column in ("fd_share", "share", "shares", "份额") if column in frame.columns),
+            None,
+        )
+        if share_column is None:
+            return None
+        frame = frame.copy()
+        frame[share_column] = pd.to_numeric(frame[share_column], errors="coerce")
+        frame = frame.dropna(subset=[share_column])
+        if frame.empty:
+            return None
+        if "trade_date" in frame.columns:
+            frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="coerce")
+            frame = frame.sort_values("trade_date")
+        latest = frame.iloc[-1]
+        shares = float(latest[share_column])
+        if shares <= 0:
+            return None
+        return {
+            "shares": shares,
+            "market_value": None,
+            "source": "tushare_fund_share",
+        }
+
     async def get_etf_daily(self, ticker: str, start_date: str, end_date: str) -> pd.DataFrame:
         """获取ETF日K数据"""
         self._check_available()
@@ -393,8 +501,15 @@ class TushareProvider(DataProvider):
         df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start_date, end_date=end_date)
 
         if not df.empty:
-            df = df.rename(columns={"trade_date": "date"})
-            df["date"] = pd.to_datetime(df["date"])
+            df = df.rename(columns={
+                "trade_date": "date",
+                "vol": "volume",
+            })
+            if "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            for column in ("open", "high", "low", "close", "volume", "amount", "pct_chg"):
+                if column in df.columns:
+                    df[column] = pd.to_numeric(df[column], errors="coerce")
             df = df.sort_values("date").reset_index(drop=True)
 
         return df
@@ -404,51 +519,34 @@ class TushareProvider(DataProvider):
     async def get_market_capital_flow(self) -> Dict:
         """获取大盘资金流向
 
-        Tushare moneyflow_market_dtl 接口需要 2000+ 积分。
+        Promax 的 moneyflow_mkt_dc 按单个交易日查询；传入 start_date/end_date
+        会触发网关超时。
         """
         self._check_available()
 
-        today = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
-
-        df = pd.DataFrame()
-        last_error = None
-        for api in ("moneyflow_mkt_dc", "moneyflow_market_dtl"):
-            try:
-                df = await self._call_api(api, start_date=start, end_date=today)
-                if not df.empty:
-                    break
-            except Exception as error:
-                last_error = error
+        current = datetime.now()
+        while current.weekday() >= 5:
+            current -= timedelta(days=1)
+        trade_date = current.strftime("%Y%m%d")
+        df = await self._call_api("moneyflow_mkt_dc", trade_date=trade_date)
 
         if not df.empty:
             latest = df.iloc[0]  # 按日期降序
             net_amount = float(latest.get("net_amount", latest.get("net_mf_amount", 0)) or 0)
-            if api == "moneyflow_mkt_dc":
-                # DC 接口的 buy_*_amount 字段是各档位净流入额，不是买入总额。
-                main_net = net_amount
-                mid_net = float(latest.get("buy_md_amount", latest.get("net_md_amount", 0)) or 0)
-                small_net = float(latest.get("buy_sm_amount", latest.get("net_sm_amount", 0)) or 0)
-            else:
-                buy_elg = float(latest.get("buy_elg_amount", 0) or 0)
-                sell_elg = float(latest.get("sell_elg_amount", 0) or 0)
-                buy_md = float(latest.get("buy_md_amount", 0) or 0)
-                sell_md = float(latest.get("sell_md_amount", 0) or 0)
-                buy_sm = float(latest.get("buy_sm_amount", 0) or 0)
-                sell_sm = float(latest.get("sell_sm_amount", 0) or 0)
-                main_net = (buy_elg - sell_elg) if buy_elg or sell_elg else net_amount
-                mid_net = buy_md - sell_md
-                small_net = buy_sm - sell_sm
+            # DC 接口的 buy_*_amount 字段是各档位净流入额，不是买入总额。
+            main_net = net_amount
+            mid_net = float(latest.get("buy_md_amount", latest.get("net_md_amount", 0)) or 0)
+            small_net = float(latest.get("buy_sm_amount", latest.get("net_sm_amount", 0)) or 0)
             return {
                 "主力净流入-净额": main_net,
                 "主力净流入-净占比": 0.0,  # Tushare 不直接提供占比
                 "中单净流入-净额": mid_net,
                 "小单净流入-净额": small_net,
-                "日期": str(latest.get("trade_date", today)),
+                "日期": str(latest.get("trade_date", trade_date)),
                 "source": "tushare_moneyflow",
             }
 
-        raise last_error or Exception("Tushare 大盘资金流向数据为空")
+        raise Exception("Tushare 大盘资金流向数据为空")
 
     async def get_sector_capital_flow(self, indicator: str = "今日") -> List[Dict]:
         """获取行业/概念资金流向并统一金额单位为元。"""

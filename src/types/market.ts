@@ -278,6 +278,9 @@ export interface CapitalFlowData {
   }
   dataDate?: string
   dataQuality?: DataQuality
+  sectorDataQuality?: DataQuality
+  sectorDataDate?: string
+  sectorRealtime?: boolean
 
   // 保留旧字段以兼容过渡期
   market?: {

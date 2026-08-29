@@ -54,6 +54,19 @@ export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
           .catch(err => console.error('Failed to load industry name:', err))
       }
     }
+
+    // 综合报告的 [id] 不能直接展示数据库主键，改为加载报告标题作为面包屑名称。
+    const reportTypeIndex = segments.indexOf('comprehensive-report')
+    if (reportTypeIndex >= 0 && segments[reportTypeIndex + 1]) {
+      const reportId = segments[reportTypeIndex + 1]
+      fetch(`/api/analysis/reports/${encodeURIComponent(reportId)}`)
+        .then(res => res.json())
+        .then(data => {
+          const title = data?.report?.title || data?.report?.industryName
+          if (data?.success && title) setDynamicNames(prev => ({ ...prev, [reportId]: title }))
+        })
+        .catch(err => console.error('Failed to load report name:', err))
+    }
   }, [pathname])
 
   return (
@@ -165,6 +178,8 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
     stock: '个股分析',
     sector: '板块分析',
     report: '综合报告',
+    'market-report': '市场分析报告',
+    'comprehensive-report': '综合分析完整报告',
     new: '新建',
   }
 

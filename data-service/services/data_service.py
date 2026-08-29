@@ -184,14 +184,15 @@ class DataService:
         )
         return result if isinstance(result, dict) else {}
 
-    async def get_sector_capital_flow(self, indicator: str = "今日") -> List[Dict]:
+    async def get_sector_capital_flow(self, indicator: str = "今日", force_refresh: bool = False) -> List[Dict]:
         """获取板块资金流向"""
         cache_key = f"sector_capital_flow_{indicator}"
         result = await self.registry.fetch(
             category="sector_capital_flow",
             method="get_sector_capital_flow",
             cache_key=cache_key,
-            cache_ttl=600,
+            cache_ttl=30,
+            force_refresh=force_refresh,
             indicator=indicator,
         )
         return result if isinstance(result, list) else []

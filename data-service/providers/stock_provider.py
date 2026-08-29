@@ -66,7 +66,12 @@ class StockProvider:
             股票基本信息字典
         """
         if market == 'cn':
-            return await self._get_tushare_stock_info(symbol)
+            tushare_info = await self._get_tushare_stock_info(symbol)
+            if tushare_info:
+                return tushare_info
+            if ak is not None:
+                return await self._get_cn_stock_info(symbol.split('.')[0])
+            return {}
         return await self.openbb.get_stock_info(symbol, market)
 
     async def get_financial_report(
@@ -110,7 +115,10 @@ class StockProvider:
             公告列表
         """
         if market == 'cn':
-            return await self._get_tushare_announcements(symbol, start_date, end_date)
+            tushare_rows = await self._get_tushare_announcements(symbol, start_date, end_date)
+            if tushare_rows:
+                return tushare_rows
+            return await self._get_eastmoney_announcements(symbol, start_date, end_date)
         return await self.openbb.get_announcements(symbol, start_date, end_date, market)
 
     async def get_kline(
@@ -138,14 +146,19 @@ class StockProvider:
         """
         if market == 'cn':
             if not self.tushare.available:
-                return []
-            frame = await self.tushare.get_stock_kline(
-                symbol,
-                period=period,
-                start_date=self._tushare_date(start_date),
-                end_date=self._tushare_date(end_date),
-            )
-            return frame.to_dict('records') if frame is not None and not frame.empty else []
+                return await self._get_eastmoney_kline(symbol, period, start_date, end_date, adjust)
+            try:
+                frame = await self.tushare.get_stock_kline(
+                    symbol,
+                    period=period,
+                    start_date=self._tushare_date(start_date),
+                    end_date=self._tushare_date(end_date),
+                )
+                if frame is not None and not frame.empty:
+                    return frame.to_dict('records')
+            except Exception as error:
+                self.logger.warning("Tushare行情失败，切换东方财富 %s: %s", symbol, error)
+            return await self._get_eastmoney_kline(symbol, period, start_date, end_date, adjust)
         return await self.openbb.get_kline(symbol, start_date, end_date, market)
 
     async def get_realtime_quote(
@@ -226,30 +239,29 @@ class StockProvider:
             }.get(report_type)
             if not endpoint:
                 raise ValueError(f"Unsupported report type: {report_type}")
-            frame = await self.tushare.request_dataframe(endpoint, ts_code=ts_code)
-            if frame is None or frame.empty:
-                return []
+            # Promax 按 `GET /{接口名}` + 参数调用。fina_indicator 是企业
+            # 分析的主入口：即使 income 无权限或暂未返回，也能拿到报告期、
+            # 现金流和盈利能力字段；income 成功时再合并收入与净利润。
+            try:
+                indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+            except Exception as error:
+                self.logger.info("Tushare fina_indicator 获取失败 %s: %s", symbol, error)
+                indicator = None
+            try:
+                statement = await self.tushare.request_dataframe(endpoint, ts_code=ts_code)
+            except Exception as error:
+                self.logger.info("Tushare %s 补充失败 %s: %s", endpoint, symbol, error)
+                statement = None
 
-            # income 本身不包含毛利率、净利率等质量指标；补充同口径的
-            # fina_indicator，供综合分析器计算盈利质量和现金流信号。
-            if report_type == 'income':
-                try:
-                    indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
-                    if indicator is not None and not indicator.empty and 'end_date' in frame.columns and 'end_date' in indicator.columns:
-                        indicator_fields = [
-                            'end_date', 'grossprofit_margin', 'netprofit_margin',
-                            'n_cashflow_act', 'ocf_to_or', 'roe', 'roa',
-                        ]
-                        available_fields = [field for field in indicator_fields if field in indicator.columns]
-                        frame = frame.merge(
-                            indicator[available_fields].drop_duplicates('end_date'),
-                            on='end_date',
-                            how='left',
-                            suffixes=('', '_indicator'),
-                        )
-                except Exception as error:
-                    self.logger.info("Tushare财务指标补充失败 %s: %s", symbol, error)
-            return [self._normalize_financial_row(row) for row in frame.to_dict('records')]
+            rows_by_period: Dict[str, Dict[str, Any]] = {}
+            for frame in (indicator, statement):
+                if frame is None or frame.empty:
+                    continue
+                for row in frame.to_dict('records'):
+                    period = str(row.get('end_date') or row.get('ann_date') or '')
+                    key = period or f"row-{len(rows_by_period)}"
+                    rows_by_period.setdefault(key, {}).update(row)
+            return [self._normalize_financial_row(row) for row in rows_by_period.values()]
         except Exception as error:
             self.logger.warning("Tushare财报失败 %s: %s", symbol, error)
             return []
@@ -267,11 +279,11 @@ class StockProvider:
                 'st': '公告日期',
                 'page_size': '100',
                 'page_index': '1',
-                'ann_type': 'SHA',
+                'ann_type': 'A',
                 'client_source': 'web',
                 'f_node': '0',
                 'f_page': '0',
-                'stock_list': symbol,
+                'stock_list': symbol.split('.')[0],
             }
             response = requests.get(
                 'https://np-anotice-stock.eastmoney.com/api/security/ann',
@@ -388,20 +400,24 @@ class StockProvider:
                 symbol,
                 default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
             )
-            # Promax 的 anns_d 要求 ann_date，不能直接传 start_date/end_date。
-            # 先取分析区间结束日，避免把不被接口接受的范围参数当作空公告。
-            ann_date = self._latest_business_date(end_date)
-            frame = await self.tushare.request_dataframe(
-                'anns_d',
-                ts_code=ts_code,
-                ann_date=ann_date,
-            )
+            params = {'ts_code': ts_code}
+            if start_date:
+                params['start_date'] = self._tushare_date(start_date)
+            if end_date:
+                params['end_date'] = self._tushare_date(end_date)
+            try:
+                frame = await self.tushare.request_dataframe('anns_d', **params)
+            except Exception:
+                # 兼容只接受 ann_date 的旧 Promax 网关；范围查询优先，避免
+                # 只查分析截止日而把整个窗口误判为“无公告”。
+                ann_date = self._latest_business_date(end_date)
+                frame = await self.tushare.request_dataframe('anns_d', ts_code=ts_code, ann_date=ann_date)
             if frame is None or frame.empty:
                 return []
             return [
                 {
                     '公告标题': str(row.get('title') or ''),
-                    '公告日期': str(row.get('ann_date') or ann_date),
+                    '公告日期': str(row.get('ann_date') or row.get('pub_date') or ''),
                     '网址': str(row.get('url') or ''),
                     'source': 'tushare_anns_d',
                 }

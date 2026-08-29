@@ -30,6 +30,22 @@ type ModuleResult = {
   durationMs: number
 }
 
+const ALL_PAGES = ['overview', 'market', 'news', 'company', 'portfolio'] as const
+type PageKey = typeof ALL_PAGES[number]
+const skippedModule = (): ModuleResult => ({ success: true, payload: {}, fetchedAt: new Date().toISOString(), durationMs: 0 })
+
+function errorMessage(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim()) return value
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>
+    for (const candidate of [record.error, record.message, record.detail]) {
+      const message = errorMessage(candidate)
+      if (message) return message
+    }
+  }
+  return undefined
+}
+
 async function fetchModule(url: string): Promise<ModuleResult> {
   const startedAt = Date.now()
   const fetchedAt = new Date().toISOString()
@@ -41,7 +57,7 @@ async function fetchModule(url: string): Promise<ModuleResult> {
     })
     const payload = await response.json().catch(() => ({})) as Record<string, unknown>
     if (!response.ok) {
-      return { success: false, payload, error: String(payload.detail || payload.error || `HTTP ${response.status}`), fetchedAt, durationMs: Date.now() - startedAt }
+      return { success: false, payload, error: errorMessage(payload.detail) || errorMessage(payload.error) || `HTTP ${response.status}`, fetchedAt, durationMs: Date.now() - startedAt }
     }
     return { success: true, payload, fetchedAt, durationMs: Date.now() - startedAt }
   } catch (error) {
@@ -375,22 +391,53 @@ export async function POST(
     const riskTolerance = (body.riskTolerance || 'balanced') as RiskTolerance
     const investmentHorizon = (body.investmentHorizon || 'short') as InvestmentHorizon
     const companySource: 'graph' | 'etf_holdings' = body.companySource === 'graph' ? 'graph' : 'etf_holdings'
+    const requestedPages = Array.isArray(body.selectedPages)
+      ? body.selectedPages.filter((value): value is PageKey => typeof value === 'string' && ALL_PAGES.includes(value as PageKey))
+      : [...ALL_PAGES]
+    const selectedPages = Array.from(new Set(requestedPages)) as PageKey[]
+    const generateAiReport = body.generateAiReport !== false
+    const marketIndexCodes = Array.isArray(body.marketIndexCodes)
+      ? body.marketIndexCodes.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).join(',')
+      : ''
     if (!industryName) return NextResponse.json({ success: false, error: 'industryName is required' }, { status: 400 })
+    if (selectedPages.length === 0) return NextResponse.json({ success: false, error: '请至少选择一个要生成的页面' }, { status: 400 })
 
-    const marketUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/market?industry_name=${encodeURIComponent(industryName)}&period_days=${periodDays}`
-    const newsUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/news?industry_name=${encodeURIComponent(industryName)}&limit=50`
+    const pageSet = new Set(selectedPages)
+    const needsMarket = pageSet.has('market') || (pageSet.has('company') && companySource === 'etf_holdings')
+    const needsNews = pageSet.has('news')
+    const needsCompany = pageSet.has('company')
+    const needsPortfolio = pageSet.has('portfolio')
+
+    const reportMode = `generate_ai_report=${generateAiReport}`
+    const marketUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/market?industry_name=${encodeURIComponent(industryName)}&period_days=${periodDays}&market_index_codes=${encodeURIComponent(marketIndexCodes)}&${reportMode}`
+    const newsUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/news?industry_name=${encodeURIComponent(industryName)}&limit=50&${reportMode}`
     const [marketResult, newsResult, portfolios] = await Promise.all([
-      fetchModule(marketUrl),
-      fetchModule(newsUrl),
-      prisma.portfolio.findMany({ include: { holdings: true }, orderBy: { createdAt: 'desc' } }),
+      needsMarket ? fetchModule(marketUrl) : Promise.resolve(skippedModule()),
+      needsNews ? fetchModule(newsUrl) : Promise.resolve(skippedModule()),
+      needsPortfolio ? prisma.portfolio.findMany({ include: { holdings: true }, orderBy: { createdAt: 'desc' } }) : Promise.resolve([]),
     ])
 
     const market = normalizeMarket(marketResult.payload)
-    const selectedEtfCodes = Array.from(new Set([
+    const representativeEtfCodes = Array.from(new Set([
       ...market.etfSelection.map((row) => textValue(row.code || row.symbol)),
       ...market.etfs.map((row) => textValue(row.code || row.symbol)),
-    ].filter(Boolean))).slice(0, 30)
-    if (companySource === 'etf_holdings' && selectedEtfCodes.length === 0) {
+    ].filter(Boolean)))
+    // 企业分析使用知识图谱中的全部 ETF 候选；代表 ETF 仅用于市场展示和排序。
+    const graphEtfCodes = Array.from(new Set(
+      market.etfCandidates.map((row) => textValue(row.code || row.symbol)).filter(Boolean),
+    ))
+    const selectedEtfCodes = graphEtfCodes.length > 0 ? graphEtfCodes : representativeEtfCodes
+    if (needsCompany && companySource === 'etf_holdings' && !marketResult.success) {
+      const upstreamError = marketResult.error || '市场分析服务未返回可用结果'
+      return NextResponse.json({
+        success: false,
+        error: `市场分析失败：${upstreamError}`,
+        stage: 'market',
+        error_code: typeof marketResult.payload.error_code === 'string' ? marketResult.payload.error_code : 'MARKET_ANALYSIS_FAILED',
+        upstream: marketResult.payload,
+      }, { status: 502 })
+    }
+    if (needsCompany && companySource === 'etf_holdings' && selectedEtfCodes.length === 0) {
       return NextResponse.json({
         success: false,
         error: '市场分析未返回代表性ETF，无法继续读取ETF持仓企业',
@@ -398,14 +445,16 @@ export async function POST(
         error_code: 'MARKET_ETF_SELECTION_EMPTY',
       }, { status: 502 })
     }
-    const companyUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/companies?period_days=${periodDays}&source=${companySource}&etf_codes=${encodeURIComponent(selectedEtfCodes.join(','))}`
-    const companyResult = await fetchModule(companyUrl)
+    const companyUrl = `${DATA_SERVICE_URL}/api/industry-analysis/${encodeURIComponent(industryId)}/companies?period_days=${periodDays}&source=${companySource}&etf_codes=${encodeURIComponent(selectedEtfCodes.join(','))}&${reportMode}`
+    const companyResult = needsCompany
+      ? await fetchModule(companyUrl)
+      : skippedModule()
 
     const portfolio = await enrichPortfolioMarketData(normalizePortfolio(portfolios.find((item) => item.isDefault) ?? portfolios[0] ?? {}))
     const news = normalizeNews(newsResult.payload)
     const company = normalizeCompany(companyResult.payload)
     const structure = buildStructureSummary(company, news)
-    news.analysis = await enrichNewsAnalysis(industryName, news, company, structure)
+    if (needsNews && generateAiReport) news.analysis = await enrichNewsAnalysis(industryName, news, company, structure)
     const modules = {
       market: moduleHealth(marketResult, market.etfs.length + market.indices.length),
       news: moduleHealth(newsResult, news.items.length),
@@ -431,8 +480,12 @@ export async function POST(
       modules,
       preferences: { riskTolerance, investmentHorizon },
       companySource,
+      selectedPages,
+      generateAiReport,
       marketToCompany: {
         selectedEtfCodes,
+        representativeEtfCodes,
+        graphEtfCodes,
         companySource,
       },
     }
@@ -443,7 +496,17 @@ export async function POST(
 
     let advice = ruleAdvice
     let aiWarning = ''
-    try {
+    if (!generateAiReport) {
+      advice = {
+        ...ruleAdvice,
+        summary: '本次未生成 AI 分析报告，仅展示所选页面的整理数据。',
+        strategy: '',
+        investmentConclusion: '',
+        recommendations: [],
+        generatedBy: 'rules',
+        validation: { valid: true, warnings: ['已按设置跳过 AI 分析报告生成'] },
+      }
+    } else try {
       const raw = await aiClient.complete({
         prompt: buildPrompt(baseData),
         maxTokens: 5000,
@@ -475,7 +538,7 @@ export async function POST(
     }
     if (aiWarning) advice.validation.warnings = [...advice.validation.warnings, aiWarning]
 
-    ensureDailyActionCoverage(advice, market, portfolio, industryName, quality, investmentHorizon)
+    if (generateAiReport) ensureDailyActionCoverage(advice, market, portfolio, industryName, quality, investmentHorizon)
     const reportData: DailyActionReportData = { ...baseData, advice }
     const content = buildMarkdown(reportData)
     const report = await prisma.aIAnalysisReport.create({

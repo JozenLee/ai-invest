@@ -26,7 +26,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/sector?indicator=今日`, {
+    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/sector?indicator=今日${forceRefresh ? '&refresh=true' : ''}`, {
       signal: AbortSignal.timeout(15000),
     })
 
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
       if (result.success) {
         const data = {
           success: true,
-          sectors: result.sectors || [],
+          sectors: result.data || result.sectors || [],
           source: result.source || 'akshare',
           meta: result.meta || null,
         }

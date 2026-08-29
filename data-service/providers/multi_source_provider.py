@@ -38,7 +38,9 @@ class MultiSourceProvider:
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
-        self.etf_fetch_concurrency = max(1, int(os.getenv("MARKET_ETF_FETCH_CONCURRENCY", "6")))
+        # Promax 网关对上游 Tushare 请求有并发限制；默认串行获取，
+        # 由 TushareProvider 的全局信号量统一控制跨 provider 实例的并发。
+        self.etf_fetch_concurrency = max(1, int(os.getenv("MARKET_ETF_FETCH_CONCURRENCY", "1")))
 
         # 延迟导入避免循环依赖
         from providers.akshare_provider import AKShareProvider
@@ -216,7 +218,7 @@ class MultiSourceProvider:
             row = self._etf_cache[code]
             return {
                 "code": code,
-                "name": str(row.get("名称", "")),
+                "name": str(row.get("名称") or row.get("name") or row.get("基金简称") or code),
                 "price": float(row.get("最新价", 0)),
                 "change_pct": float(row.get("涨跌幅", 0)),
                 "volume": float(row.get("成交量", 0)),
@@ -234,7 +236,7 @@ class MultiSourceProvider:
                     row = frame.iloc[0]
                     return {
                         "code": code,
-                        "name": str(row.get("名称") or code),
+                        "name": str(row.get("名称") or row.get("name") or row.get("基金简称") or row.get("ts_name") or code),
                         "price": float(row.get("最新价", 0) or 0),
                         "change_pct": float(row.get("涨跌幅", 0) or 0),
                         "volume": float(row.get("成交量", 0) or 0),
@@ -253,7 +255,7 @@ class MultiSourceProvider:
                 kline = spot_data["kline"][0]
                 return {
                     "code": code,
-                    "name": spot_data["info"]["基金简称"],
+                    "name": str(spot_data.get("info", {}).get("基金简称") or spot_data.get("info", {}).get("名称") or code),
                     "price": kline["收盘"],
                     "change_pct": kline["涨跌幅"],
                     "volume": kline["成交量"],
@@ -370,32 +372,79 @@ class MultiSourceProvider:
         async def fetch_one(code: str) -> Optional[Dict[str, Any]]:
             async with semaphore:
                 try:
-                    spot = await self.get_etf_spot_data(code)
-                    if not spot:
-                        self.logger.warning("ETF %s 未获取到实时数据", code)
-                        return None
+                    # 综合分析需要历史序列时，Promax fund_daily 同时提供最新价、
+                    # 涨跌幅、成交量和成交额。复用这一次请求，避免先请求 spot、
+                    # 再请求规模、再重复请求历史导致每只 ETF 产生 2~3 次网关调用。
+                    hist_df = None
+                    if with_history and self.tushare.available:
+                        try:
+                            hist_df = await self.tushare.get_etf_daily(code, start_date, end_date)
+                        except Exception as error:
+                            self.logger.warning("[Tushare] ETF %s history failed: %s", code, error)
 
-                    etf_data = {
-                        "code": code,
-                        "name": spot["name"],
-                        "current_price": spot["price"],
-                        "change_pct": spot["change_pct"],
-                        "volume": spot["volume"],
-                        "amount": spot["amount"],
-                        "market_value": spot.get("market_value"),
-                        "shares": spot.get("shares"),
-                        "source": spot["source"],
-                    }
+                    if hist_df is not None and not hist_df.empty:
+                        latest = hist_df.iloc[-1]
+                        current_price = self._to_float(latest.get("close")) or 0.0
+                        change_pct = self._to_float(latest.get("pct_chg")) or 0.0
+                        volume = self._to_float(latest.get("volume", latest.get("vol"))) or 0.0
+                        amount = self._to_float(latest.get("amount")) or 0.0
+                        etf_data = {
+                            "code": code,
+                            "name": code,
+                            "current_price": current_price,
+                            "change_pct": change_pct,
+                            "volume": volume,
+                            "amount": amount,
+                            "market_value": None,
+                            "shares": None,
+                            "source": "tushare",
+                            "history": hist_df.to_dict("records"),
+                            "history_days": len(hist_df),
+                        }
+                    else:
+                        spot = await self.get_etf_spot_data(code)
+                        if not spot:
+                            self.logger.warning("ETF %s 未获取到实时数据", code)
+                            return None
+                        etf_data = {
+                            "code": code,
+                            "name": spot["name"],
+                            "current_price": spot["price"],
+                            "change_pct": spot["change_pct"],
+                            "volume": spot["volume"],
+                            "amount": spot["amount"],
+                            "market_value": spot.get("market_value"),
+                            "shares": spot.get("shares"),
+                            "source": spot["source"],
+                        }
 
-                    if with_history:
-                        hist_df = await self.get_etf_hist_data(code, start_date, end_date)
-                        if hist_df is not None and not hist_df.empty:
-                            etf_data["history"] = hist_df.to_dict("records")
-                            etf_data["history_days"] = len(hist_df)
-                        else:
-                            etf_data["history"] = []
-                            etf_data["history_days"] = 0
-                            etf_data["history_fallback"] = True
+                        if with_history:
+                            hist_df = await self.get_etf_hist_data(code, start_date, end_date)
+                            if hist_df is not None and not hist_df.empty:
+                                etf_data["history"] = hist_df.to_dict("records")
+                                etf_data["history_days"] = len(hist_df)
+                            else:
+                                etf_data["history"] = []
+                                etf_data["history_days"] = 0
+                                etf_data["history_fallback"] = True
+
+                    # 规模是排序的可选增强字段；默认不再为每只 ETF 额外发起
+                    # fund_share 请求，避免行情接口正常时仍被串行调用拖慢。
+                    if (
+                        etf_data.get("market_value") is None
+                        and self.tushare.available
+                        and os.getenv("MARKET_ETF_FETCH_SCALE", "false").lower() == "true"
+                    ):
+                        try:
+                            scale = await self.tushare.get_etf_scale(code)
+                            if scale:
+                                etf_data["shares"] = scale.get("shares")
+                                shares = self._to_float(scale.get("shares")) or 0.0
+                                price = self._to_float(etf_data.get("current_price")) or 0.0
+                                etf_data["market_value"] = shares * price if shares > 0 and price > 0 else None
+                                etf_data["scale_source"] = scale.get("source")
+                        except Exception as error:
+                            self.logger.debug("ETF %s 规模数据不可用: %s", code, error)
                     return etf_data
                 except Exception as error:
                     self.logger.error("Failed to get ETF %s: %s", code, error)

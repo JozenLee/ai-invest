@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
-export const maxDuration = 420
+export const maxDuration = 900
+
+function isTimeoutError(error: unknown) {
+  return error instanceof DOMException
+    ? error.name === 'TimeoutError' || error.name === 'AbortError'
+    : error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError' || /abort|timeout/i.test(error.message))
+}
 
 export async function GET(
   request: NextRequest,
@@ -13,15 +19,16 @@ export async function GET(
     const periodDays = searchParams.get('period_days') || '90'
     const source = searchParams.get('source') || 'graph'
     const etfCodes = searchParams.get('etf_codes') || ''
+    const generateAiReport = searchParams.get('generate_ai_report') || 'true'
 
     const response = await fetch(
-      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/companies?period_days=${periodDays}&source=${encodeURIComponent(source)}&etf_codes=${encodeURIComponent(etfCodes)}`,
+      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/companies?period_days=${periodDays}&source=${encodeURIComponent(source)}&etf_codes=${encodeURIComponent(etfCodes)}&generate_ai_report=${encodeURIComponent(generateAiReport)}`,
       {
         headers: {
           'Content-Type': 'application/json',
         },
         // 企业数据抓取与 AI 趋势报告生成是串联阶段，必须覆盖完整 AI 等待预算。
-        signal: AbortSignal.timeout(420000),
+        signal: AbortSignal.timeout(720000),
       }
     )
 
@@ -43,16 +50,17 @@ export async function GET(
     return NextResponse.json(data)
   } catch (error) {
     console.error('Industry company analysis error:', error)
+    const timedOut = isTimeoutError(error)
     return NextResponse.json(
       {
         success: false,
-        stage: error instanceof Error && error.name === 'TimeoutError' ? 'company_data' : 'service',
-        error_code: error instanceof Error && error.name === 'TimeoutError' ? 'ANALYSIS_TIMEOUT' : 'ANALYSIS_SERVICE_UNAVAILABLE',
-        error: error instanceof Error && error.name === 'TimeoutError'
+        stage: timedOut ? 'company_data' : 'service',
+        error_code: timedOut ? 'ANALYSIS_TIMEOUT' : 'ANALYSIS_SERVICE_UNAVAILABLE',
+        error: timedOut
           ? '企业数据分析超时，请稍后重试'
           : '企业数据分析服务暂时不可用，请稍后重试',
       },
-      { status: 500 }
+      { status: timedOut ? 504 : 502 }
     )
   }
 }

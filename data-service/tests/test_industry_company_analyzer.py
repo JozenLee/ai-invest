@@ -353,3 +353,12 @@ def test_representativeness_outranks_short_term_performance():
 
     assert ranked[0]["name"] == "行业龙头"
     assert ranked[0]["representativeness_score"] > ranked[1]["representativeness_score"]
+
+
+def test_etf_company_names_are_enriched_from_graph():
+    companies = [{"symbol": "300308.SZ", "name": "300308.SZ", "total_etf_weight": 1}]
+    graph_companies = [{"symbol": "300308.SZ", "name": "中际旭创"}]
+
+    result = IndustryCompanyAnalyzer._enrich_company_names(companies, graph_companies)
+
+    assert result[0]["name"] == "中际旭创"

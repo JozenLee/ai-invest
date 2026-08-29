@@ -7,7 +7,7 @@ import ast
 import os
 import re
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 import logging
 
@@ -67,15 +67,57 @@ class ETFProvider:
         返回中 source、trade_date、weight_available 等字段用于数据溯源。
         没有真实持仓数据时返回空列表，不构造模拟企业。
         """
-        # 综合分析的 ETF 底层企业样本统一优先使用 Tushare Promax。
+        started_at = asyncio.get_running_loop().time()
+        logger.info("ETF持仓请求开始: code=%s", ticker)
+
+        # ETF 持仓优先使用定期披露的基金持仓接口。该接口按报告期查询，
+        # 不依赖交易日；交易所 PCF 仅作为显式可选降级，不作为默认来源。
+        tushare_started_at = asyncio.get_running_loop().time()
         tushare_result = await self._get_tushare_holdings(ticker)
+        logger.info(
+            "ETF持仓数据源完成: code=%s source=tushare rows=%s duration_ms=%s",
+            ticker,
+            len(tushare_result),
+            round((asyncio.get_running_loop().time() - tushare_started_at) * 1000),
+        )
         if tushare_result:
+            logger.info(
+                "ETF持仓请求结束: code=%s status=success source=tushare rows=%s duration_ms=%s",
+                ticker,
+                len(tushare_result),
+                round((asyncio.get_running_loop().time() - started_at) * 1000),
+            )
             return tushare_result
 
+        if os.getenv("ETF_HOLDINGS_ALLOW_PCF", "false").strip().lower() == "true":
+            pcf_started_at = asyncio.get_running_loop().time()
+            pcf_result = await self._get_tushare_pcf_holdings(ticker)
+            logger.info(
+                "ETF持仓数据源完成: code=%s source=tushare_pcf rows=%s duration_ms=%s",
+                ticker,
+                len(pcf_result),
+                round((asyncio.get_running_loop().time() - pcf_started_at) * 1000),
+            )
+            if pcf_result:
+                return pcf_result
+
         # Tushare 权限或接口暂不可用时，保留公开来源作为显式降级。
+        direct_started_at = asyncio.get_running_loop().time()
         direct_result = await asyncio.to_thread(self._get_eastmoney_holdings_direct, ticker)
+        logger.info(
+            "ETF持仓数据源完成: code=%s source=eastmoney_public_direct rows=%s duration_ms=%s",
+            ticker,
+            len(direct_result),
+            round((asyncio.get_running_loop().time() - direct_started_at) * 1000),
+        )
         if direct_result:
             logger.info('ETF %s 持仓来源=eastmoney_public_direct, rows=%s', ticker, len(direct_result))
+            logger.info(
+                "ETF持仓请求结束: code=%s status=success source=eastmoney_public_direct rows=%s duration_ms=%s",
+                ticker,
+                len(direct_result),
+                round((asyncio.get_running_loop().time() - started_at) * 1000),
+            )
             return direct_result
 
         # 不同 AKShare 版本对基金持仓接口命名和参数略有差异，按能力探测，
@@ -93,13 +135,28 @@ class ETFProvider:
                 if not function:
                     continue
                 try:
+                    source_started_at = asyncio.get_running_loop().time()
                     frame = await asyncio.to_thread(function, **kwargs)
                     result = self._normalize_frame(frame, function_name)
+                    logger.info(
+                        "ETF持仓数据源完成: code=%s source=%s rows=%s duration_ms=%s",
+                        ticker,
+                        function_name,
+                        len(result),
+                        round((asyncio.get_running_loop().time() - source_started_at) * 1000),
+                    )
                     if result:
                         logger.info('ETF %s 持仓来源=%s, rows=%s', ticker, function_name, len(result))
+                        logger.info(
+                            "ETF持仓请求结束: code=%s status=success source=%s rows=%s duration_ms=%s",
+                            ticker,
+                            function_name,
+                            len(result),
+                            round((asyncio.get_running_loop().time() - started_at) * 1000),
+                        )
                         return result
                 except Exception as error:
-                    logger.debug('ETF %s 持仓接口 %s 不可用: %s', ticker, function_name, error)
+                    logger.warning('ETF %s 持仓接口 %s 异常: %s', ticker, function_name, error)
 
         # 当前仓库中的 ETFHolding 曾由种子脚本生成模拟数据，不能默认视为真实持仓。
         # 只有运维明确把该表标记为正式导入数据后，才允许作为持久化来源。
@@ -111,7 +168,11 @@ class ETFProvider:
         else:
             logger.info('ETF %s 跳过本地ETFHolding：未配置可信数据标记', ticker)
 
-        logger.warning('ETF %s 持仓明细不可用：真实数据源和已持久化持仓表均无有效数据', ticker)
+        logger.warning(
+            'ETF持仓请求结束: code=%s status=empty duration_ms=%s，真实数据源和已持久化持仓表均无有效数据',
+            ticker,
+            round((asyncio.get_running_loop().time() - started_at) * 1000),
+        )
         return []
 
     @staticmethod
@@ -267,49 +328,79 @@ class ETFProvider:
             return []
         try:
             suffix = '.SH' if ticker.startswith(('5', '6')) else '.SZ'
-
-            # 交易所每日盘前 PCF 是当前 ETF 组合的第一手公开数据，优先于季度基金报告。
-            # Tushare 将上交所/深交所 PCF 分成两个接口，返回成分代码、名称和数量，
-            # 但不直接返回权重，因此这里不把数量归一化冒充权重。
-            pcf_api = 'etf_sh_cons' if suffix == '.SH' else 'etf_sz_cons'
-            for trade_date in self._recent_trade_dates():
-                try:
-                    pcf_frame = await self._tushare.request_dataframe(
-                        pcf_api,
-                        ts_code=f'{ticker}{suffix}',
-                        trade_date=trade_date,
-                    )
-                    pcf_result = self._normalize_pcf_frame(pcf_frame, 'tushare_etf_pcf')
-                    if pcf_result:
-                        logger.info(
-                            'ETF %s 持仓来源=tushare_%s_pcf, trade_date=%s, rows=%s',
-                            ticker,
-                            'sh' if suffix == '.SH' else 'sz',
-                            trade_date,
-                            len(pcf_result),
-                        )
-                        return pcf_result
-                except Exception as error:
-                    logger.debug('ETF %s PCF %s 不可用: %s', ticker, trade_date, error)
-
-            # PCF 不可用时再尝试定期基金持仓。该数据频率较低，但包含公开披露的持仓比例。
-            frame = await self._tushare.request_dataframe(
-                'fund_portfolio',
-                ts_code=f'{ticker}{suffix}',
-                period=str(datetime.now().year - 1) + '1231',
+            request_timeout = max(5, int(os.getenv("TUSHARE_HOLDINGS_TIMEOUT_SECONDS", "12")))
+            periods = self._recent_report_periods(
+                count=max(1, int(os.getenv("ETF_HOLDINGS_REPORT_PERIODS", "2")))
             )
-            return self._normalize_frame(frame, 'tushare_fund_portfolio')
+            for period in periods:
+                started_at = asyncio.get_running_loop().time()
+                try:
+                    logger.info(
+                        'ETF定期披露持仓请求: code=%s api=fund_portfolio ts_code=%s period=%s',
+                        ticker, f'{ticker}{suffix}', period,
+                    )
+                    frame = await self._tushare.request_dataframe(
+                        'fund_portfolio',
+                        ts_code=f'{ticker}{suffix}',
+                        period=period,
+                        _timeout_seconds=request_timeout,
+                    )
+                    result = self._normalize_frame(frame, 'tushare_fund_portfolio')
+                    logger.info(
+                        'ETF定期披露持仓响应: code=%s period=%s rows=%s duration_ms=%s',
+                        ticker,
+                        period,
+                        len(result),
+                        round((asyncio.get_running_loop().time() - started_at) * 1000),
+                    )
+                    if result:
+                        for item in result:
+                            item['report_period'] = item.get('report_period') or period
+                        return result
+                except Exception as error:
+                    logger.warning(
+                        'ETF定期披露持仓异常: code=%s period=%s duration_ms=%s error=%s',
+                        ticker,
+                        period,
+                        round((asyncio.get_running_loop().time() - started_at) * 1000),
+                        error,
+                    )
+            return []
         except Exception as error:
-            logger.debug('ETF %s Tushare持仓不可用: %s', ticker, error)
+            logger.warning('ETF %s Tushare持仓调用异常: %s', ticker, error)
             return []
 
     @staticmethod
-    def _recent_trade_dates(days: int = 10) -> List[str]:
-        """返回最近若干自然日，交给交易所数据接口自行跳过非交易日。"""
-        from datetime import timedelta
-
+    def _recent_report_periods(count: int = 2) -> List[str]:
+        """返回最近已结束的季度报告期，避免用交易日驱动定期披露数据。"""
         today = datetime.now().date()
-        return [(today - timedelta(days=offset)).strftime('%Y%m%d') for offset in range(days)]
+        quarter_ends = [(3, 31), (6, 30), (9, 30), (12, 31)]
+        candidates = []
+        for year in range(today.year, today.year - 4, -1):
+            for month, day in reversed(quarter_ends):
+                period = datetime(year, month, day).date()
+                if period <= today:
+                    candidates.append(period.strftime('%Y%m%d'))
+        return candidates[:max(1, count)]
+
+    async def _get_tushare_pcf_holdings(self, ticker: str) -> List[Dict]:
+        """可选的交易所 PCF 降级，仅用于当前申赎篮子，不代表定期披露持仓。"""
+        if not self._tushare.available:
+            return []
+        suffix = '.SH' if ticker.startswith(('5', '6')) else '.SZ'
+        pcf_api = 'etf_sh_cons' if suffix == '.SH' else 'etf_sz_cons'
+        request_timeout = max(5, int(os.getenv("TUSHARE_HOLDINGS_TIMEOUT_SECONDS", "12")))
+        try:
+            pcf_frame = await self._tushare.request_dataframe(
+                pcf_api,
+                ts_code=f'{ticker}{suffix}',
+                trade_date=datetime.now().strftime('%Y%m%d'),
+                _timeout_seconds=request_timeout,
+            )
+            return self._normalize_pcf_frame(pcf_frame, 'tushare_etf_pcf')
+        except Exception as error:
+            logger.warning('ETF %s PCF持仓降级调用异常: %s', ticker, error)
+            return []
 
     @staticmethod
     def _normalize_pcf_frame(frame: Any, source: str) -> List[Dict]:

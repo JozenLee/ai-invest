@@ -14,6 +14,7 @@ import type {
 import { SOURCE_MAP, SENTIMENT_THRESHOLDS } from '@/types/market'
 
 const MarketContext = createContext<MarketContextValue | null>(null)
+const MARKET_REQUEST_TIMEOUT_MS = 35000
 
 export function useMarketContext(): MarketContextValue {
   const context = useContext(MarketContext)
@@ -46,31 +47,45 @@ export function MarketProvider({ children }: MarketProviderProps) {
     setError(null)
 
     try {
-      // Increased timeout to 15s to accommodate slower network/API responses
-      const clientTimeout = AbortSignal.timeout(15000)
-
       const startTime = Date.now()
 
       // Add refresh query parameter if force refresh requested
       const refreshParam = forceRefresh ? '?refresh=true' : ''
 
-      // Parallel requests for index data, capital flow data, and sector data
-      const [overviewRes, capitalRes, sectorRes] = await Promise.all([
-        fetch(`/api/market/overview${refreshParam}`, { signal: clientTimeout }),
-        fetch(`/api/market/capital-flow${refreshParam}`, { signal: clientTimeout }),
-        fetch(`/api/market/sectors${refreshParam}`, { signal: clientTimeout }),
-      ])
+      const requestUrls = [
+        `/api/market/overview${refreshParam}`,
+        `/api/market/capital-flow${refreshParam}`,
+        `/api/market/sectors${refreshParam}`,
+      ]
+      const results = await Promise.allSettled(
+        requestUrls.map((url) =>
+          fetch(url, { signal: AbortSignal.timeout(MARKET_REQUEST_TIMEOUT_MS) })
+        )
+      )
+      const [overviewResult, capitalResult, sectorResult] = results
+      const overviewRes = overviewResult.status === 'fulfilled' ? overviewResult.value : null
+      const capitalRes = capitalResult.status === 'fulfilled' ? capitalResult.value : null
+      const sectorRes = sectorResult.status === 'fulfilled' ? sectorResult.value : null
 
       const fetchDuration = Date.now() - startTime
       if (process.env.NODE_ENV === 'development') {
         console.log(`[MarketContext] API 请求完成 (${fetchDuration}ms)`)
-        console.log(`  - overview: ${overviewRes.status}`)
-        console.log(`  - capital-flow: ${capitalRes.status}`)
-        console.log(`  - sectors: ${sectorRes.status}`)
+        console.log(`  - overview: ${overviewRes?.status ?? 'failed'}`)
+        console.log(`  - capital-flow: ${capitalRes?.status ?? 'failed'}`)
+        console.log(`  - sectors: ${sectorRes?.status ?? 'failed'}`)
       }
 
+      const rejectedResults = results.filter(
+        (result): result is PromiseRejectedResult => result.status === 'rejected'
+      )
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.warn(`[MarketContext] ${requestUrls[index]} 请求失败:`, result.reason)
+        }
+      })
+
       // Process index data
-      if (overviewRes.ok) {
+      if (overviewRes?.ok) {
         const overviewData = await overviewRes.json()
         if (overviewData.success && overviewData.data?.indices) {
           setIndices(overviewData.data.indices)
@@ -87,13 +102,13 @@ export function MarketProvider({ children }: MarketProviderProps) {
             setMarketMeta(overviewData.meta)
           }
         }
-      } else {
+      } else if (overviewRes) {
         console.error('[MarketContext] overview 请求失败:', overviewRes.status)
         setIndices([])
       }
 
       // Process capital flow data
-      if (capitalRes.ok) {
+      if (capitalRes?.ok) {
         const capitalData = await capitalRes.json()
 
         // Defensive check: ensure not empty object
@@ -133,30 +148,33 @@ export function MarketProvider({ children }: MarketProviderProps) {
               setMarketMeta(capitalData.data?.meta || capitalData.meta)
             }
           } else {
-            // Data service unavailable - don't pollute console with verbose logs
+            // 资金流向是辅助模块，失败时保留指数/板块数据，不把全局市场页标记为失败。
             setCapitalFlow(null)
             if (capitalData.error) {
               console.warn('[MarketContext] 资金流向数据不可用:', capitalData.error)
-              setError(capitalData.error)
             }
             if (capitalData.meta) {
               setMarketMeta(capitalData.meta)
             }
           }
         }
-      } else {
+      } else if (capitalRes) {
         console.error('[MarketContext] capital-flow 请求失败:', capitalRes.status)
         setCapitalFlow(null)
       }
 
       // Process sector flow data (log only, no state update needed)
-      if (sectorRes.ok) {
+      if (sectorRes?.ok) {
         const sectorData = await sectorRes.json()
         if (process.env.NODE_ENV === 'development') {
           console.log('[MarketContext] 板块资金流向已更新:', sectorData.success ? '成功' : '失败')
         }
-      } else {
+      } else if (sectorRes) {
         console.error('[MarketContext] sectors 请求失败:', sectorRes.status)
+      }
+
+      if (rejectedResults.length === results.length) {
+        throw rejectedResults[0]?.reason ?? new Error('市场数据请求失败')
       }
 
       setLastUpdate(new Date())
@@ -166,7 +184,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
 
       // Silent fail on timeout - don't show error to user
       // Market data is not critical for all pages
-      if (errorMessage.includes('aborted') || errorMessage.includes('timeout')) {
+      if (/aborted|abort|timeout|timed out/i.test(errorMessage)) {
         console.warn('[MarketContext] 请求超时，将在下次刷新时重试')
         // Don't set error - fail silently
       } else {

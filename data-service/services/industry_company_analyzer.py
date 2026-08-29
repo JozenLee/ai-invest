@@ -78,6 +78,10 @@ class IndustryCompanyAnalyzer:
         self.stock_provider = StockProvider()
         self.neo4j_service = Neo4jService()
         self.max_concurrency = max(1, int(os.getenv("COMPANY_ANALYSIS_CONCURRENCY", "4")))
+        # 报告最多使用 8 家重点企业；限制下游抓取规模可避免 Promax 单并发网关
+        # 在 15 家企业 × 4 类接口的请求洪峰下持续返回 503，最终拖到外层超时。
+        self.selection_limit = max(4, int(os.getenv("COMPANY_ANALYSIS_SELECTION_LIMIT", "8")))
+        self.data_timeout_seconds = max(10, int(os.getenv("COMPANY_ANALYSIS_DATA_TIMEOUT_SECONDS", "90")))
         self.provider_timeout_seconds = max(1, int(os.getenv("COMPANY_ANALYSIS_PROVIDER_TIMEOUT_SECONDS", "20")))
         self.provider_retries = max(0, int(os.getenv("COMPANY_ANALYSIS_PROVIDER_RETRIES", "1")))
         self.cache_ttl_seconds = max(0, int(os.getenv("COMPANY_ANALYSIS_CACHE_TTL_SECONDS", "900")))
@@ -120,6 +124,7 @@ class IndustryCompanyAnalyzer:
         analysis_period_days: int = 90,
         source: str = 'graph',
         etf_holdings: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+        generate_ai_report: bool = True,
     ) -> Dict[str, Any]:
         """按不同候选来源分析企业，后续行情/财报/公告/报告流程保持一致。"""
         try:
@@ -142,6 +147,8 @@ class IndustryCompanyAnalyzer:
             nodes = self._build_graph_nodes(graph)
             normalized_source = 'etf_holdings' if source in {'etf', 'etf_holdings', 'ETF持仓'} else 'graph'
             companies = self._collect_graph_companies(graph) if normalized_source == 'graph' else self._collect_etf_companies(etf_holdings or {})
+            if normalized_source == 'etf_holdings':
+                companies = self._enrich_company_names(companies, self._collect_graph_companies(graph))
             if not companies:
                 raise AnalysisStageError(
                     "company_source",
@@ -152,8 +159,12 @@ class IndustryCompanyAnalyzer:
 
             industry_name = (graph.get("industry") or {}).get("name", industry_id)
 
-            # 先按来源的候选企业元数据筛选代表性企业，再复用同一套数据抓取和报告流程。
-            selected_companies = await self._select_companies_with_ai(industry_name, companies, normalized_source)
+            # AI 模式先筛选代表性企业；数据模式保留来源中的全部企业输入，
+            # 不做 AI 筛选、不按代表性截断，确保页面可以核验完整候选集。
+            selected_companies = (
+                await self._select_companies_with_ai(industry_name, companies, normalized_source)
+                if generate_ai_report else companies
+            )
             company_data = await self._fetch_company_data(selected_companies, analysis_period_days)
             analyzed_companies = self._analyze_companies(company_data)
             segment_analysis = self._build_segment_signals(analyzed_companies)
@@ -172,8 +183,7 @@ class IndustryCompanyAnalyzer:
                     {"industry_id": industry_id, "coverage": coverage},
                 )
 
-            # 数据证据采用“财报或公告”准入，按 AI 初筛影响力排名保留，
-            # 不再要求每家企业同时具备两类数据。
+            # AI 模式使用财报或公告证据准入；数据模式不以证据条件过滤企业。
             candidates = self._build_evidence_candidates(analyzed_companies)
             coverage["report_candidate_count"] = len(candidates)
             coverage["report_evidence_both_count"] = sum(
@@ -191,7 +201,7 @@ class IndustryCompanyAnalyzer:
                 if not (item.get("data_availability") or {}).get("financial")
                 and (item.get("data_availability") or {}).get("announcements")
             )
-            if len(candidates) < 4:
+            if generate_ai_report and len(candidates) < 4:
                 raise AnalysisStageError(
                     "company_selection",
                     "COMPANY_SELECTED_EVIDENCE_INSUFFICIENT",
@@ -204,31 +214,51 @@ class IndustryCompanyAnalyzer:
                     },
                 )
 
-            top_companies = candidates[:8]
+            # 仅展示已解析出企业名称的样本，避免 ETF 持仓源缺少名称时把
+            # “688126.SH”一类证券代码直接作为企业名输出到报告页面。
+            named_companies = [item for item in analyzed_companies if not self._is_security_code_name(item)]
+            named_candidates = [item for item in candidates if not self._is_security_code_name(item)]
+            top_companies = named_candidates[:8] if generate_ai_report else named_companies
             coverage["report_selected_count"] = len(top_companies)
             self.last_report_warning = None
-            try:
-                trend_report = await self._generate_trend_report(
-                    industry_name=industry_name,
-                    industry_id=industry_id,
-                    nodes=nodes,
-                    analyzed_companies=top_companies,
-                    top_companies=top_companies,
-                    coverage=coverage,
-                )
-            except AnalysisStageError as error:
-                # AI 代理不可用时，不能丢弃已经完成的行情、财报和公告分析。
-                # 用同一份证据生成可追溯的规则报告，并把 AI 故障留在诊断字段中。
-                if error.stage != "ai_report":
-                    raise
-                self.last_report_warning = str(error)
-                logger.warning("AI企业报告不可用，切换结构化兜底报告: %s", error)
-                trend_report = self._build_fallback_trend_report(
-                    industry_name=industry_name,
-                    top_companies=top_companies,
-                    coverage=coverage,
-                    warning=str(error),
-                )
+            if not generate_ai_report:
+                trend_report = ""
+            else:
+                try:
+                    trend_report = await self._generate_trend_report(
+                        industry_name=industry_name,
+                        industry_id=industry_id,
+                        nodes=nodes,
+                        analyzed_companies=top_companies,
+                        top_companies=top_companies,
+                        coverage=coverage,
+                    )
+                except AnalysisStageError as error:
+                    # AI 代理不可用时，不能丢弃已经完成的行情、财报和公告分析。
+                    # 用同一份证据生成可追溯的规则报告，并把 AI 故障留在诊断字段中。
+                    if error.stage != "ai_report":
+                        raise
+                    self.last_report_warning = str(error)
+                    logger.warning("AI企业报告不可用，切换结构化兜底报告: %s", error)
+                    trend_report = self._build_fallback_trend_report(
+                        industry_name=industry_name,
+                        top_companies=top_companies,
+                        coverage=coverage,
+                        warning=str(error),
+                    )
+
+            coverage["input_data_completeness"] = {
+                "mode": "ai" if generate_ai_report else "data",
+                "full_input_preserved": not generate_ai_report,
+                "status": "complete" if len(company_data) == len(companies) else "partial",
+                "candidate_count": len(companies),
+                "fetched_count": len(company_data),
+                "analyzed_count": len(analyzed_companies),
+                "missing_companies": [
+                    str(company.get("symbol") or company.get("name") or "")
+                    for company in companies[len(company_data):]
+                ],
+            }
 
             return {
                 "success": True,
@@ -253,13 +283,13 @@ class IndustryCompanyAnalyzer:
                     "capabilities": self.stock_provider.capabilities(),
                     "note": "报告候选企业只需具备有效财报或公告证据；同时具备两类证据的企业优先作为核心证据，行情仅作为补充证据。",
                 },
-                "report_source": "ai",
+                "report_source": "ai" if generate_ai_report else "data",
                 "report_warning": self.last_report_warning,
                 "top_companies": top_companies,
                 "selected_companies": top_companies,
                 "company_summaries": analyzed_companies,
-                "report_candidates": candidates,
-                "selection_source": "ai",
+                "report_candidates": candidates if generate_ai_report else analyzed_companies,
+                "selection_source": "ai" if generate_ai_report else "all_input",
                 "core_conclusion": self._extract_core_conclusion(trend_report),
                 "trend_judgment": self._extract_report_section(trend_report, "## 一、趋势判断"),
                 "focus_points": self._extract_report_section(trend_report, "## 二、关注重点"),
@@ -391,6 +421,28 @@ class IndustryCompanyAnalyzer:
                 })
         return sorted(companies.values(), key=lambda item: item.get('total_etf_weight', 0), reverse=True)
 
+    @staticmethod
+    def _enrich_company_names(
+        companies: List[Dict[str, Any]],
+        graph_companies: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """优先使用知识图谱中的中文企业名修复 ETF 持仓代码型名称。"""
+        names_by_symbol = {
+            str(item.get('symbol') or '').strip(): str(item.get('name') or '').strip()
+            for item in graph_companies
+            if str(item.get('symbol') or '').strip()
+            and str(item.get('name') or '').strip()
+            and str(item.get('name') or '').strip() != str(item.get('symbol') or '').strip()
+        }
+        enriched = []
+        for company in companies:
+            symbol = str(company.get('symbol') or '').strip()
+            name = str(company.get('name') or '').strip()
+            if (not name or name == symbol) and names_by_symbol.get(symbol):
+                company = {**company, 'name': names_by_symbol[symbol]}
+            enriched.append(company)
+        return enriched
+
     async def _select_companies_with_ai(
         self,
         industry_name: str,
@@ -408,7 +460,7 @@ class IndustryCompanyAnalyzer:
             minimum = 6 if source == 'graph' else 4
             if len(companies) < minimum:
                 raise
-            selection_count = min(15, len(companies)) if source == 'graph' else min(15, len(companies))
+            selection_count = min(self.selection_limit, len(companies))
             fallback = sorted(
                 companies,
                 key=lambda item: (
@@ -503,7 +555,7 @@ class IndustryCompanyAnalyzer:
         industry_name: str,
         companies: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        selection_count = min(15, len(companies))
+        selection_count = min(self.selection_limit, len(companies))
         if selection_count < 4:
             raise AnalysisStageError(
                 'company_selection',
@@ -598,7 +650,7 @@ class IndustryCompanyAnalyzer:
         companies: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         """只基于知识图谱元数据，先筛选对领域发展最有影响力的企业。"""
-        selection_count = min(15, len(companies))
+        selection_count = min(self.selection_limit, len(companies))
         if selection_count < 6:
             raise AnalysisStageError(
                 "company_selection",
@@ -774,7 +826,20 @@ class IndustryCompanyAnalyzer:
                         data[key] = value
                 return data
 
-        return await asyncio.gather(*(fetch_one(company) for company in companies))
+        tasks = [asyncio.create_task(fetch_one(company)) for company in companies]
+        done, pending = await asyncio.wait(tasks, timeout=self.data_timeout_seconds)
+        if pending:
+            logger.warning(
+                "企业数据抓取达到总预算，返回已完成的部分结果: completed=%s pending=%s timeout_s=%s",
+                len(done), len(pending), self.data_timeout_seconds,
+            )
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        # 保持候选企业原顺序，便于覆盖率与 missing_companies 诊断稳定。
+        results_by_index = {index: task.result() for index, task in enumerate(tasks) if task in done and not task.cancelled() and task.exception() is None}
+        return [results_by_index[index] for index in sorted(results_by_index)]
 
     @staticmethod
     def _build_evidence_candidates(analyzed_companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1004,6 +1069,21 @@ class IndustryCompanyAnalyzer:
         for company in company_data:
             symbol = company.get("symbol", "")
             info = company.get("info") or {}
+            source_name = str(company.get("name") or "").strip()
+            source_name_is_code = source_name == str(symbol).strip()
+            resolved_name = str(
+                (info.get("name") or info.get("名称") or info.get("股票名称") or info.get("stock_name"))
+                if source_name_is_code else (company.get("name")
+                or info.get("name")
+                or info.get("名称")
+                or info.get("股票名称")
+                or info.get("stock_name")
+                )
+                or symbol
+                or "未命名企业"
+            ).strip()
+            if resolved_name == symbol:
+                resolved_name = str(info.get("name") or info.get("名称") or info.get("股票名称") or resolved_name).strip()
             kline = self._sort_time_series(company.get("kline") or [], descending=False)
             financial = self._sort_time_series(company.get("financial") or [], descending=True)
             announcements = company.get("announcements")
@@ -1073,7 +1153,7 @@ class IndustryCompanyAnalyzer:
                 {
                     "id": company.get("id"),
                     "symbol": symbol,
-                    "name": company.get("name"),
+                    "name": resolved_name,
                     "name_en": company.get("name_en"),
                     "market": company.get("market"),
                     "exchange": company.get("exchange"),
@@ -1128,6 +1208,12 @@ class IndustryCompanyAnalyzer:
                 }
             )
         return analyzed
+
+    @staticmethod
+    def _is_security_code_name(company: Dict[str, Any]) -> bool:
+        name = str(company.get('name') or '').strip()
+        symbol = str(company.get('symbol') or '').strip()
+        return not name or name == symbol
 
     def _build_financial_metrics(self, financial: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not financial:
@@ -1276,6 +1362,12 @@ class IndustryCompanyAnalyzer:
                 continue
             value = cls._first_value(row, date_keys)
             try:
+                value_text = str(value or "")
+                quarter_match = re.match(r"^(\d{4})[- ]?Q([1-4])$", value_text, re.IGNORECASE)
+                if quarter_match:
+                    timestamp = datetime(int(quarter_match.group(1)), int(quarter_match.group(2)) * 3, 1).timestamp()
+                    dated.append((timestamp, index, row))
+                    continue
                 timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() if value else float(index)
             except (TypeError, ValueError, OverflowError):
                 try:

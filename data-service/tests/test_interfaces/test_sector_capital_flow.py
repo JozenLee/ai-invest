@@ -13,8 +13,8 @@ class TestSectorCapitalFlow:
         ]
 
     @pytest.mark.asyncio
-    async def test_success(self, data_service, mock_akshare, sample_sector_list):
-        mock_akshare.get_sector_capital_flow.return_value = sample_sector_list
+    async def test_success(self, data_service, mock_tushare, sample_sector_list):
+        mock_tushare.get_sector_capital_flow.return_value = sample_sector_list
 
         result = await data_service.get_sector_capital_flow("今日")
 
@@ -56,3 +56,23 @@ class TestSectorCapitalFlow:
         result = await DataService(reg=registry).get_sector_capital_flow("今日")
 
         assert result[0]["名称"] == "半导体"
+
+    @pytest.mark.asyncio
+    async def test_force_refresh_bypasses_memory_cache(self, registry, mock_tushare):
+        from services.data_service import DataService
+
+        service = DataService(reg=registry)
+        mock_tushare.get_sector_capital_flow.return_value = [
+            {"名称": "半导体", "今日主力净流入-净额": 100000000}
+        ]
+        first = await service.get_sector_capital_flow("今日")
+        mock_tushare.get_sector_capital_flow.return_value = [
+            {"名称": "消费电子", "今日主力净流入-净额": 200000000}
+        ]
+
+        cached = await service.get_sector_capital_flow("今日")
+        refreshed = await service.get_sector_capital_flow("今日", force_refresh=True)
+
+        assert cached == first
+        assert refreshed[0]["名称"] == "消费电子"
+        assert mock_tushare.get_sector_capital_flow.await_count == 2

@@ -5,7 +5,7 @@
 # 3. 股价与资金流向背离
 # 4. 机构行为数据（龙虎榜、北向资金等）
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -118,11 +118,11 @@ def _analyze_price_flow_divergence(sector_data: List[Dict]) -> Dict:
 
 
 @router.get("/enhanced")
-async def get_enhanced_capital_flow():
+async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
     """获取增强版资金流向数据（替代传统的机构/散户/市场情绪指标）"""
     try:
         # 并行获取数据
-        sector_data_today = await data_service.get_sector_capital_flow("今日")
+        sector_data_today = await data_service.get_sector_capital_flow("今日", force_refresh=refresh)
         sector_source = data_service.registry.get_last_source("sector_capital_flow")
         northbound_data = await data_service.get_northbound_flow()
         northbound_source = data_service.registry.get_last_source("northbound_flow")
@@ -201,7 +201,8 @@ async def get_enhanced_capital_flow():
         top_inflow = [item for item in sectors_formatted if item["netFlow"] > 0][:10]
         top_outflow = [item for item in sorted(sectors_formatted, key=lambda x: x["netFlow"]) if item["netFlow"] < 0][:10]
 
-        has_close_data = bool(northbound_data.get("stale")) if has_northbound else False
+        sector_data_quality = "close"
+        has_close_data = (bool(northbound_data.get("stale")) if has_northbound else False) or sector_data_quality == "close"
         data_quality = "close" if has_close_data else "realtime"
         sector_date = str(sector_data_today[0].get("日期", "")) if sector_data_today else ""
         volume_date = str(volume_amplification.get("date", ""))
@@ -226,6 +227,9 @@ async def get_enhanced_capital_flow():
                 },
                 "dataDate": data_date,
                 "dataQuality": data_quality,
+                "sectorDataQuality": sector_data_quality,
+                "sectorDataDate": sector_date,
+                "sectorRealtime": False,
                 "dataSources": sources,
                 "timestamp": datetime.now().isoformat()
             }

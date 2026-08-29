@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 import asyncio
+import math
 import re
 import httpx
 from providers.multi_source_provider import MultiSourceProvider
@@ -141,18 +142,21 @@ class IndustryMarketAnalyzer:
         self.source_timeout_seconds = max(15, int(os.getenv("MARKET_ANALYSIS_SOURCE_TIMEOUT_SECONDS", "120")))
         self._analysis_locks: Dict[str, asyncio.Lock] = {}
 
-    def _analysis_cache_key(self, industry_id: str, industry_name: str, period_days: int) -> str:
+    def _analysis_cache_key(self, industry_id: str, industry_name: str, period_days: int, generate_ai_report: bool = True) -> str:
         normalized_name = " ".join(str(industry_name or "").strip().lower().split())
-        return f"industry-market:v2:{industry_id}:{normalized_name}:{period_days}"
+        report_mode = "ai" if generate_ai_report else "data"
+        return f"industry-market:v2:{industry_id}:{normalized_name}:{period_days}:{report_mode}"
 
     async def analyze_industry_market(
         self,
         industry_id: str,
         industry_name: str,
-        analysis_period_days: int = 90
+        analysis_period_days: int = 90,
+        generate_ai_report: bool = True,
+        market_index_codes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """带快照缓存和同键并发合并的市场分析入口。"""
-        cache_key = self._analysis_cache_key(industry_id, industry_name, analysis_period_days)
+        cache_key = self._analysis_cache_key(industry_id, industry_name, analysis_period_days, generate_ai_report)
         cached_result = cache_service.get(cache_key)
         if cached_result is not None:
             return {**cached_result, "cache": {"hit": True, "key": cache_key}}
@@ -165,7 +169,7 @@ class IndustryMarketAnalyzer:
 
             try:
                 result = await asyncio.wait_for(
-                    self._compute_industry_market(industry_id, industry_name, analysis_period_days),
+                    self._compute_industry_market(industry_id, industry_name, analysis_period_days, generate_ai_report, market_index_codes),
                     timeout=self.analysis_timeout_seconds,
                 )
             except asyncio.TimeoutError:
@@ -190,7 +194,9 @@ class IndustryMarketAnalyzer:
         self,
         industry_id: str,
         industry_name: str,
-        analysis_period_days: int = 90
+        analysis_period_days: int = 90,
+        generate_ai_report: bool = True,
+        market_index_codes: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         分析产业领域的大盘趋势
@@ -205,7 +211,7 @@ class IndustryMarketAnalyzer:
         """
         try:
             # 1. 从知识图谱中获取所有节点的ETF（已去重）
-            etf_codes = await self._get_etfs_from_graph(industry_id)
+            etf_codes, graph_candidates = await self._get_etfs_from_graph(industry_id)
             etf_source = "knowledge_graph"
 
             if not etf_codes:
@@ -216,7 +222,6 @@ class IndustryMarketAnalyzer:
                     "industry_id": industry_id,
                 }
 
-            graph_candidates = getattr(self, "_last_graph_etf_candidates", [])
             candidate_codes = list(dict.fromkeys(item["code"] for item in graph_candidates for item in item.get("candidates", [])))
             if not candidate_codes:
                 return {
@@ -232,9 +237,17 @@ class IndustryMarketAnalyzer:
             )
 
             # 2. 先获取所有图谱候选ETF数据，再按规模、活跃度、收益、趋势和风险统一选择代表标的。
+            # SDK 网关对 ETF 历史数据按标的串行处理更稳定；数据模式需要保留
+            # 图谱全量输入，15 只 ETF 的首次拉取可能超过 AI 模式的 120 秒预算。
+            # 放宽数据模式的行情阶段预算，避免尚未生成 ETF 选择就提前返回失败。
+            etf_fetch_timeout = max(
+                self.source_timeout_seconds,
+                int(os.getenv("MARKET_DATA_MODE_SOURCE_TIMEOUT_SECONDS", "300"))
+                if not generate_ai_report else self.source_timeout_seconds,
+            )
             etf_data = await asyncio.wait_for(
                 self._fetch_etf_data(candidate_codes, analysis_period_days),
-                timeout=self.source_timeout_seconds,
+                timeout=etf_fetch_timeout,
             )
 
             # 3. 获取市场整体数据 - 包含大盘指数和板块资金流向
@@ -243,14 +256,14 @@ class IndustryMarketAnalyzer:
                 asyncio.wait_for(self._fetch_sector_capital_flow(), timeout=self.source_timeout_seconds),
             )
 
-            if not market_overview or not market_overview.get("indices"):
+            if generate_ai_report and (not market_overview or not market_overview.get("indices")):
                 return {
                     "success": False,
                     "error_code": "MARKET_OVERVIEW_UNAVAILABLE",
                     "error": "市场分析失败：市场概览未返回有效指数数据",
                     "industry_id": industry_id,
                 }
-            if not sector_flow or not isinstance(sector_flow, dict):
+            if generate_ai_report and (not sector_flow or not isinstance(sector_flow, dict)):
                 return {
                     "success": False,
                     "error_code": "SECTOR_FLOW_UNAVAILABLE",
@@ -260,9 +273,15 @@ class IndustryMarketAnalyzer:
 
             # 4. 计算关键指标
             etf_analysis_raw = await self._analyze_etfs(etf_data)
-            graph_etf_selection = self._rank_graph_etfs(graph_candidates, etf_analysis_raw)
+            # 页面需要保留完整行情样本；有效样本仅用于评分和 AI 计算，不再从报告快照中删除。
+            etf_analysis_available = self._filter_valid_data(etf_analysis_raw, min_data_points=20) if generate_ai_report else etf_analysis_raw
+            graph_etf_selection = self._rank_graph_etfs(graph_candidates, etf_analysis_available)
             selected_graph_codes = list(dict.fromkeys(item["code"] for item in graph_etf_selection if item.get("selected")))
-            if not selected_graph_codes:
+            if not selected_graph_codes and not generate_ai_report:
+                selected_graph_codes = list(dict.fromkeys(
+                    str(item) for item in candidate_codes if item
+                ))
+            if not selected_graph_codes and generate_ai_report:
                 return {
                     "success": False,
                     "error_code": "MARKET_GRAPH_ETF_SELECTION_EMPTY",
@@ -270,12 +289,13 @@ class IndustryMarketAnalyzer:
                     "industry_id": industry_id,
                 }
             selected_code_set = set(selected_graph_codes)
-            analyzed_code_set = {str(row.get("code")) for row in etf_analysis_raw}
+            analyzed_code_set = {str(row.get("code")) for row in etf_analysis_available}
             graph_etf_selection = [
                 {**item, "market_data_available": item["code"] in analyzed_code_set}
                 for item in graph_etf_selection
             ]
-            etf_analysis_raw = [item for item in etf_analysis_raw if item.get("code") in selected_code_set]
+            # AI 模式沿用有效历史数据口径；数据模式保留所有原始输入，
+            # 包括历史点数不足、降级来源和异常样本，供前端完整核验。
             etf_selection = [
                 item
                 for item in graph_etf_selection
@@ -283,18 +303,21 @@ class IndustryMarketAnalyzer:
 
             # 指数是大盘趋势分析的重要依据：匹配、抓取并计算完整技术指标。
             # 之前这里虽然保留了相关方法，但主流程始终传入空列表，导致前端和 AI 报告都拿不到指数数据。
-            index_codes = self._match_indices(industry_name)
+            # 指数基准来自市场页面快照；只有调用方明确传入时才覆盖快照中的代码，
+            # 不再按产业名称硬编码绑定“科创50/国证半导体”等指数。
+            overview_index_codes = [item.get("code") for item in (market_overview or {}).get("indices", []) if isinstance(item, dict)]
+            index_codes = self._normalize_market_index_codes(market_index_codes) or self._normalize_market_index_codes(overview_index_codes)
             index_data = await asyncio.wait_for(
                 self._fetch_index_data(index_codes, analysis_period_days),
                 timeout=self.source_timeout_seconds,
             )
             index_analysis_raw = await self._analyze_indices(index_data)
 
-            # 4.5 过滤无效数据：移除没有足够历史数据的ETF
-            etf_analysis = self._filter_valid_data(etf_analysis_raw, min_data_points=20)
-            index_analysis = self._filter_valid_data(index_analysis_raw, min_data_points=20)
+            # 报告快照始终保留完整 ETF/指数；评分仍使用 eligible_etfs 控制异常样本影响。
+            etf_analysis = etf_analysis_raw
+            index_analysis = index_analysis_raw
 
-            if not etf_analysis or not index_analysis:
+            if generate_ai_report and (not etf_analysis or not index_analysis):
                 return {
                     "success": False,
                     "error_code": "MARKET_HISTORY_INCOMPLETE",
@@ -308,7 +331,7 @@ class IndustryMarketAnalyzer:
                 item for item in [*etf_analysis, *index_analysis]
                 if item.get("is_fallback") or item.get("source") in {"fixed_mapping", "fallback_spot"}
             ]
-            if invalid_sources:
+            if invalid_sources and generate_ai_report:
                 return {
                     "success": False,
                     "error_code": "MARKET_SYNTHETIC_DATA_REJECTED",
@@ -331,7 +354,7 @@ class IndustryMarketAnalyzer:
                 and float(item.get("volatility") or 0) <= 150
                 and float(item.get("max_drawdown") or 0) <= 70
             ]
-            if not eligible_etfs:
+            if not eligible_etfs and generate_ai_report:
                 return {
                     "success": False,
                     "error_code": "MARKET_VALID_SAMPLE_EMPTY",
@@ -341,7 +364,7 @@ class IndustryMarketAnalyzer:
             quantitative_scores = self._calculate_quantitative_scores(eligible_etfs, index_analysis)
 
             # ⚠️ 数据质量检查：如果数据质量太低，返回明确错误
-            if data_quality["level"] == "低":
+            if data_quality["level"] == "低" and generate_ai_report:
                 error_msg = f"数据质量不足，无法生成可靠分析。{data_quality['summary']}"
                 logger.warning(f"⚠️ {error_msg}")
 
@@ -361,14 +384,48 @@ class IndustryMarketAnalyzer:
                     "etf_source": etf_source,
             }
 
-            # 6. AI生成大盘趋势报告（传入市场指数和板块数据）
-            trend_report, report_source, report_warning = await self._generate_market_report(
-                industry_name,
-                etf_analysis,
-                index_analysis,
-                market_overview,
-                sector_flow
-            )
+            if generate_ai_report:
+                trend_report, report_source, report_warning = await self._generate_market_report(
+                    industry_name,
+                    etf_analysis,
+                    index_analysis,
+                    market_overview,
+                    sector_flow
+                )
+            else:
+                trend_report, report_source, report_warning = "", "data", None
+
+            etf_codes_received = {str(item.get("code")) for item in etf_analysis_raw if item.get("code")}
+            index_codes_received = {str(item.get("code")) for item in index_analysis_raw if item.get("code")}
+            input_data_completeness = {
+                "mode": "ai" if generate_ai_report else "data",
+                "full_input_preserved": not generate_ai_report,
+                "status": "complete" if (
+                    set(candidate_codes).issubset(etf_codes_received)
+                    and set(index_codes).issubset(index_codes_received)
+                    and bool(market_overview and market_overview.get("indices"))
+                    and isinstance(sector_flow, dict)
+                ) else "partial",
+                "etf": {
+                    "requested": len(candidate_codes),
+                    "received": len(etf_codes_received),
+                    "missing_codes": sorted(set(candidate_codes) - etf_codes_received),
+                    "returned_rows": len(etf_analysis_raw),
+                },
+                "index": {
+                    "requested": len(index_codes),
+                    "received": len(index_codes_received),
+                    "missing_codes": sorted(set(index_codes) - index_codes_received),
+                    "returned_rows": len(index_analysis_raw),
+                },
+                "market_overview": {
+                    "available": bool(market_overview and market_overview.get("indices")),
+                    "index_rows": len((market_overview or {}).get("indices", [])) if isinstance(market_overview, dict) else 0,
+                },
+                "sector_flow": {
+                    "available": isinstance(sector_flow, dict),
+                },
+            }
 
             return {
                 "success": True,
@@ -385,7 +442,20 @@ class IndustryMarketAnalyzer:
                 "trend_report": trend_report,
                 "report_source": report_source,
                 "report_warning": report_warning,
+                "report_mode": "ai" if generate_ai_report else "data",
+                "input_data_completeness": input_data_completeness,
                 "etf_source": etf_source,
+                "etf_candidates": [
+                    {
+                        "code": str(candidate.get("code")),
+                        "name": str(candidate.get("name") or candidate.get("code")),
+                        "node": str(group.get("node") or ""),
+                        "relevance": candidate.get("relevance"),
+                    }
+                    for group in graph_candidates
+                    for candidate in group.get("candidates", [])
+                    if candidate.get("code")
+                ],
                 "etf_selection": etf_selection,
                 "analyzed_at": datetime.now().isoformat()
             }
@@ -406,7 +476,10 @@ class IndustryMarketAnalyzer:
                 "error": str(e)
             }
 
-    async def _get_etfs_from_graph(self, industry_id: str) -> List[str]:
+    async def _get_etfs_from_graph(
+        self,
+        industry_id: str,
+    ) -> tuple[List[str], List[Dict[str, Any]]]:
         """
         从知识图谱中获取产业的所有ETF代码（去重）
 
@@ -414,14 +487,14 @@ class IndustryMarketAnalyzer:
             industry_id: 产业ID
 
         Returns:
-            去重后的ETF代码列表
+            (去重后的ETF代码列表, 按产业链节点分组的候选ETF)
         """
         try:
             import json
             resolved_id = await self.neo4j_service.resolve_industry_id(industry_id)
             if not resolved_id:
                 logger.warning("产业图谱引用无法解析，跳过图谱 ETF 绑定: industry_id=%s", industry_id)
-                return []
+                return [], []
             async with self.neo4j_service.session() as s:
                 query = """
                 MATCH (ind:Industry {id: $industry_id})-[:HAS_STAGE]->(stage:Stage)-[:HAS_SEGMENT]->(seg:Segment)
@@ -453,21 +526,21 @@ class IndustryMarketAnalyzer:
                             logger.debug(f"  - {record['segment_name']}: {etfs}")
 
                 # 去重
-                self._last_graph_etf_candidates = node_candidates
                 unique_etf_codes = list(dict.fromkeys(item["code"] for group in node_candidates for item in group["candidates"]))
                 logger.info("从知识图谱获取ETF候选: 节点%s个, 候选去重后%s个", len(node_candidates), len(unique_etf_codes))
-                return unique_etf_codes
+                return unique_etf_codes, node_candidates
 
         except Exception as e:
             logger.error(f"Failed to get ETFs from graph: {e}")
-            return []
+            return [], []
 
     @staticmethod
     def _rank_graph_etfs(
         node_candidates: List[Dict[str, Any]],
         etf_analysis: List[Dict[str, Any]],
+        per_node: int = 2,
     ) -> List[Dict[str, Any]]:
-        """对所有图谱候选ETF统一评分，避免在获取行情前只按图谱相关度截断。"""
+        """对所有候选评分，并为每个图谱节点独立选择代表 ETF。"""
         analysis_by_code = {str(item.get("code")): item for item in etf_analysis if item.get("code")}
         node_by_code: Dict[str, List[str]] = {}
         metadata: Dict[str, Dict[str, Any]] = {}
@@ -493,7 +566,12 @@ class IndustryMarketAnalyzer:
         rows = []
         valid = [item for code, item in analysis_by_code.items() if code in metadata and not item.get("is_fallback")]
         market_values = [float(item["market_value"]) for item in valid if item.get("market_value") is not None and float(item["market_value"]) > 0]
-        amounts = [float(item["amount"]) for item in valid if item.get("amount") is not None and float(item["amount"]) > 0]
+        activity_values = [
+            float(item.get("amount") or item.get("volume"))
+            for item in valid
+            if float(item.get("amount") or item.get("volume") or 0) > 0
+        ]
+        scores: Dict[str, float] = {}
         for code, item in analysis_by_code.items():
             if code not in metadata:
                 continue
@@ -507,39 +585,97 @@ class IndustryMarketAnalyzer:
                 trend += 0.5 if item["macd_macd"] >= 0 else 0
             score = (
                 percentile(market_values, item.get("market_value")) * 25
-                + percentile(amounts, item.get("amount")) * 15
+                + percentile(activity_values, item.get("amount") or item.get("volume")) * 15
                 + max(0, min(1, (price_change + 30) / 60)) * 20
                 + max(0, min(1, (volatility and (1 - min(volatility, 100) / 100) or 0.5))) * 15
                 + max(0, min(1, (drawdown and (1 - min(drawdown, 70) / 70) or 0.5))) * 10
                 + min(1, trend) * 10
                 + max(0, min(1, metadata[code]["relevance"])) * 5
             )
-            rows.append({
-                "code": code,
-                "name": metadata[code]["name"],
-                "nodes": list(dict.fromkeys(node_by_code.get(code, []))),
-                "relevance": round(metadata[code]["relevance"], 3),
-                "representativeness_score": round(score, 2),
-                "selection_basis": "规模25%/成交活跃度15%/区间收益20%/波动风险25%/技术趋势10%/图谱相关度5%",
-                "selected": False,
-            })
-        rows.sort(key=lambda row: (row["representativeness_score"], row["relevance"], row["code"]), reverse=True)
-        max_selected = max(1, int(os.getenv("MARKET_ANALYSIS_MAX_ETFS", "8")))
-        for rank, row in enumerate(rows, 1):
-            row["global_rank"] = rank
-            row["selected"] = rank <= max_selected
-            row["selection_reason"] = "综合代表性排名入选" if row["selected"] else "候选样本未进入代表性分析TopN"
+            scores[code] = round(score, 2)
+
+        per_node = max(1, int(per_node))
+        for group in node_candidates:
+            node = str(group.get("node") or "未命名节点")
+            node_rows = []
+            seen_codes = set()
+            for candidate in group.get("candidates", []):
+                code = str(candidate.get("code") or "")
+                if not code or code in seen_codes:
+                    continue
+                seen_codes.add(code)
+                if code not in metadata:
+                    metadata[code] = {
+                        "name": str(candidate.get("name") or code),
+                        "relevance": float(candidate.get("relevance") or 0),
+                    }
+                if code not in scores:
+                    continue
+                node_rows.append({
+                    "code": code,
+                    "name": metadata[code]["name"],
+                    "node": node,
+                    "nodes": list(dict.fromkeys(node_by_code.get(code, []))),
+                    "relevance": round(metadata[code]["relevance"], 3),
+                    "representativeness_score": scores[code],
+                    "selection_basis": "规模25%/成交活跃度15%/区间收益20%/波动风险25%/技术趋势10%/图谱相关度5%",
+                    "market_data_available": True,
+                    "selected": False,
+                })
+            node_rows.sort(key=lambda row: (row["representativeness_score"], row["relevance"], row["code"]), reverse=True)
+            for rank, row in enumerate(node_rows, 1):
+                row["selection_rank"] = rank
+                row["selected"] = rank <= per_node
+                row["selection_reason"] = (
+                    "节点代表性排名入选" if row["selected"] else "节点候选未进入Top2"
+                )
+                rows.append(row)
+
         return rows
 
+    @staticmethod
+    def _number_from_record(record: Dict[str, Any], keys: tuple[str, ...], default: float = 0.0) -> float:
+        """从中英文/Tushare字段中读取有限数值，避免 NaN 和 0 值误判。"""
+        for key in keys:
+            value = record.get(key)
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(number):
+                return number
+        return default
+
+    @staticmethod
+    def _normalize_etf_kline_record(record: Dict[str, Any], index: int, history_records: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """统一 ETF K 线字段，兼容 Tushare vol/amount 与旧中文字段。"""
+        close_val = IndustryMarketAnalyzer._number_from_record(record, ("收盘", "close"))
+        previous_close = (
+            IndustryMarketAnalyzer._number_from_record(history_records[index - 1], ("收盘", "close"))
+            if index > 0 else 0.0
+        )
+        pct_chg = IndustryMarketAnalyzer._number_from_record(record, ("涨跌幅", "pct_chg", "change_pct"), default=float("nan"))
+        if not math.isfinite(pct_chg) or (pct_chg == 0 and index > 0 and previous_close > 0 and close_val > 0):
+            pct_chg = ((close_val - previous_close) / previous_close * 100) if previous_close > 0 else 0.0
+        return {
+            "日期": str(record.get("日期") or record.get("date") or ""),
+            "开盘": IndustryMarketAnalyzer._number_from_record(record, ("开盘", "open")),
+            "收盘": close_val,
+            "最高": IndustryMarketAnalyzer._number_from_record(record, ("最高", "high"), close_val),
+            "最低": IndustryMarketAnalyzer._number_from_record(record, ("最低", "low"), close_val),
+            "成交量": IndustryMarketAnalyzer._number_from_record(record, ("成交量", "volume", "vol")),
+            "成交额": IndustryMarketAnalyzer._number_from_record(record, ("成交额", "amount", "turnover")),
+            "涨跌幅": pct_chg,
+        }
     @staticmethod
     def _select_graph_etfs(
         node_candidates: List[Dict[str, Any]],
         available_codes: Optional[set] = None,
     ) -> List[Dict[str, Any]]:
-        """兼容旧调用方的节点级选择接口；主流程改用全候选综合评分。"""
+        """兼容旧调用方的节点级选择接口，每个节点独立保留两只 ETF。"""
         selected: List[Dict[str, Any]] = []
-        seen_codes = set()
         for group in node_candidates:
+            seen_codes = set()
             candidates = sorted(
                 [
                     item for item in group.get("candidates", [])
@@ -614,6 +750,20 @@ class IndustryMarketAnalyzer:
 
         return []
 
+    @staticmethod
+    def _normalize_market_index_codes(codes: Optional[List[str]]) -> List[str]:
+        """接受市场页面传入的指数代码，兼容 sh/sz 前缀和 Tushare 代码。"""
+        if not isinstance(codes, list):
+            return []
+        allowed = {"000001", "399001", "399006", "000688", "000300"}
+        normalized = []
+        for value in codes:
+            code = str(value or "").strip().lower().replace(".sh", "").replace(".sz", "")
+            code = code.replace("sh", "").replace("sz", "")
+            if code in allowed and code not in normalized:
+                normalized.append(code)
+        return normalized
+
     def _calculate_match_score(self, industry_name: str, mapping_key: str) -> int:
         """计算产业名称与映射键的匹配分数
 
@@ -665,31 +815,7 @@ class IndustryMarketAnalyzer:
                 # 有历史数据
                 history_records = etf["history"]
                 for i, record in enumerate(history_records):
-                    # 兼容中英文key
-                    close_val = record.get("收盘") or record.get("close", 0)
-                    open_val = record.get("开盘") or record.get("open", 0)
-                    high_val = record.get("最高") or record.get("high", 0)
-                    low_val = record.get("最低") or record.get("low", 0)
-                    volume_val = record.get("成交量") or record.get("volume", 0)
-                    date_val = record.get("日期") or record.get("date", "")
-
-                    # 计算涨跌幅（如果没有提供）
-                    pct_chg = record.get("涨跌幅") or record.get("pct_chg", 0)
-                    if pct_chg == 0 and i > 0:
-                        # 从前一天计算涨跌幅
-                        prev_close = history_records[i-1].get("收盘") or history_records[i-1].get("close", 0)
-                        if prev_close > 0 and close_val > 0:
-                            pct_chg = ((float(close_val) - float(prev_close)) / float(prev_close)) * 100
-
-                    kline.append({
-                        "日期": str(date_val),
-                        "开盘": float(open_val) if open_val else 0,
-                        "收盘": float(close_val) if close_val else 0,
-                        "最高": float(high_val) if high_val else 0,
-                        "最低": float(low_val) if low_val else 0,
-                        "成交量": float(volume_val) if volume_val else 0,
-                        "涨跌幅": float(pct_chg) if pct_chg else 0,
-                    })
+                    kline.append(self._normalize_etf_kline_record(record, i, history_records))
             else:
                 # 只有实时数据，构造单日K线
                 kline.append({
@@ -698,7 +824,8 @@ class IndustryMarketAnalyzer:
                     "收盘": etf["current_price"],
                     "最高": etf["current_price"],
                     "最低": etf["current_price"],
-                    "成交量": etf.get("volume", 0),
+                    "成交量": self._number_from_record(etf, ("volume", "vol", "成交量")),
+                    "成交额": self._number_from_record(etf, ("amount", "turnover", "成交额")),
                     "涨跌幅": etf["change_pct"],
                 })
 
@@ -864,17 +991,22 @@ class IndustryMarketAnalyzer:
                         return 0.0
 
                 def normalize(row: Dict[str, Any]) -> Dict[str, Any]:
+                    has_normalized_flow = row.get("netFlow") is not None
                     raw_flow = row.get("netFlow")
                     if raw_flow is None:
                         raw_flow = row.get("今日主力净流入-净额", row.get("主力净流入", row.get("净流入", 0)))
                     flow = numeric(raw_flow)
-                    if abs(flow) >= 1000000:
+                    # provider 原始字段统一为元；netFlow 是已由 API 归一化后的亿元。
+                    # 不再用绝对值猜单位，避免小额元值和已归一化亿元混淆。
+                    if not has_normalized_flow:
                         flow /= 100000000
                     return {
                         "sector": row.get("sector") or row.get("名称") or row.get("name") or "未命名板块",
                         "netFlow": round(flow, 2),
                         "changePct": round(numeric(row.get("changePct", row.get("今日涨跌幅", row.get("涨跌幅", 0)))), 2),
                         "trend": "inflow" if flow > 0 else "outflow" if flow < 0 else "flat",
+                        "date": row.get("日期") or row.get("trade_date") or row.get("date"),
+                        "unit": "亿元",
                     }
 
                 ordered = sorted(
@@ -886,6 +1018,8 @@ class IndustryMarketAnalyzer:
                     "topInflowSectors": [row for row in ordered if row["netFlow"] > 0][:10],
                     "topOutflowSectors": sorted([row for row in ordered if row["netFlow"] < 0], key=lambda row: row["netFlow"])[:10],
                     "source": "data_service",
+                    "unit": "亿元",
+                    "date": next((row.get("date") for row in ordered if row.get("date")), None),
                 }
             return None
         except Exception as e:

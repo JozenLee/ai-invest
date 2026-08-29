@@ -49,6 +49,17 @@ stop_port_processes() {
     sleep 1
   done
 
+  for pid in $pids; do
+    if is_project_process "$pid"; then
+      echo "强制停止旧 Web 进程: $pid"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+  sleep 1
+  if ! lsof -tiTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+    return
+  fi
+
   echo "错误: 旧 Web 进程未能在 30 秒内退出。"
   exit 1
 }

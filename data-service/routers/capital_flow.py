@@ -94,10 +94,13 @@ async def get_market_capital_flow():
 
 
 @router.get("/sector")
-async def get_sector_capital_flow(indicator: str = Query(default="今日", pattern="^(今日|3日|5日|10日)$")):
+async def get_sector_capital_flow(
+    indicator: str = Query(default="今日", pattern="^(今日|3日|5日|10日)$"),
+    refresh: bool = Query(default=False),
+):
     """获取板块资金流向排名"""
     try:
-        data = await data_service.get_sector_capital_flow(indicator)
+        data = await data_service.get_sector_capital_flow(indicator, force_refresh=refresh)
 
         if not data:
             return {

@@ -118,7 +118,10 @@ export type NormalizedMarket = {
   trendReport: string
   quantitativeScores: Record<string, unknown>
   source?: string
+  etfCandidates: Array<Record<string, unknown>>
   etfSelection: Array<Record<string, unknown>>
+  reportMode?: string
+  inputDataCompleteness: Record<string, unknown>
 }
 
 export type NormalizedNewsItem = Record<string, unknown> & {
@@ -365,10 +368,14 @@ function normalizeSectorFlow(value: unknown): Record<string, unknown> {
   const normalizeRows = (items: unknown) => array(items).map((item) => {
     const row = record(item)
     const rawFlow = row.netFlow ?? row.net_flow ?? row.flow ?? row['今日主力净流入-净额'] ?? row['主力净流入'] ?? row['净流入']
+    const normalizedFlow = numberValue(rawFlow)
+    const displayFlow = normalizedFlow != null && Math.abs(normalizedFlow) > 1000
+      ? normalizedFlow / 100000000
+      : normalizedFlow
     return {
       ...row,
       sector: textValue(row.sector ?? row.name ?? row['名称'], '未命名板块'),
-      netFlow: numberValue(rawFlow),
+      netFlow: displayFlow == null ? null : Number(displayFlow.toFixed(2)),
       changePct: numberValue(row.changePct ?? row.change_pct ?? row['今日涨跌幅'] ?? row['涨跌幅']),
       trend: textValue(row.trend) || ((numberValue(rawFlow) ?? 0) > 0 ? 'inflow' : (numberValue(rawFlow) ?? 0) < 0 ? 'outflow' : 'flat'),
     }
@@ -377,28 +384,49 @@ function normalizeSectorFlow(value: unknown): Record<string, unknown> {
   const topOutflowSectors = normalizeRows(raw.topOutflowSectors ?? raw.top_outflow_sectors ?? raw.outflowSectors)
   return {
     ...raw,
-    topInflowSectors,
-    topOutflowSectors,
+    topInflowSectors: topInflowSectors.filter((row) => (numberValue(row.netFlow) ?? 0) > 0).sort((a, b) => (numberValue(b.netFlow) ?? 0) - (numberValue(a.netFlow) ?? 0)),
+    topOutflowSectors: topOutflowSectors.filter((row) => (numberValue(row.netFlow) ?? 0) < 0).sort((a, b) => (numberValue(a.netFlow) ?? 0) - (numberValue(b.netFlow) ?? 0)),
   }
 }
 
 export function normalizeMarket(value: unknown): NormalizedMarket {
   const raw = record(value)
   const overview = record(raw.market_overview ?? raw.marketOverview)
+  const etfSelection = array(raw.etf_selection ?? raw.etfSelection).map(normalizeRow)
+  const etfNameByCode = new Map<string, string>(etfSelection.map((row): [string, string] => [textValue(row.code || row.symbol), textValue(row.name)]).filter(([code, name]) => Boolean(code && name && name !== code)))
+  const etfs = array(raw.etf_analysis ?? raw.etfs).map((value) => {
+    const row = normalizeRow(value)
+    const code = textValue(row.code || row.symbol)
+    const rowName = textValue(row.name)
+    return { ...row, name: rowName && rowName !== code ? rowName : etfNameByCode.get(code) || code || '名称缺失' }
+  })
+  // 当前市场分析链路的 index_analysis / indices 是上证指数、深证成指等
+  // 市场基准，并非产业指数。历史报告中可能已把它们写入 indices，统一
+  // 归入 marketIndices，避免页面将大盘指数误标为产业指数。
+  const marketIndices = array(
+    raw.market_indices
+      ?? raw.marketIndices
+      ?? raw.index_analysis
+      ?? raw.indices
+      ?? overview.indices,
+  ).map(normalizeRow)
   return {
     industryName: textValue(raw.industry_name ?? raw.industryName),
     analyzedAt: textValue(raw.analyzed_at ?? raw.analyzedAt),
     periodDays: numberValue(raw.analysis_period_days ?? raw.periodDays),
-    etfs: array(raw.etf_analysis ?? raw.etfs).map(normalizeRow),
-    indices: array(raw.index_analysis ?? raw.indices).map(normalizeRow),
-    marketIndices: array(raw.market_indices ?? overview.indices).map(normalizeRow),
+    etfs,
+    indices: [],
+    marketIndices,
     overview,
     sectorFlow: normalizeSectorFlow(raw.sector_flow ?? raw.sectorFlow),
     dataQuality: record(raw.data_quality ?? raw.dataQuality),
     trendReport: textValue(raw.trend_report ?? raw.trendReport),
     quantitativeScores: record(raw.quantitative_scores ?? raw.quantitativeScores),
     source: textValue(raw.etf_source ?? raw.source),
-    etfSelection: array(raw.etf_selection ?? raw.etfSelection).map(normalizeRow),
+    etfCandidates: array(raw.etf_candidates ?? raw.etfCandidates).map(normalizeRow),
+    etfSelection,
+    reportMode: textValue(raw.report_mode ?? raw.reportMode),
+    inputDataCompleteness: record(raw.input_data_completeness ?? raw.inputDataCompleteness),
   }
 }
 
@@ -493,6 +521,14 @@ export function normalizeNews(value: unknown): NormalizedNews {
 export function normalizeCompany(value: unknown): NormalizedCompany {
   const raw = record(value)
   const trendReport = textValue(raw.trend_report ?? raw.trendReport)
+  const topCompanies = array(raw.selected_companies ?? raw.selectedCompanies ?? raw.top_companies ?? raw.topCompanies)
+    .map((item) => {
+      const row = normalizeRow(item)
+      const code = textValue(row.code ?? row.symbol)
+      const name = textValue(row.name ?? row.stock_name ?? row.company_name)
+      return { ...row, name, code } as Record<string, unknown>
+    })
+    .filter((row) => Boolean(textValue(row.name) && textValue(row.name) !== textValue(row.code ?? row.symbol)))
   const trendJudgment = localizeUserFacingText(
     textValue(raw.trend_judgment ?? raw.trendJudgment)
       || extractMarkdownSection(trendReport, '## 一、趋势判断')
@@ -515,7 +551,7 @@ export function normalizeCompany(value: unknown): NormalizedCompany {
   return {
     total: numberValue(raw.total_companies ?? raw.total) ?? 0,
     analyzed: numberValue(raw.analyzed_companies ?? raw.analyzed) ?? 0,
-    topCompanies: array(raw.selected_companies ?? raw.selectedCompanies ?? raw.top_companies ?? raw.topCompanies).map(normalizeRow),
+    topCompanies,
     summaries: array(raw.company_summaries ?? raw.summaries).map(normalizeRow),
     segmentAnalysis: array(raw.segment_analysis ?? raw.segmentAnalysis).map(normalizeRow),
     coreConclusion: localizeUserFacingText(textValue(raw.core_conclusion ?? raw.coreConclusion) || extractMarkdownSection(trendReport, '## 一、核心结论') || trendReport),

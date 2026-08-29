@@ -23,7 +23,7 @@ export async function GET(request: Request) {
   // Skip cache if force refresh requested
   if (!forceRefresh) {
     // 检查缓存
-    const cached = apiCache.get<any>(CACHE_KEY)
+    const cached = apiCache.get<unknown>(CACHE_KEY)
     if (cached) {
       console.log('[capital-flow API] 返回缓存数据')
       return NextResponse.json(cached)
@@ -34,8 +34,9 @@ export async function GET(request: Request) {
 
   try {
     // 使用增强版资金流向API
-    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/advanced/enhanced`, {
-      signal: AbortSignal.timeout(15000),
+    const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/advanced/enhanced${forceRefresh ? '?refresh=true' : ''}`, {
+      // 资金流向需要聚合多个数据源；必须低于前端 35 秒总超时，但不能过短导致正常慢响应被误判。
+      signal: AbortSignal.timeout(30000),
     })
 
     console.log('[capital-flow API] Python 服务响应:', response.status)
@@ -95,10 +96,11 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error('[capital-flow API] 请求失败:', error)
 
-    // 降级：返回明确的错误状态（不返回假数据）
+    const isTimeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')
+    // 降级：资金流向是市场页的辅助模块，不应把指数页面标记为数据服务不可用。
     return NextResponse.json({
       success: false,
-      error: '数据服务不可用，请确认 data-service 已启动',
+      error: isTimeout ? '资金流向数据响应较慢，暂时无法获取；市场指数仍可正常查看' : '资金流向暂时不可用，市场指数仍可正常查看',
       data: null,
       source: 'unavailable',
     })

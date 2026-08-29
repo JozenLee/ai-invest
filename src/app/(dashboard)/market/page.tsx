@@ -213,6 +213,11 @@ export default function DashboardPage() {
                   数据源：板块 {capitalFlow.sourceDetails.sectorFlow} · 北向 {capitalFlow.sourceDetails.northbound} · 成交额 {capitalFlow.sourceDetails.volume || 'Tushare'} · 龙虎榜 {capitalFlow.sourceDetails.dragonTiger}
                 </span>
               )}
+              {capitalFlow.sectorRealtime === false && (
+                <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-700 dark:text-amber-300">
+                  板块资金为最新交易日统计
+                </Badge>
+              )}
               {/* 数据质量标识 */}
               {preferences.showDataQualityBadge && capitalFlow.dataQuality === 'estimated' && (
                 <Tooltip>
@@ -399,37 +404,6 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {capitalFlow && (
-          <section>
-            <div className="mb-4 flex items-center gap-2">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Info className="h-4 w-4" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Tushare 可补充但当前未展示的数据</h2>
-                <p className="text-xs text-muted-foreground">这些接口能补充资金来源、持续性和风险验证，当前页面尚未接入可视化。</p>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {[
-                ['moneyflow（个股资金流）', '按个股拆分超大单、大单、中单、小单净流入，可用于验证板块排名中的龙头个股、识别个股资金与板块方向是否一致。'],
-                ['top_inst（龙虎榜机构明细）', '按营业部/机构席位拆分买卖金额，能回答“是谁在买卖”；当前 top_list 只有上榜股票明细，不能替代该接口。'],
-                ['moneyflow_cnt_ths（概念资金流）', '提供同花顺概念/题材维度的资金流向，可与当前行业维度对照，识别“行业上涨但题材资金分散”等结构差异。'],
-                ['margin / margin_detail（融资融券）', '融资余额、融资买入额、融券余额等杠杆资金数据，可用于判断风险偏好和上涨是否由杠杆资金推动。'],
-                ['moneyflow_ind_dc 额外字段', '除净额外还包含净流入占比、超大单/大单等分档字段，可补充资金强度和参与结构；当前仅展示净额与板块涨跌幅。'],
-                ['index_daily / daily_basic 历史指标', '可补充成交额趋势、换手率、量价关系和历史分位，用于把当前单日快照扩展为可回溯的资金持续性分析。'],
-              ].map(([title, description]) => (
-                <Card key={title} className="bg-muted/20">
-                  <CardContent className="p-4">
-                    <p className="text-sm font-semibold">{title}</p>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </section>
-        )}
-
         {/* 第三区域：板块资金流向 */}
         {capitalFlow && (capitalFlow.topInflowSectors.length > 0 || capitalFlow.topOutflowSectors.length > 0) && (
           <section>
@@ -527,6 +501,38 @@ export default function DashboardPage() {
                   </div>
                 </CardContent>
               </Card>
+            </div>
+          </section>
+        )}
+
+        {/* 页面底部：Tushare 可补充但当前未展示的数据 */}
+        {capitalFlow && (
+          <section>
+            <div className="mb-4 flex items-center gap-2">
+              <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Info className="h-4 w-4" aria-hidden="true" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold">Tushare 可补充但当前未展示的数据</h2>
+                <p className="text-xs text-muted-foreground">这些接口能补充资金来源、持续性和风险验证，当前页面尚未接入可视化。</p>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {[
+                ['moneyflow（个股资金流）', '按个股拆分超大单、大单、中单、小单净流入，可用于验证板块排名中的龙头个股、识别个股资金与板块方向是否一致。'],
+                ['top_inst（龙虎榜机构明细）', '按营业部/机构席位拆分买卖金额，能回答“是谁在买卖”；当前 top_list 只有上榜股票明细，不能替代该接口。'],
+                ['moneyflow_cnt_ths（概念资金流）', '提供同花顺概念/题材维度的资金流向，可与当前行业维度对照，识别“行业上涨但题材资金分散”等结构差异。'],
+                ['margin / margin_detail（融资融券）', '融资余额、融资买入额、融券余额等杠杆资金数据，可用于判断风险偏好和上涨是否由杠杆资金推动。'],
+                ['moneyflow_ind_dc 额外字段', '除净额外还包含净流入占比、超大单/大单等分档字段，可补充资金强度和参与结构；当前仅展示净额与板块涨跌幅。'],
+                ['index_daily / daily_basic 历史指标', '可补充成交额趋势、换手率、量价关系和历史分位，用于把当前单日快照扩展为可回溯的资金持续性分析。'],
+              ].map(([title, description]) => (
+                <Card key={title} className="bg-muted/20">
+                  <CardContent className="p-4">
+                    <p className="text-sm font-semibold">{title}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
           </section>
         )}

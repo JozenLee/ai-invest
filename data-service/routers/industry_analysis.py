@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional, Set
 import asyncio
 import json
+import logging
 import os
 import re
 from anthropic import Anthropic
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/industry-analysis", tags=["industry-analysis"])
 
 company_analyzer = IndustryCompanyAnalyzer()
 market_analyzer = IndustryMarketAnalyzer()
+logger = logging.getLogger(__name__)
 
 
 def _comprehensive_stage_error(stage: str, message: str, details: Dict[str, Any]) -> HTTPException:
@@ -209,6 +211,7 @@ async def analyze_industry_companies(
     period_days: int = Query(default=90, description="分析周期（天）", ge=30, le=365),
     source: str = Query(default="graph", description="企业候选来源：graph / etf_holdings"),
     etf_codes: str = Query(default="", description="ETF持仓来源使用的ETF代码，逗号分隔"),
+    generate_ai_report: bool = Query(default=True, description="是否生成企业AI趋势报告"),
 ):
     """
     分析产业领域的企业发展趋势
@@ -222,15 +225,23 @@ async def analyze_industry_companies(
             codes = list(dict.fromkeys(item.strip() for item in etf_codes.split(",") if item.strip()))
             if not codes:
                 return JSONResponse(status_code=400, content={"success": False, "error": "ETF持仓来源需要提供etf_codes"})
-            holdings_response = await get_etf_holdings_for_analysis(codes)
-            etf_holdings = holdings_response
+            etf_holdings, holdings_diagnostics = await get_etf_holdings_for_analysis(codes)
 
         result = await company_analyzer.analyze_industry_companies(
             industry_id=industry_id,
             analysis_period_days=period_days,
             source=source,
             etf_holdings=etf_holdings,
+            generate_ai_report=generate_ai_report,
         )
+        if source in {"etf", "etf_holdings", "ETF持仓"}:
+            result["etf_holdings_diagnostics"] = holdings_diagnostics
+            result["market_etf_holdings_coverage"] = {
+                "requested": codes,
+                "with_holdings": [code for code, rows in etf_holdings.items() if rows],
+                "empty": [code for code, rows in etf_holdings.items() if not rows],
+                "diagnostics": holdings_diagnostics,
+            }
 
         if not result.get("success"):
             # 保留分析器返回的阶段、错误码和诊断详情，避免前端只能看到空的 detail。
@@ -245,20 +256,70 @@ async def analyze_industry_companies(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def get_etf_holdings_for_analysis(codes: List[str]) -> Dict[str, List[Dict[str, Any]]]:
-    """通过 ETF provider 统一读取持仓，避免企业分析器直接依赖数据源实现。"""
+async def get_etf_holdings_for_analysis(
+    codes: List[str],
+) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, Dict[str, Any]]]:
+    """并发读取 ETF 持仓，并保留每只 ETF 的状态与耗时。"""
     from routers.etf import etf_provider
-    results: Dict[str, List[Dict[str, Any]]] = {}
-    for code in codes[:50]:
-        results[code] = await etf_provider.get_holdings(code)
-    return results
+    timeout_seconds = max(5, int(os.getenv("ETF_HOLDINGS_REQUEST_TIMEOUT_SECONDS", "20")))
+    concurrency = max(1, int(os.getenv("ETF_HOLDINGS_CONCURRENCY", "5")))
+    requested = list(dict.fromkeys(str(code).strip() for code in codes[:50] if str(code).strip()))
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def fetch_one(code: str) -> tuple[str, List[Dict[str, Any]], Dict[str, Any]]:
+        started_at = asyncio.get_running_loop().time()
+        async with semaphore:
+            try:
+                rows = await asyncio.wait_for(etf_provider.get_holdings(code), timeout=timeout_seconds)
+                duration_ms = round((asyncio.get_running_loop().time() - started_at) * 1000)
+                status = "success" if rows else "empty"
+                logger.info(
+                    "ETF持仓分析请求完成: code=%s status=%s rows=%s duration_ms=%s timeout_s=%s",
+                    code, status, len(rows), duration_ms, timeout_seconds,
+                )
+                return code, rows, {
+                    "status": status,
+                    "rows": len(rows),
+                    "duration_ms": duration_ms,
+                    "timeout_seconds": timeout_seconds,
+                }
+            except asyncio.TimeoutError:
+                duration_ms = round((asyncio.get_running_loop().time() - started_at) * 1000)
+                logger.warning(
+                    "ETF持仓分析请求超时: code=%s duration_ms=%s timeout_s=%s",
+                    code, duration_ms, timeout_seconds,
+                )
+                return code, [], {
+                    "status": "timeout",
+                    "rows": 0,
+                    "duration_ms": duration_ms,
+                    "timeout_seconds": timeout_seconds,
+                    "error": f"ETF持仓请求超过{timeout_seconds}秒",
+                }
+            except Exception as error:
+                duration_ms = round((asyncio.get_running_loop().time() - started_at) * 1000)
+                logger.exception("ETF持仓分析请求异常: code=%s duration_ms=%s", code, duration_ms)
+                return code, [], {
+                    "status": "error",
+                    "rows": 0,
+                    "duration_ms": duration_ms,
+                    "timeout_seconds": timeout_seconds,
+                    "error": str(error),
+                }
+
+    fetched = await asyncio.gather(*(fetch_one(code) for code in requested))
+    results = {code: rows for code, rows, _ in fetched}
+    diagnostics = {code: detail for code, _, detail in fetched}
+    return results, diagnostics
 
 
 @router.get("/{industry_id}/market")
 async def analyze_industry_market(
     industry_id: str,
     industry_name: str = Query(..., description="产业名称"),
-    period_days: int = Query(default=90, description="分析周期（天）", ge=30, le=365)
+    period_days: int = Query(default=90, description="分析周期（天）", ge=30, le=365),
+    generate_ai_report: bool = Query(default=True, description="是否生成市场AI趋势报告"),
+    market_index_codes: Optional[str] = Query(default=None, description="市场页面传入的指数代码，逗号分隔"),
 ):
     """
     分析产业领域的大盘趋势
@@ -271,7 +332,9 @@ async def analyze_industry_market(
         result = await market_analyzer.analyze_industry_market(
             industry_id=industry_id,
             industry_name=industry_name,
-            analysis_period_days=period_days
+            analysis_period_days=period_days,
+            generate_ai_report=generate_ai_report,
+            market_index_codes=[code.strip() for code in (market_index_codes or '').split(',') if code.strip()] or None,
         )
 
         if not result.get("success"):
@@ -291,7 +354,8 @@ async def analyze_industry_market(
 async def get_industry_news(
     industry_id: str,
     industry_name: str = Query(..., description="产业名称"),
-    limit: int = Query(default=10, description="返回新闻数量", ge=1, le=50)
+    limit: int = Query(default=10, description="返回新闻数量", ge=1, le=50),
+    generate_ai_report: bool = Query(default=True, description="是否为资讯模块启用AI增强"),
 ):
     """
     获取产业相关新闻资讯
@@ -329,6 +393,13 @@ async def get_industry_news(
                 "total": len(tagged_news),
                 "news": tagged_news,
                 "source": "knowledge_graph_news",
+                "report_mode": "ai" if generate_ai_report else "data",
+                "input_data_completeness": {
+                    "mode": "ai" if generate_ai_report else "data",
+                    "full_input_preserved": True,
+                    "status": "complete",
+                    "returned_rows": len(tagged_news),
+                },
             }
 
         raise HTTPException(
@@ -352,7 +423,8 @@ async def get_industry_news(
 async def comprehensive_industry_analysis(
     industry_id: str,
     industry_name: str = Query(..., description="产业名称"),
-    period_days: int = Query(default=90, description="分析周期（天）", ge=30, le=365)
+    period_days: int = Query(default=90, description="分析周期（天）", ge=30, le=365),
+    generate_ai_report: bool = Query(default=True, description="是否生成综合AI报告"),
 ):
     """
     综合产业分析（企业 + 大盘 + 新闻 + AI分析）
@@ -364,8 +436,8 @@ async def comprehensive_industry_analysis(
     try:
         # 资讯可以并行获取，但企业分析必须等待市场代表ETF选定后再读取持仓。
         market_result, news_result = await asyncio.gather(
-            market_analyzer.analyze_industry_market(industry_id, industry_name, period_days),
-            get_industry_news(industry_id, industry_name, limit=5),
+            market_analyzer.analyze_industry_market(industry_id, industry_name, period_days, generate_ai_report),
+            get_industry_news(industry_id, industry_name, limit=5, generate_ai_report=generate_ai_report),
         )
 
         if not market_result.get("success"):
@@ -375,29 +447,54 @@ async def comprehensive_industry_analysis(
 
         selected_codes = list(dict.fromkeys(
             str(item.get("code") or item.get("symbol"))
-            for item in market_result.get("etf_selection", [])
+            for item in [
+                *market_result.get("etf_selection", []),
+                *market_result.get("etf_candidates", []),
+                *market_result.get("etf_analysis", []),
+            ]
             if item.get("selected") and (item.get("code") or item.get("symbol"))
         ))
+        if not selected_codes and not generate_ai_report:
+            selected_codes = list(dict.fromkeys(
+                str(item.get("code") or item.get("symbol"))
+                for item in [
+                    *market_result.get("etf_candidates", []),
+                    *market_result.get("etf_analysis", []),
+                ]
+                if item.get("code") or item.get("symbol")
+            ))
         if not selected_codes:
             raise _comprehensive_stage_error(
                 "market",
                 "市场分析未返回可用于企业分析的代表ETF",
                 {"etf_selection": market_result.get("etf_selection", [])},
             )
-        etf_holdings = await get_etf_holdings_for_analysis(selected_codes)
+        # 企业分析需要覆盖知识图谱中的全部 ETF 候选，而不是每个环节筛出的代表 ETF。
+        # 代表 ETF 仍保留在 etf_selection 中供市场展示和排序使用。
+        graph_etf_codes = list(dict.fromkeys(
+            str(item.get("code") or item.get("symbol"))
+            for item in market_result.get("etf_candidates", [])
+            if item.get("code") or item.get("symbol")
+        ))
+        company_etf_codes = graph_etf_codes or selected_codes
+        etf_holdings, holdings_diagnostics = await get_etf_holdings_for_analysis(company_etf_codes)
         company_result = await company_analyzer.analyze_industry_companies(
             industry_id,
             period_days,
             source="etf_holdings",
             etf_holdings=etf_holdings,
+            generate_ai_report=generate_ai_report,
         )
         if not company_result.get("success"):
             raise _comprehensive_stage_error("company", "企业分析未成功完成", company_result)
         company_result["market_etf_codes"] = selected_codes
+        company_result["graph_etf_codes"] = company_etf_codes
+        company_result["etf_holdings_diagnostics"] = holdings_diagnostics
         company_result["market_etf_holdings_coverage"] = {
-            "requested": selected_codes,
+            "requested": company_etf_codes,
             "with_holdings": [code for code, rows in etf_holdings.items() if rows],
             "empty": [code for code, rows in etf_holdings.items() if not rows],
+            "diagnostics": holdings_diagnostics,
         }
 
         invalid_sources = {
@@ -415,23 +512,27 @@ async def comprehensive_industry_analysis(
             for stage in expected_sources
             if invalid_sources[stage] != expected_sources[stage]
         }
-        if invalid_stages:
+        if generate_ai_report and invalid_stages:
             raise _comprehensive_stage_error(
                 "input_validation",
                 "综合分析拒绝使用规则或关键词回退结果",
                 {"invalid_sources": invalid_stages},
             )
 
-        if not str(company_result.get("trend_report") or "").strip():
+        if generate_ai_report and not str(company_result.get("trend_report") or "").strip():
             raise _comprehensive_stage_error("company", "企业分析输出为空", {"keys": list(company_result)})
-        if not str(market_result.get("trend_report") or "").strip():
+        if generate_ai_report and not str(market_result.get("trend_report") or "").strip():
             raise _comprehensive_stage_error("market", "市场分析输出为空", {"keys": list(market_result)})
         if not isinstance(news_result.get("news"), list) or not news_result.get("news"):
             raise _comprehensive_stage_error("news", "资讯分析输出格式异常", {"type": type(news_result.get("news")).__name__})
 
-        comprehensive_report = await _generate_ai_comprehensive_report(
-            industry_name, company_result, market_result, news_result
-        )
+        comprehensive_report = ""
+        report_source = "data"
+        if generate_ai_report:
+            comprehensive_report = await _generate_ai_comprehensive_report(
+                industry_name, company_result, market_result, news_result
+            )
+            report_source = "ai"
 
         return {
             "success": True,
@@ -441,7 +542,8 @@ async def comprehensive_industry_analysis(
             "market_analysis": market_result if market_result.get("success") else None,
             "news": news_result.get("news", []) if news_result.get("success") else [],
             "comprehensive_report": comprehensive_report,
-            "report_source": "ai",
+            "report_source": report_source,
+            "report_mode": "ai" if generate_ai_report else "data",
             "input_sources": {
                 "company": company_result.get("report_source"),
                 "market": market_result.get("report_source"),
@@ -449,6 +551,7 @@ async def comprehensive_industry_analysis(
             },
             "market_to_company": {
                 "selected_etf_codes": selected_codes,
+                "graph_etf_codes": company_etf_codes,
                 "holdings_coverage": company_result.get("market_etf_holdings_coverage"),
             },
         }

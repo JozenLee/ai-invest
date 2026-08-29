@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeMarket, normalizeMarketReportText } from '../report-contract'
+import { normalizeCompany, normalizeMarket, normalizeMarketReportText } from '../report-contract'
 
 describe('market report compatibility', () => {
   it('reconciles legacy quality and flow wording with the full market snapshot', () => {
@@ -37,6 +37,30 @@ describe('market report compatibility', () => {
     ])
     expect(market.sectorFlow.topOutflowSectors).toEqual([
       expect.objectContaining({ sector: '地产', netFlow: -1.2, trend: 'outflow' }),
+    ])
+  })
+
+  it('classifies legacy index_analysis as market indices instead of industry indices', () => {
+    const market = normalizeMarket({
+      index_analysis: [{ code: '000001', name: '上证指数', current_price: 3900 }],
+    })
+
+    expect(market.indices).toEqual([])
+    expect(market.marketIndices).toEqual([
+      expect.objectContaining({ code: '000001', name: '上证指数' }),
+    ])
+  })
+
+  it('omits historical companies whose saved name is only a security code', () => {
+    const company = normalizeCompany({
+      top_companies: [
+        { symbol: '688126.SH', name: '688126.SH' },
+        { symbol: '002371.SZ', name: '北方华创' },
+      ],
+    })
+
+    expect(company.topCompanies).toEqual([
+      expect.objectContaining({ symbol: '002371.SZ', name: '北方华创' }),
     ])
   })
 })
