@@ -52,6 +52,11 @@ function transformSwimLaneData(data: any): any {
         nameEn: company.nameEn || company.name_en
       }))
 
+      // 确保正确读取匹配结果（支持camelCase和snake_case）
+      const matchedEtfs = segment.matchedEtfs || segment.matched_etfs || []
+      const matchedIndices = segment.matchedIndices || segment.matched_indices || []
+      const lastMatchedAt = segment.lastMatchedAt || segment.last_matched_at
+
       return {
         id: segment.id,
         name: segment.name,
@@ -62,9 +67,9 @@ function transformSwimLaneData(data: any): any {
         // 使用后端返回的order，如果没有则使用数组索引（与数据库查询顺序保持一致）
         order: segment.order !== undefined && segment.order !== null ? segment.order : index,
         // 添加匹配结果
-        matchedEtfs: segment.matchedEtfs || [],
-        matchedIndices: segment.matchedIndices || [],
-        lastMatchedAt: segment.lastMatchedAt
+        matchedEtfs,
+        matchedIndices,
+        lastMatchedAt
       }
     })
 

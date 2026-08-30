@@ -682,7 +682,8 @@ class FetchService:
     ):
         """更新采集日志"""
         try:
-            await db.update_datasource_log(log_id, {
+            # 修复：db.update_datasource_log 是同步函数，不需要 await
+            db.update_datasource_log(log_id, {
                 "status": status,
                 "message": message,
                 "fetchedCount": fetched_count,
@@ -703,7 +704,8 @@ class FetchService:
     ):
         """更新数据源状态"""
         try:
-            await db.update_datasource_status(
+            # 修复：db.update_datasource_status 是同步函数，不需要 await
+            db.update_datasource_status(
                 source_id=source_id,
                 status=status,
                 last_fetch_at=last_fetch_at.isoformat(),

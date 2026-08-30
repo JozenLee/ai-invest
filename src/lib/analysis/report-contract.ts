@@ -403,10 +403,11 @@ export function normalizeMarket(value: unknown): NormalizedMarket {
   // 当前市场分析链路的 index_analysis / indices 是上证指数、深证成指等
   // 市场基准，并非产业指数。历史报告中可能已把它们写入 indices，统一
   // 归入 marketIndices，避免页面将大盘指数误标为产业指数。
+  // index_analysis 包含完整技术指标，优先使用；market_indices 只有基础行情
   const marketIndices = array(
-    raw.market_indices
+    raw.index_analysis
+      ?? raw.market_indices
       ?? raw.marketIndices
-      ?? raw.index_analysis
       ?? raw.indices
       ?? overview.indices,
   ).map(normalizeRow)
@@ -415,7 +416,7 @@ export function normalizeMarket(value: unknown): NormalizedMarket {
     analyzedAt: textValue(raw.analyzed_at ?? raw.analyzedAt),
     periodDays: numberValue(raw.analysis_period_days ?? raw.periodDays),
     etfs,
-    indices: [],
+    indices: marketIndices,  // 使用marketIndices数据填充indices
     marketIndices,
     overview,
     sectorFlow: normalizeSectorFlow(raw.sector_flow ?? raw.sectorFlow),

@@ -15,7 +15,9 @@ export async function GET(request: NextRequest) {
     const sentiment = searchParams.get('sentiment') || undefined
     const sentimentsParam = searchParams.get('sentiments') || undefined
     const sortBy = searchParams.get('sortBy') || 'publishTime'
-    const limit = parseInt(searchParams.get('limit') || '20')
+    // SQLite限制：limit不能超过999，这里设置为500作为安全上限
+    const requestedLimit = parseInt(searchParams.get('limit') || '20')
+    const limit = Math.min(requestedLimit, 500)
     const offset = parseInt(searchParams.get('offset') || '0')
 
     // 新增：产业和Segment筛选

@@ -147,6 +147,10 @@ class IndustryCompanyAnalyzer:
             nodes = self._build_graph_nodes(graph)
             normalized_source = 'etf_holdings' if source in {'etf', 'etf_holdings', 'ETF持仓'} else 'graph'
             companies = self._collect_graph_companies(graph) if normalized_source == 'graph' else self._collect_etf_companies(etf_holdings or {})
+            logger.info(
+                "收集企业列表完成: source=%s, total_companies=%s",
+                normalized_source, len(companies)
+            )
             if normalized_source == 'etf_holdings':
                 companies = self._enrich_company_names(companies, self._collect_graph_companies(graph))
             if not companies:
@@ -159,20 +163,25 @@ class IndustryCompanyAnalyzer:
 
             industry_name = (graph.get("industry") or {}).get("name", industry_id)
 
-            # AI 模式先筛选代表性企业；数据模式保留来源中的全部企业输入，
-            # 不做 AI 筛选、不按代表性截断，确保页面可以核验完整候选集。
-            selected_companies = (
-                await self._select_companies_with_ai(industry_name, companies, normalized_source)
-                if generate_ai_report else companies
-            )
-            company_data = await self._fetch_company_data(selected_companies, analysis_period_days)
+            # 修复：先获取全部企业数据，再筛选AI报告输入
+            # 这样前端可以展示全部企业，并按综合评分排序Top 10
+            company_data = await self._fetch_company_data(companies, analysis_period_days)
             analyzed_companies = self._analyze_companies(company_data)
+            # 计算综合评分和ETF引用数量，用于前端排序和展示
+            analyzed_companies = self._identify_top_companies(analyzed_companies, top_n=len(analyzed_companies))
             segment_analysis = self._build_segment_signals(analyzed_companies)
             self._attach_relative_segment_metrics(analyzed_companies, segment_analysis)
             coverage = self._build_data_coverage(companies, company_data, analyzed_companies)
             coverage["analysis_started_at"] = (datetime.now() - timedelta(days=analysis_period_days)).isoformat()
             coverage["selection_pool_count"] = len(companies)
-            coverage["data_fetch_selected_count"] = len(selected_companies)
+            coverage["data_fetch_selected_count"] = len(companies)
+
+            # AI 模式下，从全部已分析企业中筛选代表性企业用于AI报告生成
+            # 数据模式保留来源中的全部企业输入，不做筛选
+            selected_for_ai = (
+                await self._select_companies_with_ai(industry_name, analyzed_companies, normalized_source)
+                if generate_ai_report else analyzed_companies
+            )
             graph_summary = self._build_graph_summary(graph, nodes, len(companies))
 
             if coverage["companies_with_any_data"] == 0:
@@ -184,7 +193,7 @@ class IndustryCompanyAnalyzer:
                 )
 
             # AI 模式使用财报或公告证据准入；数据模式不以证据条件过滤企业。
-            candidates = self._build_evidence_candidates(analyzed_companies)
+            candidates = self._build_evidence_candidates(selected_for_ai if generate_ai_report else analyzed_companies)
             coverage["report_candidate_count"] = len(candidates)
             coverage["report_evidence_both_count"] = sum(
                 1 for item in candidates
@@ -215,9 +224,10 @@ class IndustryCompanyAnalyzer:
                 )
 
             # 仅展示已解析出企业名称的样本，避免 ETF 持仓源缺少名称时把
-            # “688126.SH”一类证券代码直接作为企业名输出到报告页面。
+            # "688126.SH"一类证券代码直接作为企业名输出到报告页面。
             named_companies = [item for item in analyzed_companies if not self._is_security_code_name(item)]
             named_candidates = [item for item in candidates if not self._is_security_code_name(item)]
+            # AI报告：使用筛选后的企业作为输入；前端展示：返回全部企业供前端排序
             top_companies = named_candidates[:8] if generate_ai_report else named_companies
             coverage["report_selected_count"] = len(top_companies)
             self.last_report_warning = None
@@ -414,11 +424,19 @@ class IndustryCompanyAnalyzer:
                         'etf_exposures': [],
                         'total_etf_weight': 0,
                     }
-                companies[key]['total_etf_weight'] += weight
-                companies[key]['etf_exposures'].append({
-                    'etf_code': etf_code,
-                    'weight': weight,
-                })
+                # 检查该ETF是否已经记录，避免重复计数
+                existing_etf = next((exp for exp in companies[key]['etf_exposures'] if exp['etf_code'] == etf_code), None)
+                if existing_etf:
+                    # 如果该ETF已存在，累加权重（处理同一ETF中的多条记录）
+                    existing_etf['weight'] += weight
+                    companies[key]['total_etf_weight'] += weight
+                else:
+                    # 新的ETF持仓记录
+                    companies[key]['total_etf_weight'] += weight
+                    companies[key]['etf_exposures'].append({
+                        'etf_code': etf_code,
+                        'weight': weight,
+                    })
         return sorted(companies.values(), key=lambda item: item.get('total_etf_weight', 0), reverse=True)
 
     @staticmethod
@@ -576,7 +594,7 @@ class IndustryCompanyAnalyzer:
                 'total_etf_weight': company.get('total_etf_weight'),
                 'etf_exposures': company.get('etf_exposures', [])[:8],
             })
-        prompt = f"""你是产业研究首席分析师。请从“{industry_name}”相关 ETF 的底层持仓企业中筛选{selection_count}家最有代表性的企业，用于后续抓取行情、财报和公告。
+        prompt = f"""你是产业研究首席分析师。请从"{industry_name}"相关 ETF 的底层持仓企业中筛选{selection_count}家最有代表性的企业，用于后续抓取行情、财报和公告。
 
 筛选依据只能使用输入中的企业名称、证券代码和 ETF 持仓占比。优先考虑：被多只 ETF 共同持有、综合持仓占比较高、对当前产业有明确代表性的企业。不得补造企业或行业事实。
 
@@ -685,7 +703,7 @@ class IndustryCompanyAnalyzer:
                 ],
             })
 
-        prompt = f"""你是产业研究首席分析师。请从“{industry_name}”产业图谱企业中筛选{selection_count}家对该领域发展影响力最大的代表性企业，供后续抓取财报、公告和行情。
+        prompt = f"""你是产业研究首席分析师。请从"{industry_name}"产业图谱企业中筛选{selection_count}家对该领域发展影响力最大的代表性企业，供后续抓取财报、公告和行情。
 
 筛选依据只能使用输入中的图谱信息，优先考虑：
 1. 对产业链关键环节、供给能力、技术路线、需求端或竞争格局的影响力；
@@ -780,13 +798,22 @@ class IndustryCompanyAnalyzer:
         period_days: int,
     ) -> List[Dict[str, Any]]:
         """并发获取企业数据，保留单企业和单数据项的失败状态。"""
+        logger.info(
+            "开始并发抓取企业数据: total_companies=%s, max_concurrency=%s, timeout=%ss",
+            len(companies), self.max_concurrency, self.data_timeout_seconds
+        )
         start_date = (datetime.now() - timedelta(days=period_days)).strftime("%Y-%m-%d")
         end_date = datetime.now().strftime("%Y-%m-%d")
         semaphore = asyncio.Semaphore(self.max_concurrency)
+        completed_count = 0
+        lock = asyncio.Lock()
 
         async def fetch_one(company: Dict[str, Any]) -> Dict[str, Any]:
+            nonlocal completed_count
+            company_start = asyncio.get_event_loop().time()
             async with semaphore:
                 symbol = company.get("symbol", "")
+                name = company.get("name", "")
                 if not symbol:
                     return {
                         **company,
@@ -817,21 +844,53 @@ class IndustryCompanyAnalyzer:
                     return_exceptions=True,
                 )
 
+                # 详细日志：查看gather返回的原始结果
+                logger.info(
+                    "gather返回结果 [%s/%s]: %s (%s)",
+                    name, symbol,
+                    {key: f"{type(value).__name__}({len(value) if isinstance(value, list) else 'N/A'})"
+                     for key, value in zip(calls.keys(), results)}
+                )
+
                 data: Dict[str, Any] = {**company, "fetch_errors": {}}
                 for key, value in zip(calls.keys(), results):
                     if isinstance(value, Exception):
                         data[key] = None
-                        data["fetch_errors"][key] = str(value)
+                        error_msg = f"{type(value).__name__}: {str(value)}"
+                        data["fetch_errors"][key] = error_msg
+                        logger.warning("企业数据获取异常 [%s] %s: %s", name, key, error_msg)
                     else:
                         data[key] = value
+                        # 记录成功获取的数据量
+                        if isinstance(value, list):
+                            logger.info("企业数据获取成功 [%s] %s: %d条", name, key, len(value))
+
+                elapsed = asyncio.get_event_loop().time() - company_start
+                async with lock:
+                    completed_count += 1
+                    logger.info(
+                        "企业数据抓取完成 [%d/%d]: %s (%s) 耗时=%.2fs, kline=%d, financial=%d, announcements=%d",
+                        completed_count, len(companies), name, symbol, elapsed,
+                        len(data.get('kline', [])) if isinstance(data.get('kline'), list) else 0,
+                        len(data.get('financial', [])) if isinstance(data.get('financial'), list) else 0,
+                        len(data.get('announcements', [])) if isinstance(data.get('announcements'), list) else 0
+                    )
+
                 return data
 
         tasks = [asyncio.create_task(fetch_one(company)) for company in companies]
         done, pending = await asyncio.wait(tasks, timeout=self.data_timeout_seconds)
+
+        logger.info(
+            "企业数据抓取完成: completed=%s, pending=%s, total=%s, timeout=%ss",
+            len(done), len(pending), len(companies), self.data_timeout_seconds
+        )
+
         if pending:
+            pending_companies = [companies[i].get("name", "未知") for i, task in enumerate(tasks) if task in pending]
             logger.warning(
-                "企业数据抓取达到总预算，返回已完成的部分结果: completed=%s pending=%s timeout_s=%s",
-                len(done), len(pending), self.data_timeout_seconds,
+                "企业数据抓取超时，取消剩余任务: pending_count=%s, timeout_s=%s, pending_companies=%s",
+                len(pending), self.data_timeout_seconds, pending_companies[:10]
             )
             for task in pending:
                 task.cancel()
@@ -859,29 +918,72 @@ class IndustryCompanyAnalyzer:
 
     async def _call_provider(self, method: Any, *args: Any) -> Any:
         """调用 provider，带超时、有限重试和进程内短缓存。"""
-        cache_key = f"{getattr(method, '__name__', 'provider')}:{repr(args)}"
+        method_name = getattr(method, '__name__', 'provider')
+        cache_key = f"{method_name}:{repr(args)}"
         cached = self._provider_cache.get(cache_key)
         if cached and (datetime.now().timestamp() - cached["timestamp"]) < self.cache_ttl_seconds:
-            return cached["value"]
+            value = cached["value"]
+            if isinstance(value, list):
+                logger.debug("_call_provider缓存命中 %s: %d条", method_name, len(value))
+            return value
 
         last_error: Optional[Exception] = None
         for attempt in range(self.provider_retries + 1):
             try:
+                start_time = asyncio.get_event_loop().time()
                 value = await asyncio.wait_for(
                     method(*args),
                     timeout=self.provider_timeout_seconds,
                 )
+                elapsed = asyncio.get_event_loop().time() - start_time
+
                 self._provider_cache[cache_key] = {
                     "timestamp": datetime.now().timestamp(),
                     "value": value,
                 }
+
+                # 详细日志：记录每次Provider调用的结果
+                if isinstance(value, list):
+                    logger.info(
+                        "_call_provider成功 %s(args=%s): %d条, 耗时=%.2fs",
+                        method_name, args[0] if args else 'N/A', len(value), elapsed
+                    )
+                elif value is None:
+                    logger.warning(
+                        "_call_provider返回None %s(args=%s): 耗时=%.2fs",
+                        method_name, args[0] if args else 'N/A', elapsed
+                    )
+                else:
+                    logger.info(
+                        "_call_provider成功 %s(args=%s): type=%s, 耗时=%.2fs",
+                        method_name, args[0] if args else 'N/A', type(value).__name__, elapsed
+                    )
                 return value
+            except asyncio.TimeoutError as error:
+                last_error = error
+                logger.warning(
+                    "_call_provider超时 %s(args=%s): attempt=%d/%d, timeout=%ds",
+                    method_name, args[0] if args else 'N/A',
+                    attempt + 1, self.provider_retries + 1, self.provider_timeout_seconds
+                )
+                if attempt < self.provider_retries:
+                    await asyncio.sleep(0.25 * (attempt + 1))
             except Exception as error:
                 last_error = error
+                logger.warning(
+                    "_call_provider异常 %s(args=%s): %s: %s, attempt=%d/%d",
+                    method_name, args[0] if args else 'N/A',
+                    type(error).__name__, str(error)[:100],
+                    attempt + 1, self.provider_retries + 1
+                )
                 if attempt < self.provider_retries:
                     await asyncio.sleep(0.25 * (attempt + 1))
 
-        raise last_error or RuntimeError("provider调用失败")
+        logger.error(
+            "_call_provider最终失败 %s(args=%s): %s",
+            method_name, args[0] if args else 'N/A', last_error
+        )
+        raise last_error or RuntimeError(f"provider调用失败: {method_name}")
 
     @staticmethod
     def _build_report_candidates(analyzed_companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -948,7 +1050,7 @@ class IndustryCompanyAnalyzer:
                 "announcements": announcements[:6],
             })
 
-        prompt = f"""你是产业研究首席分析师。请从“{industry_name}”的候选企业中筛选6到8家头部企业，用于后续企业发展趋势报告。
+        prompt = f"""你是产业研究首席分析师。请从"{industry_name}"的候选企业中筛选6到8家头部企业，用于后续企业发展趋势报告。
 
 筛选优先级：
 1. 企业在产业链中的关键位置、业务影响力和代表性；
@@ -1084,9 +1186,27 @@ class IndustryCompanyAnalyzer:
             ).strip()
             if resolved_name == symbol:
                 resolved_name = str(info.get("name") or info.get("名称") or info.get("股票名称") or resolved_name).strip()
-            kline = self._sort_time_series(company.get("kline") or [], descending=False)
-            financial = self._sort_time_series(company.get("financial") or [], descending=True)
-            announcements = company.get("announcements")
+
+            # 追踪原始数据
+            raw_kline = company.get("kline") or []
+            raw_financial = company.get("financial") or []
+            raw_announcements = company.get("announcements") or []
+            logger.info(
+                "企业原始数据 [%s]: kline=%d, financial=%d, announcements=%d",
+                resolved_name, len(raw_kline) if isinstance(raw_kline, list) else 0,
+                len(raw_financial) if isinstance(raw_financial, list) else 0,
+                len(raw_announcements) if isinstance(raw_announcements, list) else 0
+            )
+
+            kline = self._sort_time_series(raw_kline, descending=False)
+            financial = self._sort_time_series(raw_financial, descending=True)
+            announcements = raw_announcements
+
+            # 追踪排序后数据
+            logger.info(
+                "企业排序后数据 [%s]: kline=%d, financial=%d",
+                resolved_name, len(kline), len(financial)
+            )
             prices = [
                 self._to_float(
                     row.get("收盘")
@@ -1126,6 +1246,13 @@ class IndustryCompanyAnalyzer:
 
             financial_metrics = self._build_financial_metrics(financial)
             announcement_rows = announcements if isinstance(announcements, list) else []
+
+            # 追踪公告过滤过程
+            logger.info(
+                "企业公告处理 [%s]: announcement_rows=%d",
+                resolved_name, len(announcement_rows)
+            )
+
             important_announcements = [
                 row for row in announcement_rows
                 if self._is_official_announcement(row)
@@ -1136,6 +1263,13 @@ class IndustryCompanyAnalyzer:
                 item for item in normalized_announcements
                 if item.get("evidence_kind") in {"official_filing", "company_ir", "exchange_announcement", "media_article"}
             ]
+
+            # 追踪公告过滤结果
+            logger.info(
+                "企业公告过滤 [%s]: normalized=%d, evidence=%d",
+                resolved_name, len(normalized_announcements), len(announcement_evidence)
+            )
+
             official_announcements = [item for item in announcement_evidence if item.get("evidence_kind") != "media_article"]
             # 投资信号只使用正式公告；媒体报道保留为外部参考，不参与公告方向判断。
             announcement_signal = self._build_announcement_signal(official_announcements)
@@ -1190,7 +1324,8 @@ class IndustryCompanyAnalyzer:
                         "latest_financial_period": financial_metrics.get("latest_period"),
                         "latest_announcement_date": normalized_announcements[0].get("date") if normalized_announcements else None,
                     },
-                    "announcement_count": len(official_announcements),
+                    # 公告数量应统计所有证据类型，不只是official_announcements
+                    "announcement_count": len(announcement_evidence),
                     "important_announcements": len(important_announcements),
                     "announcement_samples": official_announcements[:5],
                     "latest_announcement_samples": announcement_evidence[:5],
@@ -1205,8 +1340,21 @@ class IndustryCompanyAnalyzer:
                     "data_availability": availability,
                     "fetch_errors": company.get("fetch_errors") or {},
                     "data_points_available": data_points,
+                    # ETF引用数据
+                    "etf_exposures": company.get("etf_exposures", []),
+                    "total_etf_weight": company.get("total_etf_weight", 0),
+                    "etf_reference_count": len(company.get("etf_exposures", [])),
                 }
             )
+
+        # 过滤掉无效名称的企业（None、空字符串、"none"、"未命名企业"等）
+        analyzed = [
+            company for company in analyzed
+            if company.get("name")
+            and str(company.get("name")).strip().lower() not in ["none", "null", "未命名企业", ""]
+            and company.get("name") != company.get("symbol")  # 排除名称=代码的企业
+        ]
+
         return analyzed
 
     @staticmethod
@@ -1447,60 +1595,224 @@ class IndustryCompanyAnalyzer:
         return round((latest - previous) / abs(previous) * 100, 2)
 
     def _identify_top_companies(self, analyzed_companies: List[Dict[str, Any]], top_n: int = 10) -> List[Dict[str, Any]]:
+        """
+        优化后的企业排序评分系统 (v3 - 资金认可度优先)
+
+        评分体系 (总分100):
+        - 资金认可度: 40分 (ETF引用数量30 + 持仓权重10) ⭐ 核心指标
+        - 行业影响力: 25分 (营收规模10 + 市场地位8 + 产业链位置7)
+        - 基本面质量: 20分 (盈利能力10 + 成长性7 + 现金流3)
+        - 市场表现: 10分 (区间涨幅7 + 稳定性3)
+        - 成长潜力: 5分 (公告信号)
+
+        设计理念：
+        被多个ETF共同选为Top 10持仓，说明该企业在领域内具有广泛的资金认可度，
+        这比单一维度的财务指标或市场表现更能体现其在领域中的核心地位。
+        """
+        # 先统计ETF引用数量的分布，用于计算相对得分
+        etf_reference_counts = [c.get("etf_reference_count", 0) for c in analyzed_companies]
+        max_etf_ref = max(etf_reference_counts) if etf_reference_counts else 1
+
         for company in analyzed_companies:
+            # 新评分体系
             score_breakdown = {
-                "representativeness": self._calculate_representativeness(company),
-                "market": None,
-                "financial": None,
-                "announcement": None,
-                "stability": None,
+                "capital_recognition": 0,      # 资金认可度 (40分) ⭐ 最重要
+                "industry_influence": 0,       # 行业影响力 (25分)
+                "fundamentals": 0,             # 基本面质量 (20分)
+                "market_performance": 0,       # 市场表现 (10分)
+                "growth_potential": 0,         # 成长潜力 (5分)
                 "data_completeness": round(company.get("data_points_available", 0) / 3 * 10, 1),
             }
-            price_change = company["price_metrics"].get("price_change_pct")
-            latest_change = company["price_metrics"].get("latest_change_pct")
-            primary_change = latest_change if latest_change is not None else price_change
-            if primary_change is not None:
-                daily_score = 30 if primary_change > 2 else 20 if primary_change > 0.5 else 10 if primary_change >= 0 else 0
-                period_bonus = 5 if price_change is not None and price_change > 10 else 0
-                score_breakdown["market"] = min(30, daily_score + period_bonus)
 
+            # 1. 资金认可度评分 (40分) ⭐ 核心指标
+            capital_score = 0
+
+            # 1.1 ETF引用数量评分 (30分) - 被多少个ETF持有
+            etf_ref_count = company.get("etf_reference_count", 0)
+            if max_etf_ref > 0 and etf_ref_count > 0:
+                # 基于相对排名的非线性评分，突出头部企业
+                ref_ratio = etf_ref_count / max_etf_ref
+                if ref_ratio >= 0.8:  # 被80%以上的顶级ETF持有
+                    capital_score += 30
+                elif ref_ratio >= 0.6:  # 被60%-80%的ETF持有
+                    capital_score += 25
+                elif ref_ratio >= 0.4:  # 被40%-60%的ETF持有
+                    capital_score += 20
+                elif ref_ratio >= 0.2:  # 被20%-40%的ETF持有
+                    capital_score += 15
+                else:  # 被少于20%的ETF持有
+                    capital_score += max(5, ref_ratio * 30)
+
+            # 1.2 ETF持仓权重评分 (10分) - 在持有企业的ETF中的平均权重
+            total_etf_weight = company.get("total_etf_weight", 0)
+            if total_etf_weight > 0 and etf_ref_count > 0:
+                avg_weight = total_etf_weight / etf_ref_count  # 平均每个ETF的持仓占比
+                if avg_weight > 3:  # 平均占比超过3%
+                    capital_score += 10
+                elif avg_weight > 2:
+                    capital_score += 8
+                elif avg_weight > 1:
+                    capital_score += 6
+                elif avg_weight > 0.5:
+                    capital_score += 4
+                else:
+                    capital_score += 2
+
+            score_breakdown["capital_recognition"] = round(capital_score, 1)
+
+            # 2. 行业影响力评分 (25分)
+            influence_score = 0
+
+            # 2.1 营收规模评分 (10分) - 基于行业分位数
+            # 2.1 营收规模评分 (10分) - 基于行业分位数
+            revenue = company.get("financial_metrics", {}).get("revenue")
+            if revenue is not None and revenue > 0:
+                revenues = [c.get("financial_metrics", {}).get("revenue", 0)
+                           for c in analyzed_companies
+                           if c.get("financial_metrics", {}).get("revenue") is not None and c.get("financial_metrics", {}).get("revenue") > 0]
+
+                if revenues:
+                    revenues_sorted = sorted(revenues, reverse=True)
+                    try:
+                        rank_index = revenues_sorted.index(revenue)
+                        percentile = (rank_index + 1) / len(revenues_sorted)
+
+                        if percentile <= 0.1:  # Top 10%
+                            influence_score += 10
+                        elif percentile <= 0.25:  # Top 25%
+                            influence_score += 8
+                        elif percentile <= 0.5:  # Top 50%
+                            influence_score += 5
+                        else:
+                            influence_score += 3
+                    except ValueError:
+                        influence_score += 3
+
+            # 2.2 市场地位评分 (8分)
+            position = str(company.get("market_position", "")).strip().lower()
+            position_score = {
+                "leader": 8, "头部": 8, "龙头": 8,
+                "major": 6, "主要": 6, "核心": 6,
+                "emerging": 3, "新兴": 3, "相关": 1,
+            }.get(position, 0)
+            influence_score += position_score
+
+            # 2.3 产业链位置评分 (7分)
+            refs = company.get("node_refs", [])
+            segments = {ref.get("segment_name") for ref in refs if isinstance(ref, dict) and ref.get("segment_name")}
+            coverage_score = min(7, len(segments) * 2)
+            influence_score += coverage_score
+
+            score_breakdown["industry_influence"] = round(influence_score, 1)
+
+            # 3. 基本面质量评分 (20分)
+            fundamentals_score = 0
             financial = company.get("financial_metrics", {})
+
+            # 3.1 盈利能力评分 (10分) - 使用净利率估算
+            net_profit = financial.get("net_profit")
+            revenue_value = financial.get("revenue")
+            if net_profit is not None and revenue_value is not None and revenue_value > 0:
+                net_margin = (net_profit / revenue_value) * 100
+                if net_margin > 15:
+                    fundamentals_score += 10
+                elif net_margin > 10:
+                    fundamentals_score += 8
+                elif net_margin > 5:
+                    fundamentals_score += 5
+                elif net_margin > 0:
+                    fundamentals_score += 3
+
+            # 3.2 成长性评分 (7分)
             revenue_growth = financial.get("revenue_growth")
             profit_growth = financial.get("profit_growth")
-            cash_flow = financial.get("operating_cash_flow")
             growth_is_comparable = financial.get("growth_basis") not in (None, "无法确认")
-            growth_score = ((20 if revenue_growth is not None and revenue_growth > 20 else 10 if revenue_growth is not None and revenue_growth > 10 else 0) + (20 if profit_growth is not None and profit_growth > 20 else 10 if profit_growth is not None and profit_growth > 10 else 0)) if growth_is_comparable else 0
-            cash_flow_score = 5 if cash_flow is not None and cash_flow > 0 else 0
-            score_breakdown["financial"] = min(40, growth_score + cash_flow_score)
 
-            volatility = company["price_metrics"].get("volatility")
-            max_drawdown = company["price_metrics"].get("max_drawdown")
-            if company["price_metrics"].get("quote_data_points", 0) >= 20 and volatility is not None and max_drawdown is not None:
-                score_breakdown["stability"] = 20 if volatility < 30 and max_drawdown < 20 else 10 if volatility < 50 and max_drawdown < 30 else 0
+            if growth_is_comparable:
+                if revenue_growth is not None and profit_growth is not None:
+                    if revenue_growth > 30 and profit_growth > 30:
+                        fundamentals_score += 7
+                    elif revenue_growth > 20 or profit_growth > 20:
+                        fundamentals_score += 5
+                    elif revenue_growth > 10 or profit_growth > 10:
+                        fundamentals_score += 3
 
-            announcement_signal = company.get("announcement_signal") or {}
-            announcement_score = float(announcement_signal.get("score") or 0)
-            score_breakdown["announcement"] = round(max(0, min(10, 5 + announcement_score * 2)), 1) if company.get("announcement_count", 0) else 0
+            # 3.3 现金流质量评分 (3分)
+            cash_flow = financial.get("operating_cash_flow")
+            if cash_flow is not None and net_profit is not None and net_profit > 0:
+                cf_ratio = cash_flow / net_profit if net_profit != 0 else 0
+                if cf_ratio > 1:
+                    fundamentals_score += 3
+                elif cf_ratio > 0.5:
+                    fundamentals_score += 2
+                elif cf_ratio > 0:
+                    fundamentals_score += 1
+            elif cash_flow is not None and cash_flow > 0:
+                fundamentals_score += 1
 
-            available_scores = [value for key, value in score_breakdown.items() if key != "data_completeness" and value is not None]
-            # 代表性分与四项表现分不能叠加出超过 100 的“伪满分”。
-            # 评分用于排序和解释，不应被页面误读为收益预测。
-            score = min(100, sum(available_scores))
+            score_breakdown["fundamentals"] = round(fundamentals_score, 1)
+
+            # 4. 市场表现评分 (10分)
+            market_score = 0
+            price_metrics = company.get("price_metrics", {})
+            price_change = price_metrics.get("price_change_pct")
+
+            if price_change is not None:
+                # 区间涨幅 (7分)
+                if price_change > 20:
+                    market_score += 7
+                elif price_change > 10:
+                    market_score += 5
+                elif price_change > 0:
+                    market_score += 3
+                elif price_change > -10:
+                    market_score += 1
+
+                # 稳定性 (3分)
+                volatility = price_metrics.get("volatility")
+                if volatility is not None:
+                    if volatility < 30:
+                        market_score += 3
+                    elif volatility < 50:
+                        market_score += 2
+                    elif volatility < 70:
+                        market_score += 1
+
+            score_breakdown["market_performance"] = round(market_score, 1)
+
+            # 5. 成长潜力评分 (5分)
+            growth_score = 0
+            announcement_signal = company.get("announcement_signal", {})
+            announcement_score_raw = float(announcement_signal.get("score", 0))
+            if company.get("announcement_count", 0) > 0:
+                growth_score = min(5, max(0, 2.5 + announcement_score_raw * 2.5))
+
+            score_breakdown["growth_potential"] = round(growth_score, 1)
+
+            # 计算总分
+            available_scores = [v for k, v in score_breakdown.items() if k != "data_completeness" and v is not None]
+            score = sum(available_scores)
+
+            # 保留旧字段以兼容前端
             company["score_breakdown"] = score_breakdown
-            company["representativeness_score"] = score_breakdown["representativeness"]
-            company["representativeness_basis"] = self._representativeness_basis(company)
-            company["fundamental_score"] = round((score_breakdown["financial"] or 0) + (score_breakdown["announcement"] or 0), 1)
-            company["market_score"] = score_breakdown["market"]
+            company["representativeness_score"] = score_breakdown["industry_influence"]
+            company["representativeness_basis"] = self._representativeness_basis_v2(company, score_breakdown)
+            company["fundamental_score"] = round(score_breakdown["fundamentals"] + score_breakdown["growth_potential"], 1)
+            company["market_score"] = score_breakdown["market_performance"]
             company["overall_score"] = round(score, 1) if available_scores else None
             company["composite_score"] = company["overall_score"]
             company["score_confidence"] = round(company.get("data_points_available", 0) / 3, 2)
             company["confidence_grade"] = "高" if company["score_confidence"] >= 0.75 else "中" if company["score_confidence"] >= 0.5 else "低"
             company["risk_adjusted_score"] = round(score * (0.7 + company["score_confidence"] * 0.3), 1) if available_scores else None
+
             latest_change = company["price_metrics"].get("latest_change_pct")
             announcement_direction = (company.get("announcement_signal") or {}).get("direction")
             company["investment_signal"] = self._build_investment_signal(
                 company, growth_is_comparable, latest_change, announcement_direction,
             )
+
+            # 添加ETF引用数量（用于前端展示）
+            company["etf_reference_count"] = company.get("etf_reference_count", 0)
 
         ranked = sorted(
             analyzed_companies,
@@ -1508,7 +1820,7 @@ class IndustryCompanyAnalyzer:
             reverse=True,
         )
 
-        # 对“AI算力硬件”图谱中的外围应用节点降级为补充样本：终端视觉/应用公司可以保留在完整企业清单，
+        # 对"AI算力硬件"图谱中的外围应用节点降级为补充样本：终端视觉/应用公司可以保留在完整企业清单，
         # 但不能因为市场地位高就挤占核心芯片、设备、服务器和数据中心企业的重点观察位。
         core_ranked = [item for item in ranked if not any(
             str(ref.get("segment_code") or "").lower() in {"edge_applications", "ai_applications"}
@@ -1612,6 +1924,41 @@ class IndustryCompanyAnalyzer:
         return "；".join(details)
 
     @staticmethod
+    def _representativeness_basis_v2(company: Dict[str, Any], score_breakdown: Dict[str, Any]) -> str:
+        """优化后的企业影响力描述（v2评分体系）"""
+        details = []
+
+        # 营收规模
+        revenue = company.get("financial_metrics", {}).get("revenue")
+        if revenue is not None and revenue > 0:
+            revenue_billion = revenue / 1_000_000_000
+            details.append(f"营收{revenue_billion:.0f}亿")
+
+        # 市场地位
+        position = company.get("market_position")
+        if position and position != "未标注":
+            details.append(f"市场地位={position}")
+
+        # 产业链覆盖
+        refs = company.get("node_refs") or []
+        segments = {ref.get("segment_name") for ref in refs if isinstance(ref, dict) and ref.get("segment_name")}
+        if segments:
+            details.append(f"覆盖环节={len(segments)}个")
+
+        # ETF认可度
+        etf_weight = company.get("total_etf_weight", 0)
+        if etf_weight > 0:
+            details.append(f"ETF持仓{etf_weight:.1f}%")
+
+        # 成长性
+        financial = company.get("financial_metrics", {})
+        revenue_growth = financial.get("revenue_growth")
+        if revenue_growth is not None and revenue_growth > 20:
+            details.append(f"营收增长{revenue_growth:.0f}%")
+
+        return "；".join(details) if details else "数据不足"
+
+    @staticmethod
     def _build_data_coverage(
         companies: List[Dict[str, Any]],
         company_data: List[Dict[str, Any]],
@@ -1685,14 +2032,14 @@ class IndustryCompanyAnalyzer:
 
 {context}
 
-报告只允许基于所选企业证据，形成对“{industry_name}领域方向”的综合判断。禁止逐家罗列企业卡片，也不要把企业名称、评分、营收增速和公告标题简单堆叠。必须回答：企业经营与竞争变化如何传导到领域方向，哪些关键公告/财报改变或验证了领域判断，证据之间是否存在分化。
+报告只允许基于所选企业证据，形成对"{industry_name}领域方向"的综合判断。禁止逐家罗列企业卡片，也不要把企业名称、评分、营收增速和公告标题简单堆叠。必须回答：企业经营与竞争变化如何传导到领域方向，哪些关键公告/财报改变或验证了领域判断，证据之间是否存在分化。
 
 可靠性规则（必须遵守）：
-1. 只能使用输入中的企业、日期、指标和公告标题；缺失值统一写“暂无”，禁止补造。
+1. 只能使用输入中的企业、日期、指标和公告标题；缺失值统一写"暂无"，禁止补造。
 2. 重点企业名单已由 AI 基于企业影响力、财报时效性和证据可用性筛选。只引用最能改变领域判断的代表性企业，不逐家重复企业卡片；需要覆盖至少一个需求端、供给端或基础设施端的对比证据。
 3. 财报增长必须标注口径；利润增速不能直接等同于盈利质量提升，需提示现金流验证限制。
-4. 只把正式公告或输入中明确标注的公告样本作为公告判断依据；公告主题必须解释其对需求、供给、竞争或资本开支的可能影响，并标注“已验证/待验证”。
-5. 每个结论必须完成“事实证据 → 领域影响 → 投资含义”的推导；如果证据不足，明确写“暂不判断”，不能用评分替代分析。
+4. 只把正式公告或输入中明确标注的公告样本作为公告判断依据；公告主题必须解释其对需求、供给、竞争或资本开支的可能影响，并标注"已验证/待验证"。
+5. 每个结论必须完成"事实证据 → 领域影响 → 投资含义"的推导；如果证据不足，明确写"暂不判断"，不能用评分替代分析。
 6. 趋势分析中要同时写出支持方向的证据、反向或分化证据，以及下一步验证重点。投资建议必须给出明确操作：增加、持有、降低风险或暂不新增，并说明适用条件。
 
 报告使用 Markdown，必须包含且只允许包含以下三个部分：
@@ -1700,9 +2047,9 @@ class IndustryCompanyAnalyzer:
 ## 一、趋势判断
 以领域为单位总结 2-4 条趋势。每条包含：经营/竞争事实、关键财报或公告证据、对领域方向的影响、证据分化或待验证点。不要逐家企业复述。
 ## 二、关注重点
-列出 3-6 个最重要的验证事项，按“需要验证什么—为什么影响领域方向—验证后如何改变判断”表达，不要复制风险清单。
+列出 3-6 个最重要的验证事项，按"需要验证什么—为什么影响领域方向—验证后如何改变判断"表达，不要复制风险清单。
 ## 三、投资建议结论
-基于趋势分析给出明确的领域级投资操作建议。必须说明：建议动作、适用标的/环节、支持理由、反向风险、执行触发条件和失效条件。禁止只写“关注、观察、等待”等无条件结论。
+基于趋势分析给出明确的领域级投资操作建议。必须说明：建议动作、适用标的/环节、支持理由、反向风险、执行触发条件和失效条件。禁止只写"关注、观察、等待"等无条件结论。
 """
 
             def generate() -> Any:

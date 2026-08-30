@@ -50,6 +50,14 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Neo4j local data (keep structure, ignore data)
+data/neo4j/data/
+data/neo4j/logs/
+data/neo4j/plugins/
+
+# Backups
+backups/
+
 # database
 *.db
 *.db-journal
@@ -85,5 +93,6 @@ data-service/__pycache__/
 .xhs-mcp/
 /cookies.json
 /logs/
+/.runtime/
 
 /src/generated/prisma

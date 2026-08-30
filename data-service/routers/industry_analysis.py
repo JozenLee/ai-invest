@@ -402,16 +402,28 @@ async def get_industry_news(
                 },
             }
 
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "stage": "news",
-                "error_code": "NEWS_GRAPH_DATA_UNAVAILABLE",
-                "message": "资讯分析失败：产业图谱未返回已标注新闻，拒绝使用关键词规则兜底",
-                "industry_id": industry_id,
-                "industry_name": industry_name,
-            },
+        # 当没有已标注资讯时，返回空数组而不是报错
+        logger.warning(
+            "产业图谱未返回已标注新闻: industry_id=%s industry_name=%s",
+            industry_id,
+            industry_name,
         )
+        return {
+            "success": True,
+            "industry_id": industry_id,
+            "industry_name": industry_name,
+            "total": 0,
+            "news": [],
+            "source": "knowledge_graph_news",
+            "report_mode": "ai" if generate_ai_report else "data",
+            "input_data_completeness": {
+                "mode": "ai" if generate_ai_report else "data",
+                "full_input_preserved": True,
+                "status": "empty",
+                "returned_rows": 0,
+                "warning": "产业图谱未返回已标注新闻",
+            },
+        }
 
     except HTTPException:
         raise

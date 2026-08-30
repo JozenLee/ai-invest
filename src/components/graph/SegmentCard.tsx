@@ -39,27 +39,44 @@ interface SegmentCardProps {
 
 export function SegmentCard({ segment, onCompanyClick, initialMatchResult }: SegmentCardProps) {
   const [isExpanded, setIsExpanded] = useState(false)
-  const [matchedETFs, setMatchedETFs] = useState<ETFMatch[]>(initialMatchResult?.etfs || [])
-  const [matchedIndices, setMatchedIndices] = useState<IndexMatch[]>(initialMatchResult?.indices || [])
+
+  // 优先使用segment自带的ETF数据（从数据库读取），其次使用实时匹配结果
+  const segmentEtfs = segment.matchedEtfs || []
+  const segmentIndices = segment.matchedIndices || []
+
+  const [matchedETFs, setMatchedETFs] = useState<ETFMatch[]>(
+    segmentEtfs.length > 0 ? segmentEtfs : (initialMatchResult?.etfs || [])
+  )
+  const [matchedIndices, setMatchedIndices] = useState<IndexMatch[]>(
+    segmentIndices.length > 0 ? segmentIndices : (initialMatchResult?.indices || [])
+  )
   const [showETFs, setShowETFs] = useState(false)
   const [showIndices, setShowIndices] = useState(false)
   const hasCompanies = segment.companies.length > 0
 
-  // 当接收到新的匹配结果时更新状态
+  // 当segment数据或匹配结果更新时，更新状态
   useEffect(() => {
-    if (initialMatchResult?.etfs) {
+    // 优先使用segment自带的数据
+    if (segmentEtfs.length > 0) {
+      setMatchedETFs(segmentEtfs)
+      setShowETFs(true)
+    } else if (initialMatchResult?.etfs) {
       setMatchedETFs(initialMatchResult.etfs)
       if (initialMatchResult.etfs.length > 0) {
         setShowETFs(true)
       }
     }
-    if (initialMatchResult?.indices) {
+
+    if (segmentIndices.length > 0) {
+      setMatchedIndices(segmentIndices)
+      setShowIndices(true)
+    } else if (initialMatchResult?.indices) {
       setMatchedIndices(initialMatchResult.indices)
       if (initialMatchResult.indices.length > 0) {
         setShowIndices(true)
       }
     }
-  }, [initialMatchResult])
+  }, [segment, initialMatchResult, segmentEtfs.length, segmentIndices.length])
 
   return (
     <Card className="bg-slate-50">

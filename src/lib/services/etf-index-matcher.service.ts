@@ -96,6 +96,12 @@ class ETFIndexMatcherService {
         matchIndex ? etfIndexFetcher.getIndexList({ forceRefresh }) : Promise.resolve([]),
       ])
 
+      console.log(`[ETF匹配] 节点: ${nodeName}`)
+      console.log(`[ETF匹配] 获取到 ${etfList.length} 个ETF, ${indexList.length} 个指数`)
+      if (etfList.length > 0) {
+        console.log(`[ETF匹配] ETF样例:`, etfList.slice(0, 5).map(e => `${e.ticker}-${e.name}`))
+      }
+
       // 关键词初筛
       const etfCandidates = matchETF
         ? keywordMatcher.filterByKeywords(nodeName, etfList, {
@@ -111,9 +117,14 @@ class ETFIndexMatcherService {
           })
         : []
 
+      console.log(`[ETF匹配] 关键词初筛结果: ${etfCandidates.length} 个ETF候选, ${indexCandidates.length} 个指数候选`)
+      if (etfCandidates.length > 0) {
+        console.log(`[ETF匹配] ETF候选:`, etfCandidates.slice(0, 3).map(e => `${e.ticker}-${e.name} (score=${e.matchScore.toFixed(2)})`))
+      }
+
       // 如果关键词筛选后没有候选项，直接返回
       if (etfCandidates.length === 0 && indexCandidates.length === 0) {
-        console.log(`节点 ${nodeName} 没有匹配的候选项`)
+        console.log(`[ETF匹配] 节点 ${nodeName} 没有匹配的候选项`)
         return {
           nodeId,
           nodeName,

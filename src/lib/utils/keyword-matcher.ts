@@ -14,38 +14,76 @@ export class KeywordMatcher {
    * 匹配节点名称与ETF/指数名称
    */
   match(nodeName: string, targetName: string, keywords?: string[]): MatchResult {
-    const nodeTokens = this.tokenize(nodeName)
-    const targetTokens = this.tokenize(targetName)
-    const keywordTokens = keywords ? keywords.flatMap(k => this.tokenize(k)) : []
-
-    const allTokens = [...nodeTokens, ...keywordTokens]
     const matchedKeywords: string[] = []
-    let matchCount = 0
+    let score = 0
 
-    // 检查直接匹配
-    for (const token of allTokens) {
-      if (targetName.includes(token)) {
-        matchedKeywords.push(token)
-        matchCount++
+    // 提取节点中的核心关键词（2-4个字的词）
+    const coreKeywords = this.extractCoreKeywords(nodeName)
+
+    // 检查核心关键词是否在目标名称中
+    for (const keyword of coreKeywords) {
+      if (targetName.includes(keyword)) {
+        matchedKeywords.push(keyword)
+        // 根据关键词长度给予不同权重：越长的词匹配权重越高
+        score += keyword.length >= 3 ? 0.4 : 0.3
       }
     }
 
-    // 检查模糊匹配（同义词、相似词）
+    // 检查同义词匹配
     const synonyms = this.getSynonyms(nodeName)
     for (const synonym of synonyms) {
       if (targetName.includes(synonym)) {
         matchedKeywords.push(synonym)
-        matchCount += 0.5
+        score += 0.3
       }
     }
 
-    // 计算匹配得分
-    const score = Math.min(matchCount / Math.max(allTokens.length, 1), 1)
+    // 检查用户提供的额外关键词
+    if (keywords && keywords.length > 0) {
+      for (const keyword of keywords) {
+        if (targetName.includes(keyword)) {
+          matchedKeywords.push(keyword)
+          score += 0.3
+        }
+      }
+    }
+
+    // 限制最高分数为1.0
+    score = Math.min(score, 1.0)
 
     return {
       score,
       matchedKeywords: [...new Set(matchedKeywords)],
     }
+  }
+
+  /**
+   * 提取核心关键词（去除无意义的短词）
+   */
+  private extractCoreKeywords(text: string): string[] {
+    const cleaned = text.replace(/[^一-龥a-zA-Z0-9]/g, '')
+    const keywords = new Set<string>()
+
+    // 提取2-4个字的词
+    for (let len = 4; len >= 2; len--) {
+      for (let i = 0; i <= cleaned.length - len; i++) {
+        const keyword = cleaned.substring(i, i + len)
+        // 过滤掉一些常见的无意义组合
+        if (!this.isStopWord(keyword)) {
+          keywords.add(keyword)
+        }
+      }
+    }
+
+    return Array.from(keywords)
+  }
+
+  /**
+   * 判断是否为停用词或无意义词
+   */
+  private isStopWord(word: string): boolean {
+    const stopWords = ['设计', '制造', '生产', '系统', '服务', '应用', '技术', '产品', '设备', '建设', '运营', '管理']
+    return stopWords.includes(word)
   }
 
   /**
@@ -103,17 +141,28 @@ export class KeywordMatcher {
    */
   private getSynonyms(text: string): string[] {
     const synonymMap: Record<string, string[]> = {
-      '芯片': ['半导体', '集成电路', 'IC'],
+      '芯片': ['半导体', '集成电路', 'IC', 'AI芯片'],
       '半导体': ['芯片', '集成电路', 'IC'],
       'AI': ['人工智能', '智能'],
       '人工智能': ['AI', '智能'],
-      '算力': ['计算', '云计算'],
-      '新能源': ['光伏', '风电', '电池'],
-      '汽车': ['整车', '车辆'],
-      '电池': ['储能', '动力电池'],
+      '算力': ['计算', '云计算', '数据中心'],
+      '服务器': ['算力', '云计算'],
+      '数据中心': ['算力', '云计算', '服务器'],
+      '云计算': ['算力', '数据中心', '服务器'],
+      '封装': ['半导体', '芯片'],
+      '存储': ['内存', '芯片'],
+      '网络': ['通信', '5G', '互联'],
+      '通信': ['网络', '5G'],
+      '5G': ['通信', '网络'],
+      '光模块': ['通信', '网络'],
+      '新能源': ['光伏', '风电', '电池', '新能源车'],
+      '汽车': ['整车', '车辆', '新能源车'],
+      '电池': ['储能', '动力电池', '新能源'],
+      '动力电池': ['电池', '新能源', '新能源车'],
+      '整车': ['汽车', '新能源车'],
+      '充电': ['新能源车', '电池'],
       '材料': ['新材料'],
       '设备': ['装备', '器械'],
-      '通信': ['5G', '网络'],
       '医药': ['医疗', '生物医药', '制药'],
     }
 

@@ -1,61 +1,47 @@
 #!/bin/bash
-# 知识图谱与资讯流联动 - 停止服务脚本
+# 停止所有服务
 
 echo "=========================================="
-echo "停止 AI投资分析系统服务"
+echo "停止 AI投资分析系统 服务"
 echo "=========================================="
 echo ""
 
-if command -v pm2 >/dev/null 2>&1; then
-    pm2 delete ai-invest-web-dev 2>/dev/null || true
+# 停止 Next.js
+echo "1️⃣  停止 Next.js..."
+if lsof -ti:3000 > /dev/null 2>&1; then
+    lsof -ti:3000 | xargs kill -9
+    echo "   ✓ 已停止"
+else
+    echo "   - 未运行"
 fi
 
-# 颜色定义
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m' # No Color
-
-# 从 PID 文件读取进程 ID
-if [ -f "logs/data-service.pid" ]; then
-    DATA_SERVICE_PID=$(cat logs/data-service.pid)
-    echo -n "停止数据服务 (PID: $DATA_SERVICE_PID) ... "
-    if kill $DATA_SERVICE_PID 2>/dev/null; then
-        echo -e "${GREEN}✓${NC}"
-    else
-        echo -e "${RED}✗ 进程不存在${NC}"
-    fi
-    rm -f logs/data-service.pid
+# 停止 Python 数据服务
+echo ""
+echo "2️⃣  停止 Python 数据服务..."
+if lsof -ti:8000 > /dev/null 2>&1; then
+    lsof -ti:8000 | xargs kill -9
+    echo "   ✓ 已停止"
+else
+    echo "   - 未运行"
 fi
 
-if [ -f "logs/nextjs.pid" ]; then
-    NEXTJS_PID=$(cat logs/nextjs.pid)
-    echo -n "停止 Next.js 服务 (PID: $NEXTJS_PID) ... "
-    if kill $NEXTJS_PID 2>/dev/null; then
-        echo -e "${GREEN}✓${NC}"
-    else
-        echo -e "${RED}✗ 进程不存在${NC}"
+# 停止 Neo4j (可选)
+echo ""
+echo "3️⃣  Neo4j 状态..."
+if docker ps | grep -q ai-invest-neo4j; then
+    echo "   ℹ️  Neo4j 仍在运行 (数据持久化，可保持运行)"
+    read -p "   是否停止 Neo4j? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        docker-compose stop neo4j
+        echo "   ✓ 已停止"
     fi
-    rm -f logs/nextjs.pid
-fi
-
-# 如果 PID 文件不存在，尝试通过端口查找进程
-if [ ! -f "logs/data-service.pid" ] && [ ! -f "logs/nextjs.pid" ]; then
-    echo "未找到 PID 文件，尝试通过端口查找进程..."
-
-    # 查找端口 8000 (Python 服务)
-    PID_8000=$(lsof -ti:8000)
-    if [ -n "$PID_8000" ]; then
-        echo -n "停止端口 8000 的进程 ... "
-        kill $PID_8000 2>/dev/null && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}"
-    fi
-
-    # 查找端口 3000 (Next.js)
-    PID_3000=$(lsof -ti:3000)
-    if [ -n "$PID_3000" ]; then
-        echo -n "停止端口 3000 的进程 ... "
-        kill $PID_3000 2>/dev/null && echo -e "${GREEN}✓${NC}" || echo -e "${RED}✗${NC}"
-    fi
+else
+    echo "   - 未运行"
 fi
 
 echo ""
-echo -e "${GREEN}✓ 服务已停止${NC}"
+echo "=========================================="
+echo "✅ 服务已停止"
+echo "=========================================="
+echo ""

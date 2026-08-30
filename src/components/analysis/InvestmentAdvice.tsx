@@ -153,7 +153,7 @@ export function InvestmentAdvice() {
   const [moduleCount, setModuleCount] = useState(5)
   const [riskTolerance, setRiskTolerance] = useState('balanced')
   const [investmentHorizon, setInvestmentHorizon] = useState('short')
-  const [companySource, setCompanySource] = useState('etf_holdings')
+  const [companySource, setCompanySource] = useState('graph')
   const [aiModules, setAiModules] = useState<Record<ModuleKey, boolean>>(DEFAULT_AI_MODULES)
   const [steps, setSteps] = useState(initialSteps)
   const [running, setRunning] = useState(false)
@@ -218,6 +218,10 @@ export function InvestmentAdvice() {
           setReport(event.report)
           setHistory((current) => [event.report!, ...current.filter((item) => item.id !== event.report!.id)])
         }
+        if (event.type === 'complete') {
+          // Pipeline 完成，确保最后一次报告已设置
+          // 如果前面的 'report' 事件已经设置了 report，这里不会覆盖
+        }
         if (event.type === 'pipeline_error') {
           setError(event.error || '分析链路异常，请根据标红步骤定位')
           if (event.stepId) {
@@ -232,7 +236,22 @@ export function InvestmentAdvice() {
         for (const line of lines) handleEvent(line)
       }
       buffer += decoder.decode()
-      handleEvent(buffer)
+      if (buffer.trim()) handleEvent(buffer)
+
+      // 流读取完成后，如果没有报告但也没有错误，尝试重新获取最新报告
+      if (!report && !error) {
+        try {
+          const response = await fetch(`/api/analysis/reports?industryId=${encodeURIComponent(selectedIndustry)}&type=comprehensive&limit=1`)
+          const data = await response.json()
+          const reports = Array.isArray(data.reports) ? data.reports : Array.isArray(data) ? data : []
+          if (reports.length > 0) {
+            setReport(reports[0])
+            setHistory((current) => [reports[0], ...current.filter((item) => item.id !== reports[0].id)])
+          }
+        } catch {
+          // 静默失败，不影响主流程
+        }
+      }
     } catch (runError) { setError(runError instanceof Error ? runError.message : '分析失败，请重试') } finally { setRunning(false) }
   }
 

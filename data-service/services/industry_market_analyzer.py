@@ -806,6 +806,24 @@ class IndustryMarketAnalyzer:
             period_days=period_days
         )
 
+        # 并行获取所有ETF的持仓数据
+        logger.info(f"📊 Fetching holdings for {len(etf_codes)} ETFs...")
+        holdings_tasks = []
+        for code in etf_codes:
+            holdings_tasks.append(self._fetch_etf_holdings(code))
+
+        holdings_results = await asyncio.gather(*holdings_tasks, return_exceptions=True)
+        holdings_map = {}
+        for code, result in zip(etf_codes, holdings_results):
+            if isinstance(result, Exception):
+                logger.warning(f"Failed to fetch holdings for {code}: {result}")
+                holdings_map[code] = []
+            else:
+                holdings_map[code] = result or []
+
+        holdings_count = sum(len(h) for h in holdings_map.values())
+        logger.info(f"✅ Retrieved holdings for {len([h for h in holdings_map.values() if h])} ETFs, total {holdings_count} stocks")
+
         # 转换为旧格式以兼容现有分析逻辑
         etf_data = []
         for etf in etf_list:
@@ -830,18 +848,19 @@ class IndustryMarketAnalyzer:
                 })
 
             history_quality = self._validate_etf_history(kline)
+            code = etf["code"]
             etf_data.append({
-                "code": etf["code"],
+                "code": code,
                 "info": {
                     "基金简称": etf["name"],
-                    "基金代码": etf["code"],
+                    "基金代码": code,
                 },
                 "market_value": etf.get("market_value"),
                 "shares": etf.get("shares"),
                 "amount": etf.get("amount"),
                 "volume": etf.get("volume"),
                 "kline": kline,
-                "holdings": [],  # 暂不获取持仓数据
+                "holdings": holdings_map.get(code, []),  # 使用并行获取的持仓数据
                 "is_fallback": etf.get("history_fallback", False),
                 "source": etf.get("source", "unknown"),
                 "history_quality": history_quality,
@@ -849,6 +868,32 @@ class IndustryMarketAnalyzer:
 
         logger.info(f"✅ Retrieved {len(etf_data)} ETFs successfully")
         return etf_data
+
+    async def _fetch_etf_holdings(self, code: str) -> List[Dict[str, Any]]:
+        """获取单个ETF的持仓数据（仅Top 10）"""
+        try:
+            from providers.etf_provider import ETFProvider
+            etf_provider = ETFProvider()
+            holdings = await asyncio.wait_for(
+                etf_provider.get_holdings(code),
+                timeout=30.0  # 30秒超时
+            )
+            # 只返回前10个持仓，按市值排序
+            if holdings:
+                # 尝试按市值排序，如果市值不可用则保持原顺序
+                sorted_holdings = sorted(
+                    holdings,
+                    key=lambda x: float(x.get('market_value') or 0),
+                    reverse=True
+                )
+                return sorted_holdings[:10]  # 只保留Top 10
+            return []
+        except asyncio.TimeoutError:
+            logger.warning(f"Timeout fetching holdings for ETF {code}")
+            return []
+        except Exception as e:
+            logger.warning(f"Error fetching holdings for ETF {code}: {e}")
+            return []
 
     @staticmethod
     def _validate_etf_history(kline: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1078,6 +1123,7 @@ class IndustryMarketAnalyzer:
                     "data_points": len(closes),
                     "is_fallback": is_fallback,
                     "holdings_count": len(etf.get('holdings', [])),
+                    "underlying_holdings": etf.get('holdings', []),  # 保留ETF持仓数据供前端使用
                     "history_quality": etf.get("history_quality") or {"valid": True, "flags": []},
                     "data_quality_source": "数据源" if (etf.get("history_quality") or {}).get("flags") else None,
                     "source": etf.get("source", "unknown"),
@@ -1607,6 +1653,8 @@ class IndustryMarketAnalyzer:
         # 添加ETF特有字段（如果存在）
         if "holdings_count" in flat_data:
             result["holdings_count"] = flat_data.get("holdings_count")
+        if "underlying_holdings" in flat_data:
+            result["underlying_holdings"] = flat_data.get("underlying_holdings")
 
         # 添加指数特有字段（如果存在）
         if "source" in flat_data:

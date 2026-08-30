@@ -644,7 +644,7 @@ function NewsPanel({ payload, news, dataOnly = false }: { payload: RecordValue; 
   return <div className="space-y-5"><Card><CardHeader><SectionHeading icon={Newspaper} title="资讯与产业链影响" description={dataOnly ? '展示原始资讯、情绪与标签，不生成资讯结论。' : '先读资讯结论，再按利好、中立、利空快速浏览近期样本。'} badge={`${rows.length} 条样本`} /></CardHeader><CardContent className="space-y-5"><div className="grid gap-3 sm:grid-cols-4"><StatCard label="资讯样本" value={`${rows.length} 条`} detail="当前报告纳入" /><StatCard label="利好" value={`${positive} 条`} detail="基于情绪字段" toneClass="text-rose-600" /><StatCard label="中立" value={`${neutral} 条`} detail="基于情绪字段" /><StatCard label="利空" value={`${negative} 条`} detail="基于情绪字段" toneClass="text-emerald-600" /></div>{!dataOnly && <div className="rounded-xl border bg-background/70 p-4"><div className="mb-3 flex items-center gap-2 text-sm font-semibold"><FileText className="h-4 w-4 text-primary" />资讯结论</div><ReportMarkdown value={insight} fallback={buildNewsFallback(payload, news)} /></div>}</CardContent></Card><Card><CardHeader><SectionHeading icon={Database} title="近期资讯样本" description="仅保留标题与中文产业链标签，按情绪聚类展示，减少阅读干扰。" /></CardHeader><CardContent className="space-y-4">{groupedRows.map((group) => <section key={group.key} aria-labelledby={`news-group-${group.key}`}><div className="mb-2 flex items-center gap-2"><h3 id={`news-group-${group.key}`} className={`text-sm font-semibold ${group.toneClass}`}>{group.label}</h3><Badge variant={group.badgeVariant} className="h-5 px-1.5 text-[11px]">{group.count}</Badge></div>{group.items.length > 0 ? <div className="divide-y rounded-lg border bg-background/60">{group.items.map((row, index) => { const segments = newsSegmentLabels(row); return <article key={`${display(row.id || row.title, index)}`} className="flex min-h-12 items-center gap-3 px-3 py-2.5 transition-colors hover:bg-muted/20"><h4 className="min-w-0 flex-1 truncate text-sm font-medium" title={display(row.title, '未命名资讯')}>{display(row.title, '未命名资讯')}</h4><div className="hidden shrink-0 items-center gap-1.5 sm:flex">{segments.slice(0, 3).map((segment, segmentIndex) => <Badge key={`${segment}-${segmentIndex}`} variant="secondary" className="font-normal">{segment}</Badge>)}</div>{Boolean(row.url) && <a href={String(row.url)} target="_blank" rel="noreferrer" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label={`打开资讯：${display(row.title, '资讯')}`}><ExternalLink className="h-3.5 w-3.5" /></a>}</article> })}</div> : <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">暂无{group.label}资讯</div>}</section>)}{rows.length === 0 && <EmptyState text="暂无可用资讯样本" />}</CardContent></Card></div>
 }
 
-function CompanyPanel({ company, companies, dataOnly = false, referenceDate }: { company: RecordValue; companies: unknown[]; dataOnly?: boolean; referenceDate?: string }) {
+function CompanyPanel({ company, companies, dataOnly = false, referenceDate, companySource }: { company: RecordValue; companies: unknown[]; dataOnly?: boolean; referenceDate?: string; companySource?: string }) {
   const samples = companies.map(asRecord)
   const reportText = String(company.trend_report || company.trendReport || '')
   const trendJudgment = display(company.trend_judgment || company.trendJudgment, extractMarkdownSection(reportText, '## 一、趋势判断') || extractMarkdownSection(reportText, '### 2. 产业趋势判断') || extractMarkdownSection(reportText, '### 3. 核心判断') || extractMarkdownSection(reportText, '## 一、核心结论') || '暂无趋势判断')
@@ -660,14 +660,31 @@ function CompanyPanel({ company, companies, dataOnly = false, referenceDate }: {
     const number = numberValue(value)
     return number == null ? '暂无' : number.toLocaleString('zh-CN', { maximumFractionDigits: 2 })
   }
+  const formatEtfReferenceCount = (count: unknown): string => {
+    const num = numberValue(count)
+    if (num == null || num === 0) return '暂无ETF持有'
+    return `被 ${num} 个ETF持有`
+  }
+
+  // 筛选Top 10核心企业（按overall_score排序）
+  const coreSamples = [...samples]
+    .filter(item => numberValue(item.overall_score) != null)
+    .sort((a, b) => (numberValue(b.overall_score) ?? 0) - (numberValue(a.overall_score) ?? 0))
+    .slice(0, 10)
+
+  // 全部企业也按综合评分排序
+  const allSamplesSorted = [...samples]
+    .sort((a, b) => (numberValue(b.overall_score) ?? 0) - (numberValue(a.overall_score) ?? 0))
+
   return <div className="space-y-5">
-    <Card>
+    {/* 新增：核心企业Top 10 */}
+    {coreSamples.length > 0 && <Card className="border-primary/30 bg-primary/[0.04]">
       <CardHeader>
-        <SectionHeading icon={Building2} title="重点企业" description="按企业逐一查看最新财报、趋势状态和入选逻辑。" badge={samples.length + ' 家'} />
+        <SectionHeading icon={Building2} title="核心企业 Top 10" description="按营收规模、盈利能力、公告影响、ETF引用和行情表现综合排序的核心企业，作为AI分析的重点输入" badge={coreSamples.length + ' 家'} />
       </CardHeader>
       <CardContent>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {samples.map((item, index) => {
+          {coreSamples.map((item, index) => {
             const refs = asArray(item.node_refs).map(asRecord)
             const financial = asRecord(item.financial_metrics)
             const signal = asRecord(item.investment_signal)
@@ -675,15 +692,162 @@ function CompanyPanel({ company, companies, dataOnly = false, referenceDate }: {
             const announcements = asArray(item.latest_announcement_samples || item.announcement_samples).map(asRecord).slice(0, 2)
             const financialPeriod = display(financial.latest_period, '暂无')
             const staleFinancial = isStaleFinancialPeriod(financialPeriod, referenceDate || '')
-            return <a key={display(item.symbol || item.id || item.name, index)} href={'#company-' + display(item.symbol || item.id || index)} className="rounded-xl border bg-muted/10 p-4 transition-colors hover:border-primary/50 hover:bg-muted/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-              <div className="flex items-start justify-between gap-3"><div><h3 className="font-semibold">{display(item.name, '名称缺失')}</h3><div className="mt-1 text-xs text-muted-foreground">{display(item.symbol, '暂无代码')}</div></div>{dataOnly ? <Badge variant="outline">数据快照</Badge> : <Badge variant={display(signal.stance) === '积极观察' ? 'destructive' : 'outline'} className={stanceTone(signal.stance)}>{display(signal.stance, '暂不判断')}</Badge>}</div>
+            const overallScore = numberValue(item.overall_score)
+            const anchorId = 'company-' + display(item.symbol || item.id || index)
+            return <div key={display(item.symbol || item.id || item.name, index)} className="rounded-xl border-2 border-primary/20 bg-gradient-to-br from-primary/5 to-transparent p-4 transition-all hover:border-primary/40 hover:shadow-md">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-bold">#{index + 1}</Badge>
+                    <a href={'#' + anchorId} className="font-semibold hover:text-primary transition-colors">{display(item.name, '名称缺失')}</a>
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">{display(item.symbol, '暂无代码')}</div>
+                </div>
+                {overallScore != null && <div className="shrink-0 text-right">
+                  <div className="text-xs text-muted-foreground">综合评分</div>
+                  <div className="text-lg font-bold text-primary">{overallScore.toFixed(1)}</div>
+                </div>}
+              </div>
+              <div className="mt-3 text-xs text-muted-foreground">{display(refs[0]?.segment_name, '未标注环节')}</div>
+              <div className="mt-3 grid grid-cols-2 gap-3 border-y py-3 text-xs"><Metric label="最新财报期" value={financialPeriod} toneClass={staleFinancial ? 'text-amber-600' : 'text-foreground'} /><Metric label="增长口径" value={display(financial.growth_basis, '无法确认')} /><Metric label="营收" value={formatAmount(financial.revenue)} /><Metric label="净利润" value={formatAmount(financial.net_profit)} /><Metric label="营收增速" value={formatPercent(financial.revenue_growth)} toneClass={tone(financial.revenue_growth)} /><Metric label="净利润增速" value={formatPercent(financial.profit_growth)} toneClass={tone(financial.profit_growth)} /></div>
+              <div className="mt-3 grid grid-cols-2 gap-3 text-xs"><Metric label="最新行情" value={formatPercent(price.latest_change_pct ?? price.price_change_pct)} toneClass={tone(price.latest_change_pct ?? price.price_change_pct)} /><Metric label="行情日期" value={display(price.latest_date, '暂无')} /><Metric label="最新公告" value={display(announcements[0]?.date, '暂无')} /><Metric label="公告数量" value={display(item.announcement_count, '0')} /></div>
+              {!dataOnly && companySource === 'etf_holdings' && <div className="mt-3 text-xs leading-5"><div className="font-medium text-foreground">引用数量</div><p className="mt-1 text-muted-foreground">{formatEtfReferenceCount(item.etf_reference_count)}</p></div>}
+              {/* 评分明细 */}
+              {(() => {
+                const breakdown = asRecord(item.score_breakdown || {})
+                const hasNewScores = breakdown.industry_influence != null || breakdown.fundamentals != null
+                const hasOldScores = breakdown.representativeness != null || breakdown.financial != null
+                if (!hasNewScores && !hasOldScores) return null
+
+                const scoreItems = hasNewScores ? [
+                  { label: '行业影响力', value: breakdown.industry_influence, max: 35 },
+                  { label: '基本面质量', value: breakdown.fundamentals, max: 35 },
+                  { label: '市场表现', value: breakdown.market_performance, max: 15 },
+                  { label: '成长潜力', value: breakdown.growth_potential, max: 10 },
+                  { label: '资金认可', value: breakdown.capital_recognition, max: 5 },
+                ] : [
+                  { label: '代表性', value: breakdown.representativeness, max: 78 },
+                  { label: '市场', value: breakdown.market, max: 30 },
+                  { label: '财报', value: breakdown.financial, max: 40 },
+                  { label: '公告', value: breakdown.announcement, max: 10 },
+                  { label: '稳定性', value: breakdown.stability, max: 20 },
+                ]
+
+                return <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-2.5">
+                  <div className="text-xs font-medium text-foreground mb-2 flex items-center justify-between">
+                    <span>评分明细</span>
+                    {overallScore != null && <span className="text-primary font-semibold">总分: {overallScore.toFixed(1)}</span>}
+                  </div>
+                  <div className="space-y-1.5">
+                    {scoreItems.filter(item => numberValue(item.value) != null && numberValue(item.value)! > 0).map((item, idx) => {
+                      const val = numberValue(item.value)!
+                      const percentage = (val / item.max) * 100
+                      return <div key={idx} className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground w-16 shrink-0">{item.label}</span>
+                        <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-primary transition-all" style={{ width: `${percentage}%` }}></div>
+                        </div>
+                        <span className="text-[10px] font-medium tabular-nums w-12 text-right">{val.toFixed(1)}/{item.max}</span>
+                      </div>
+                    })}
+                  </div>
+                </div>
+              })()}
+              {announcements.length > 0 && <div className="mt-3 space-y-1.5 border-t pt-3 text-xs"><div className="font-medium">最新公告</div>{announcements.map((announcement, announcementIndex) => {
+                const url = announcement.url || announcement['详情链接']
+                return <div key={`${display(announcement.date, announcementIndex)}-${announcementIndex}`} className="flex gap-2 text-muted-foreground items-center"><span className="shrink-0 tabular-nums">{display(announcement.date, '日期未知')}</span><span className="flex-1 line-clamp-1">{display(announcement.title, '未命名公告')}</span>{url && <a href={String(url)} target="_blank" rel="noreferrer" className="shrink-0 text-primary hover:text-primary/80" aria-label="查看公告详情"><ExternalLink className="h-3 w-3" /></a>}</div>
+              })}</div>}
+            </div>
+          })}
+        </div>
+      </CardContent>
+    </Card>}
+
+    {/* 现有：全部企业 */}
+    <Card>
+      <CardHeader>
+        <SectionHeading icon={Building2} title="全部企业" description="按综合评分排序的完整企业列表，查看最新财报、趋势状态和引用情况。" badge={samples.length + ' 家'} />
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {allSamplesSorted.map((item, index) => {
+            const refs = asArray(item.node_refs).map(asRecord)
+            const financial = asRecord(item.financial_metrics)
+            const signal = asRecord(item.investment_signal)
+            const price = asRecord(item.price_metrics)
+            const announcements = asArray(item.latest_announcement_samples || item.announcement_samples).map(asRecord).slice(0, 2)
+            const financialPeriod = display(financial.latest_period, '暂无')
+            const staleFinancial = isStaleFinancialPeriod(financialPeriod, referenceDate || '')
+            const overallScore = numberValue(item.overall_score)
+            const anchorId = 'company-' + display(item.symbol || item.id || index)
+            return <div key={display(item.symbol || item.id || item.name, index)} id={anchorId} className="rounded-xl border bg-muted/10 p-4 transition-colors hover:border-primary/50 hover:bg-muted/20">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <a href={'#' + anchorId} className="font-semibold hover:text-primary transition-colors">{display(item.name, '名称缺失')}</a>
+                  <div className="mt-1 text-xs text-muted-foreground">{display(item.symbol, '暂无代码')}</div>
+                </div>
+                <div className="shrink-0 text-right">
+                  {overallScore != null ? (
+                    <>
+                      <div className="text-xs text-muted-foreground">综合评分</div>
+                      <div className="text-lg font-semibold text-primary">{overallScore.toFixed(1)}</div>
+                    </>
+                  ) : (
+                    <Badge variant={display(signal.stance) === '积极观察' ? 'destructive' : 'outline'} className={stanceTone(signal.stance)}>{display(signal.stance, '暂不判断')}</Badge>
+                  )}
+                </div>
+              </div>
               <div className="mt-3 text-xs text-muted-foreground">{display(refs[0]?.segment_name, '未标注环节')}</div>
               <div className="mt-3 grid grid-cols-2 gap-3 border-y py-3 text-xs"><Metric label="最新财报期" value={financialPeriod} toneClass={staleFinancial ? 'text-amber-600' : 'text-foreground'} /><Metric label="增长口径" value={display(financial.growth_basis, '无法确认')} /><Metric label="营收" value={formatAmount(financial.revenue)} /><Metric label="净利润" value={formatAmount(financial.net_profit)} /><Metric label="营收增速" value={formatPercent(financial.revenue_growth)} toneClass={tone(financial.revenue_growth)} /><Metric label="净利润增速" value={formatPercent(financial.profit_growth)} toneClass={tone(financial.profit_growth)} /></div>
               <div className="mt-3 grid grid-cols-2 gap-3 text-xs"><Metric label="最新行情" value={formatPercent(price.latest_change_pct ?? price.price_change_pct)} toneClass={tone(price.latest_change_pct ?? price.price_change_pct)} /><Metric label="行情日期" value={display(price.latest_date, '暂无')} /><Metric label="最新公告" value={display(announcements[0]?.date, '暂无')} /><Metric label="公告数量" value={display(item.announcement_count, '0')} /></div>
               {staleFinancial && <p className="mt-3 rounded-md border border-amber-300/60 bg-amber-50/60 px-2.5 py-2 text-xs text-amber-800 dark:border-amber-800/60 dark:bg-amber-950/20 dark:text-amber-200">财报期距今超过一年，请复核数据源或重新生成报告。</p>}
-              {announcements.length > 0 && <div className="mt-3 space-y-1.5 border-t pt-3 text-xs"><div className="font-medium">最新公告</div>{announcements.map((announcement, announcementIndex) => <div key={`${display(announcement.date, announcementIndex)}-${announcementIndex}`} className="flex gap-2 text-muted-foreground"><span className="shrink-0 tabular-nums">{display(announcement.date, '日期未知')}</span><span className="line-clamp-1">{display(announcement.title, '未命名公告')}</span></div>)}</div>}
-              {!dataOnly && <div className="mt-3 text-xs leading-5"><div className="font-medium text-foreground">入选逻辑</div><p className="mt-1 line-clamp-4 text-muted-foreground">{normalizeSelectionReason(item.ai_selection_reason)}</p></div>}
-            </a>
+              {/* 评分明细 */}
+              {(() => {
+                const breakdown = asRecord(item.score_breakdown || {})
+                const hasNewScores = breakdown.industry_influence != null || breakdown.fundamentals != null
+                const hasOldScores = breakdown.representativeness != null || breakdown.financial != null
+                if (!hasNewScores && !hasOldScores) return null
+
+                const scoreItems = hasNewScores ? [
+                  { label: '行业影响力', value: breakdown.industry_influence, max: 35 },
+                  { label: '基本面质量', value: breakdown.fundamentals, max: 35 },
+                  { label: '市场表现', value: breakdown.market_performance, max: 15 },
+                  { label: '成长潜力', value: breakdown.growth_potential, max: 10 },
+                  { label: '资金认可', value: breakdown.capital_recognition, max: 5 },
+                ] : [
+                  { label: '代表性', value: breakdown.representativeness, max: 78 },
+                  { label: '市场', value: breakdown.market, max: 30 },
+                  { label: '财报', value: breakdown.financial, max: 40 },
+                  { label: '公告', value: breakdown.announcement, max: 10 },
+                  { label: '稳定性', value: breakdown.stability, max: 20 },
+                ]
+
+                return <div className="mt-3 rounded-md border border-primary/20 bg-primary/5 p-2.5">
+                  <div className="text-xs font-medium text-foreground mb-2 flex items-center justify-between">
+                    <span>评分明细</span>
+                    {overallScore != null && <span className="text-primary font-semibold">总分: {overallScore.toFixed(1)}</span>}
+                  </div>
+                  <div className="space-y-1.5">
+                    {scoreItems.filter(item => numberValue(item.value) != null && numberValue(item.value)! > 0).map((item, idx) => {
+                      const val = numberValue(item.value)!
+                      const percentage = (val / item.max) * 100
+                      return <div key={idx} className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground w-16 shrink-0">{item.label}</span>
+                        <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
+                          <div className="h-full bg-primary transition-all" style={{ width: `${percentage}%` }}></div>
+                        </div>
+                        <span className="text-[10px] font-medium tabular-nums w-12 text-right">{val.toFixed(1)}/{item.max}</span>
+                      </div>
+                    })}
+                  </div>
+                </div>
+              })()}
+              {announcements.length > 0 && <div className="mt-3 space-y-1.5 border-t pt-3 text-xs"><div className="font-medium">最新公告</div>{announcements.map((announcement, announcementIndex) => {
+                const url = announcement.url || announcement['详情链接']
+                return <div key={`${display(announcement.date, announcementIndex)}-${announcementIndex}`} className="flex gap-2 text-muted-foreground items-center"><span className="shrink-0 tabular-nums">{display(announcement.date, '日期未知')}</span><span className="flex-1 line-clamp-1">{display(announcement.title, '未命名公告')}</span>{url && <a href={String(url)} target="_blank" rel="noreferrer" className="shrink-0 text-primary hover:text-primary/80" aria-label="查看公告详情"><ExternalLink className="h-3 w-3" /></a>}</div>
+              })}</div>}
+              {!dataOnly && <div className="mt-3 text-xs leading-5"><div className="font-medium text-foreground">引用数量</div><p className="mt-1 text-muted-foreground">{formatEtfReferenceCount(item.etf_reference_count)}</p></div>}
+            </div>
           })}
         </div>
       </CardContent>
@@ -878,7 +1042,8 @@ export default function ComprehensiveReportPage() {
   } as unknown as RecordValue
   const etfs = normalizedMarket.etfs
   const news = normalizedNews.items
-  const companies = normalizedCompany.topCompanies
+  // 修复：使用summaries而不是topCompanies，展示全部企业而不只是AI筛选的8家
+  const companies = normalizedCompany.summaries
   const holdings = normalizedPortfolio.holdings
   const recommendations = asArray(advice.recommendations) as Recommendation[]
   const holdingValue = normalizedPortfolio.totalValue - normalizedPortfolio.cashBalance
@@ -924,7 +1089,7 @@ export default function ComprehensiveReportPage() {
       {selectedTabs.includes('overview') && <TabsContent value="overview"><div ref={(node) => { tabRefs.current.overview = node }} className="min-w-0">{aiReportGenerated ? <OverviewPanel report={report} advice={advice} recommendations={recommendations} quality={displayQuality} modules={modules} /> : <DataOnlyOverviewPanel report={report} modules={modules} selectedTabs={selectedTabs} />}</div></TabsContent>}
       {selectedTabs.includes('market') && <TabsContent value="market"><div ref={(node) => { tabRefs.current.market = node }} className="min-w-0"><MarketPanel market={market} marketSnapshot={normalizedMarket} etfs={etfs} dataOnly={!aiReportGenerated} /></div></TabsContent>}
       {selectedTabs.includes('news') && <TabsContent value="news"><div ref={(node) => { tabRefs.current.news = node }} className="min-w-0"><NewsPanel payload={newsPayload} news={news} dataOnly={!aiReportGenerated} /></div></TabsContent>}
-      {selectedTabs.includes('company') && <TabsContent value="company"><div ref={(node) => { tabRefs.current.company = node }} className="min-w-0"><CompanyPanel company={company} companies={companies} dataOnly={!aiReportGenerated} referenceDate={report.createdAt} /></div></TabsContent>}
+      {selectedTabs.includes('company') && <TabsContent value="company"><div ref={(node) => { tabRefs.current.company = node }} className="min-w-0"><CompanyPanel company={company} companies={companies} dataOnly={!aiReportGenerated} referenceDate={report.createdAt} companySource={report.company?.company_source} /></div></TabsContent>}
       {selectedTabs.includes('portfolio') && <TabsContent value="portfolio"><div ref={(node) => { tabRefs.current.portfolio = node }} className="min-w-0"><PortfolioPanel portfolio={portfolio} holdings={holdings} holdingValue={holdingValue} /></div></TabsContent>}
     </Tabs>
   </main>

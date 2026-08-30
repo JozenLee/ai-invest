@@ -29,6 +29,20 @@ export interface Segment {
   description?: string
   keyCategories?: string[]
   companies: Company[]
+  // ETF/指数匹配结果
+  matchedEtfs?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+  matchedIndices?: Array<{
+    code: string
+    name: string
+    relevance: number
+    reasoning: string
+  }>
+  lastMatchedAt?: string
 }
 
 export interface Company {

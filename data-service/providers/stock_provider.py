@@ -92,7 +92,12 @@ class StockProvider:
             财报数据列表
         """
         if market == 'cn':
-            return await self._get_tushare_financial_report(symbol, report_type)
+            # 优先使用 Tushare，失败时降级到 AKShare
+            tushare_data = await self._get_tushare_financial_report(symbol, report_type)
+            if tushare_data:
+                return tushare_data
+            # 降级到 AKShare
+            return await self._get_akshare_financial_report(symbol, report_type)
         return await self.openbb.get_financial_report(symbol, report_type, market)
 
     async def get_announcements(
@@ -115,9 +120,11 @@ class StockProvider:
             公告列表
         """
         if market == 'cn':
-            tushare_rows = await self._get_tushare_announcements(symbol, start_date, end_date)
-            if tushare_rows:
-                return tushare_rows
+            # 优先使用AKShare获取公告，Tushare anns_d接口不稳定
+            akshare_rows = await self._get_akshare_announcements(symbol, start_date, end_date)
+            if akshare_rows:
+                return akshare_rows
+            # 降级到东方财富
             return await self._get_eastmoney_announcements(symbol, start_date, end_date)
         return await self.openbb.get_announcements(symbol, start_date, end_date, market)
 
@@ -190,7 +197,7 @@ class StockProvider:
             df = ak.stock_individual_info_em(symbol=symbol)
             if df.empty:
                 return {}
-            # AKShare 返回的是“item/value”纵表，旧逻辑只取第一行，导致 PE/PB 等字段全部被丢弃。
+            # AKShare 返回的是"item/value"纵表，旧逻辑只取第一行，导致 PE/PB 等字段全部被丢弃。
             if {'item', 'value'}.issubset({str(column).lower() for column in df.columns}):
                 columns = {str(column).lower(): column for column in df.columns}
                 return {
@@ -244,11 +251,19 @@ class StockProvider:
             # 现金流和盈利能力字段；income 成功时再合并收入与净利润。
             try:
                 indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+                if indicator is None or indicator.empty:
+                    self.logger.info("Tushare fina_indicator返回空 %s", symbol)
+                else:
+                    self.logger.info("Tushare fina_indicator成功 %s: %d条", symbol, len(indicator))
             except Exception as error:
                 self.logger.info("Tushare fina_indicator 获取失败 %s: %s", symbol, error)
                 indicator = None
             try:
                 statement = await self.tushare.request_dataframe(endpoint, ts_code=ts_code)
+                if statement is None or statement.empty:
+                    self.logger.info("Tushare %s返回空 %s", endpoint, symbol)
+                else:
+                    self.logger.info("Tushare %s成功 %s: %d条", endpoint, symbol, len(statement))
             except Exception as error:
                 self.logger.info("Tushare %s 补充失败 %s: %s", endpoint, symbol, error)
                 statement = None
@@ -258,12 +273,105 @@ class StockProvider:
                 if frame is None or frame.empty:
                     continue
                 for row in frame.to_dict('records'):
-                    period = str(row.get('end_date') or row.get('ann_date') or '')
+                    # Tushare的end_date格式为YYYYMMDD，需要转换为YYYY-MM-DD
+                    period_raw = str(row.get('end_date') or row.get('ann_date') or '')
+                    if period_raw and len(period_raw) == 8 and period_raw.isdigit():
+                        # 格式化为 YYYY-MM-DD
+                        period = f"{period_raw[:4]}-{period_raw[4:6]}-{period_raw[6:8]}"
+                    else:
+                        period = period_raw
                     key = period or f"row-{len(rows_by_period)}"
                     rows_by_period.setdefault(key, {}).update(row)
             return [self._normalize_financial_row(row) for row in rows_by_period.values()]
         except Exception as error:
             self.logger.warning("Tushare财报失败 %s: %s", symbol, error)
+            return []
+
+    async def _get_akshare_financial_report(
+        self,
+        symbol: str,
+        report_type: str,
+    ) -> List[Dict[str, Any]]:
+        """通过 AKShare 获取 A 股财报数据。"""
+        if ak is None:
+            return []
+
+        def load() -> List[Dict[str, Any]]:
+            try:
+                stock_code = symbol.split('.')[0]
+                # AKShare 的 stock_financial_abstract 获取财务摘要
+                df = ak.stock_financial_abstract(symbol=stock_code)
+                if df is None or df.empty:
+                    return []
+
+                # 转换为统一格式
+                normalized: List[Dict[str, Any]] = []
+                for row in df.to_dict('records'):
+                    # AKShare 返回的字段可能是中文
+                    normalized_row = {
+                        '报告期': str(row.get('报告期') or row.get('date') or ''),
+                        '营业收入': self._to_number(row.get('营业收入') or row.get('revenue')),
+                        '净利润': self._to_number(row.get('净利润') or row.get('net_profit')),
+                        '报告类型': 'AKShare',
+                        'source': 'akshare',
+                    }
+                    normalized.append(normalized_row)
+                return normalized
+            except Exception as error:
+                self.logger.warning("AKShare财报获取失败 %s: %s", symbol, error)
+                return []
+
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as error:
+            self.logger.warning("AKShare财报获取失败 %s: %s", symbol, error)
+            return []
+
+    async def _get_akshare_announcements(
+        self,
+        symbol: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        """通过 AKShare 获取 A 股公告数据。"""
+        if ak is None:
+            return []
+
+        def load() -> List[Dict[str, Any]]:
+            try:
+                # AKShare 的 stock_notice_report 获取个股公告
+                df = ak.stock_notice_report(symbol=symbol.split('.')[0])
+                if df is None or df.empty:
+                    return []
+
+                normalized: List[Dict[str, Any]] = []
+                for row in df.to_dict('records'):
+                    date = str(row.get('公告日期') or row.get('date') or '')[:10]
+                    if start_date and date and date < start_date:
+                        continue
+                    if end_date and date and date > end_date:
+                        continue
+                    title = row.get('公告标题') or row.get('title') or ''
+                    if not title:
+                        continue
+                    normalized.append({
+                        '公告标题': str(title),
+                        '公告日期': date,
+                        '网址': row.get('网址') or row.get('url') or '',
+                        'title': str(title),
+                        'date': date,
+                        'url': row.get('网址') or row.get('url') or '',
+                        'source': 'akshare',
+                    })
+                return normalized
+            except Exception as error:
+                # AKShare 可能没有该股票的数据，这不是错误
+                return []
+
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as error:
+            self.logger.warning("AKShare公告获取失败 %s: %s", symbol, error)
             return []
 
     async def _get_eastmoney_announcements(
@@ -407,18 +515,35 @@ class StockProvider:
                 params['end_date'] = self._tushare_date(end_date)
             try:
                 frame = await self.tushare.request_dataframe('anns_d', **params)
-            except Exception:
+            except Exception as e1:
                 # 兼容只接受 ann_date 的旧 Promax 网关；范围查询优先，避免
-                # 只查分析截止日而把整个窗口误判为“无公告”。
-                ann_date = self._latest_business_date(end_date)
-                frame = await self.tushare.request_dataframe('anns_d', ts_code=ts_code, ann_date=ann_date)
+                # 只查分析截止日而把整个窗口误判为"无公告"。
+                self.logger.info("Tushare anns_d范围查询失败 %s: %s, 尝试单日查询", symbol, e1)
+                try:
+                    ann_date = self._latest_business_date(end_date)
+                    frame = await self.tushare.request_dataframe('anns_d', ts_code=ts_code, ann_date=ann_date)
+                except Exception as e2:
+                    self.logger.warning("Tushare anns_d单日查询也失败 %s: %s", symbol, e2)
+                    return []
             if frame is None or frame.empty:
+                self.logger.info("Tushare anns_d返回空数据 %s", symbol)
                 return []
+
+            def format_date(value: Any) -> str:
+                """将YYYYMMDD格式转换为YYYY-MM-DD"""
+                val_str = str(value or '')
+                if val_str and len(val_str) == 8 and val_str.isdigit():
+                    return f"{val_str[:4]}-{val_str[4:6]}-{val_str[6:8]}"
+                return val_str
+
             return [
                 {
                     '公告标题': str(row.get('title') or ''),
-                    '公告日期': str(row.get('ann_date') or row.get('pub_date') or ''),
+                    '公告日期': format_date(row.get('ann_date') or row.get('pub_date') or ''),
                     '网址': str(row.get('url') or ''),
+                    'title': str(row.get('title') or ''),
+                    'date': format_date(row.get('ann_date') or row.get('pub_date') or ''),
+                    'url': str(row.get('url') or ''),
                     'source': 'tushare_anns_d',
                 }
                 for row in frame.to_dict('records')
@@ -431,7 +556,20 @@ class StockProvider:
     @staticmethod
     def _normalize_financial_row(row: Dict[str, Any]) -> Dict[str, Any]:
         """将 Tushare 原始字段补齐为综合分析器使用的中英文兼容字段。"""
+        def format_date(value: Any) -> str:
+            """将YYYYMMDD格式转换为YYYY-MM-DD"""
+            val_str = str(value or '')
+            if val_str and len(val_str) == 8 and val_str.isdigit():
+                return f"{val_str[:4]}-{val_str[4:6]}-{val_str[6:8]}"
+            return val_str
+
         normalized = dict(row)
+
+        # 格式化日期字段
+        for date_field in ['end_date', 'ann_date', 'f_ann_date', 'report_date']:
+            if date_field in normalized:
+                normalized[date_field] = format_date(normalized[date_field])
+
         aliases = {
             'end_date': '报告期',
             'ann_date': '报告日期',
@@ -445,7 +583,7 @@ class StockProvider:
         }
         for source, target in aliases.items():
             if source in row and target not in normalized:
-                normalized[target] = row.get(source)
+                normalized[target] = format_date(row.get(source)) if source in ['end_date', 'ann_date'] else row.get(source)
         normalized.setdefault('报告类型', 'Tushare')
         return normalized
 

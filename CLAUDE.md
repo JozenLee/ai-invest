@@ -1,5 +1,11 @@
 # AI投资分析系统
 
+> **⚠️ CRITICAL RULE - 绝对禁止生成总结文档**
+> - 永远不要创建 `*-summary.md`、`*-report.md`、`*-verification*.md`、`*-completion.md` 等文档
+> - 完成任务后直接结束，不输出任何总结文字或报告文件
+> - 只在用户明确要求时才生成文档
+> - 违反此规则将导致项目臃肿，必须严格遵守
+
 ## 项目概述
 面向个人投资者的智能投研分析平台，聚焦AI硬件产业链，投资标的为指数ETF。
 
@@ -33,6 +39,11 @@ npm run test:unit
 
 # 验收测试
 bash scripts/acceptance-test.sh
+
+# E2E闭环验证（Preview）
+bash scripts/e2e-verify.sh      # 启动并验证前后端
+bash scripts/stop-e2e.sh         # 停止服务
+# 或使用skill: /e2e-verify
 ```
 
 ## 项目结构
@@ -126,8 +137,53 @@ ai-invest/
 ### 决策分析
 - `POST /api/analysis/etf` - ETF AI分析
 
-## 验收测试
-运行 `bash scripts/acceptance-test.sh` 执行自动化验收测试，覆盖所有API接口。
+## 测试流程
+
+### 测试层级
+```
+1. 单元测试 (npm run test:unit)
+   ↓ 测试独立函数和组件逻辑
+   
+2. 集成测试 (bash scripts/acceptance-test.sh)
+   ↓ 测试API接口和数据层
+   
+3. E2E闭环验证 (bash scripts/e2e-verify.sh 或 /e2e-verify skill)
+   ↓ 在Preview中验证前后端完整流程
+   
+4. 手动验收测试
+   ✓ 最终交付验证
+```
+
+### E2E闭环验证 ⭐ 必须流程
+**何时使用**：
+- 完成功能开发后
+- 修改API接口后
+- 准备提交PR前
+- 任何需要验证前后端联调的场景
+
+**执行方式**：
+```bash
+# 方式1: 使用脚本（自动化）
+bash scripts/e2e-verify.sh    # 启动服务并验证
+bash scripts/stop-e2e.sh       # 清理服务
+
+# 方式2: 使用skill（交互式）
+/e2e-verify                    # 在Claude Code中执行
+```
+
+**验证内容**：
+- ✅ 前后端服务正常启动（端口3000和8000）
+- ✅ Preview面板显示完整页面
+- ✅ 所有API接口返回200 OK
+- ✅ 市场数据正常加载和显示
+- ✅ 浏览器控制台无致命错误
+- ✅ 服务可正常停止和清理
+
+**相关文件**：
+- `.claude/skills/e2e-verify.md` - Skill定义和流程文档
+- `scripts/e2e-verify.sh` - 自动化验证脚本
+- `scripts/stop-e2e.sh` - 服务清理脚本
+- `.claude/launch.json` - Preview服务配置
 
 ## 注意事项
 - MVP阶段仅支持A股ETF，不直接推荐个股

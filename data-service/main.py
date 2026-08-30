@@ -19,14 +19,11 @@ for proxy_key in ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL
 # 加载环境变量（从项目根目录加载）
 project_root = Path(__file__).parent.parent
 env_path = project_root / '.env'
-service_env_path = Path(__file__).parent / '.env'
-# 统一以项目根目录 .env 为单一运行时配置源；服务目录 .env 只补充根目录不存在的变量。
-# 这样不会因为历史遗留的 data-service/.env 覆盖 Neo4j、数据库和数据源配置。
-load_dotenv(service_env_path, override=False)
+# 统一以项目根目录 .env 为单一运行时配置源
 load_dotenv(env_path, override=True)
 logger = logging.getLogger(__name__)
 logger.info(
-    f"加载环境变量: {env_path} + {service_env_path}, "
+    f"加载环境变量: {env_path}, "
     f"ENABLE_AI_ANALYSIS={os.getenv('ENABLE_AI_ANALYSIS')}"
 )
 
@@ -43,7 +40,7 @@ from routers import market, capital_flow, etf, macro_flow, news, influencers, pr
 from routers import stocks, industry_analysis, fund
 
 # 配置日志
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # 全局AI分析器实例（用于health检查）
@@ -384,4 +381,5 @@ async def run_scheduler_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

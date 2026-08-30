@@ -294,8 +294,8 @@ export default function EventsFeedPage() {
   // 获取今日统计数据（不受筛选影响）
   const fetchTodayStats = async () => {
     try {
-      // 获取大量新闻（假设今天不会超过1000条）
-      const response = await fetch('/api/events/feed?limit=1000&sortBy=publishTime')
+      // 获取新闻（SQLite限制：使用500作为上限）
+      const response = await fetch('/api/events/feed?limit=500&sortBy=publishTime')
       if (response.ok) {
         const data = await response.json()
         if (data.success && data.data?.items) {
