@@ -74,10 +74,10 @@ TUSHARE_API_KEY=your_api_key_here
 
 ## 验证数据源
 
-运行验收测试脚本：
+运行 API 测试：
 
 ```bash
-bash scripts/acceptance-test.sh
+npm run test:api
 ```
 
 检查输出中的 `source` 字段：

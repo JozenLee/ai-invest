@@ -1,0 +1,21 @@
+import { prisma } from '@/lib/db'
+
+export const DEFAULT_DATASETS = [
+  { datasetKey: 'etf_realtime', tradingIntervalSeconds: 180, closedIntervalSeconds: 3600 },
+  { datasetKey: 'etf_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
+  { datasetKey: 'etf_holdings', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
+  { datasetKey: 'constituent_stock_realtime', tradingIntervalSeconds: 300, closedIntervalSeconds: 3600 },
+  { datasetKey: 'stock_financial', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
+  { datasetKey: 'stock_announcement', tradingIntervalSeconds: 900, closedIntervalSeconds: 3600 },
+] as const
+
+export function normalizeInstrumentCode(value: unknown) {
+  return String(value || '').trim().toLowerCase().replace(/^(sh|sz)/, '')
+}
+
+export async function getSubscription(id: string) {
+  return prisma.dataSubscription.findUnique({
+    where: { id },
+    include: { instrument: true, datasets: { include: { runs: { orderBy: { startedAt: 'desc' }, take: 3 } } } },
+  })
+}

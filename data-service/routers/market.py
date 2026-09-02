@@ -7,19 +7,38 @@ from datetime import datetime, timedelta
 
 from services.data_service import data_service
 from utils.trading_hours import get_market_status
+from db import db
 
 router = APIRouter()
 
 
 @router.get("/overview")
-async def get_market_overview():
+async def get_market_overview(refresh: bool = Query(default=False)):
     """获取市场概览（主要指数行情）
 
     通过统一数据服务获取，自动按配置的优先级降级：
     Tushare -> AKShare -> 雪球 -> 缓存
     """
     try:
-        df = await data_service.get_index_spot()
+        if not refresh:
+            local_rows = db.execute("SELECT code, name, date, open, high, low, close, volume, changePct FROM IndexDaily WHERE date = (SELECT MAX(date) FROM IndexDaily) ORDER BY code")
+            if local_rows:
+                index_map = {
+                    "000001": ("sh000001", "上证指数"), "399001": ("sz399001", "深证成指"),
+                    "399006": ("sz399006", "创业板指"), "000688": ("sh000688", "科创50"),
+                    "000300": ("sh000300", "沪深300"),
+                }
+                indices = []
+                for row in local_rows:
+                    pure = str(row.get("code", "")).replace("sh", "").replace("sz", "")
+                    if pure not in index_map:
+                        continue
+                    code, name = index_map[pure]
+                    indices.append({"code": code, "name": name, "price": float(row.get("close") or 0), "change": 0, "changePct": float(row.get("changePct") or 0), "volume": float(row.get("volume") or 0), "amount": 0, "source": "local-database"})
+                if indices:
+                    fetched_at = str(local_rows[0].get("date"))
+                    return {"success": True, "data": {"indices": indices, "source": "local-database", "timestamp": datetime.now().isoformat(), "meta": {**get_market_status(), "isRealtime": False, "dataDate": fetched_at, "freshness": "fresh" if fetched_at == datetime.now().strftime("%Y-%m-%d") else "stale"}}}
+        df = await data_service.get_index_spot(force_refresh=refresh)
         market_status = get_market_status()
 
         if df.empty:
@@ -72,6 +91,16 @@ async def get_market_overview():
             if str(row.get("数据日期", ""))
         ]
         data_date = data_dates[0] if data_dates else market_status["lastTradingDate"]
+        normalized_data_date = data_date.replace("/", "-")[:10]
+        today = datetime.now().strftime("%Y-%m-%d")
+        if market_status["isRealtime"] and normalized_data_date not in {today, today.replace("-", "")}:
+            return {
+                "success": False,
+                "error": "实时指数数据源返回过期快照",
+                "data": None,
+                "meta": {**market_status, "isRealtime": False, "dataDate": data_date,
+                          "staleReason": "stale_source_data"},
+            }
         # 实时状态必须同时满足：当前处于交易时段，且本次请求命中了实时源。
         # 缓存数据只能在非交易时段作为最近收盘数据返回。
         is_realtime = market_status["isRealtime"] and actual_source not in {"缓存", "不可用"}
@@ -106,6 +135,14 @@ async def get_stock_quote(ticker: str):
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
 
+        local_rows = db.execute(
+            "SELECT ticker, date, open, high, low, close, volume, amount FROM StockDaily WHERE ticker = ? AND date >= date('now', '-30 days') ORDER BY date DESC LIMIT 1",
+            (ticker,),
+        )
+        if local_rows:
+            row = local_rows[0]
+            return {"success": True, "data": {"ticker": ticker, "date": str(row.get("date", "")), "open": float(row.get("open") or 0), "high": float(row.get("high") or 0), "low": float(row.get("low") or 0), "close": float(row.get("close") or 0), "volume": float(row.get("volume") or 0), "amount": float(row.get("amount") or 0), "changePct": 0}, "meta": {"source": "local-database", "freshness": "fresh"}}
+
         df = await data_service.get_stock_daily(ticker, start_date, end_date)
 
         if df.empty:
@@ -137,6 +174,9 @@ async def get_stock_quote(ticker: str):
 async def get_index_data(code: str, days: int = Query(default=30, ge=1, le=365)):
     """获取指数历史数据"""
     try:
+        local_rows = db.execute("SELECT code, date, open, high, low, close, volume, changePct FROM IndexDaily WHERE lower(code) = lower(?) AND date >= date('now', ?) ORDER BY date ASC", (code, f"-{days} days"))
+        if local_rows:
+            return {"success": True, "data": [{"date": str(row.get("date")), "open": float(row.get("open") or 0), "high": float(row.get("high") or 0), "low": float(row.get("low") or 0), "close": float(row.get("close") or 0), "volume": float(row.get("volume") or 0), "changePct": float(row.get("changePct") or 0)} for row in local_rows], "meta": {"source": "local-database", "fetchedAt": str(local_rows[-1].get("date")), "freshness": "fresh"}}
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 

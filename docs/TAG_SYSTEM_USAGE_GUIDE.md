@@ -210,33 +210,6 @@ console.log(analysis.sentimentLabel) // 情感标签
 
 ---
 
-## 维护工具
-
-### 标签关联验证
-
-检查新闻的 `segmentCodes` 与 Tag 关联是否完整：
-
-```bash
-npx tsx scripts/verify-tag-linking.ts
-```
-
-输出内容：
-- Tag系统统计（总数、活跃、孤立等）
-- NewsArticleTag统计
-- GraphNodeTag统计
-- GraphNodeETF统计
-- DomainTag桥接完整性
-
-### 端到端关联测试
-
-验证标签创建、关联和重复处理逻辑：
-
-```bash
-npx tsx scripts/test-tag-linking.ts
-```
-
----
-
 ## 数据结构
 
 ### Tag层级结构
@@ -304,7 +277,6 @@ const tree = await tagService.getTagTree()
 ### 5. 性能优化
 
 - 应用启动时预热缓存：`tagCacheService.warmupCache()`
-- 定期运行标签关联验证：`scripts/verify-tag-linking.ts`
 - 监控API响应时间
 - 考虑生产环境使用Redis替代内存缓存
 
@@ -395,16 +367,7 @@ const redis = new Redis(process.env.REDIS_URL)
 // 使用Redis替代内存缓存
 ```
 
-### 3. 定时任务
-
-使用cron或任务调度器：
-
-```bash
-# 每天凌晨3点验证标签关联
-0 3 * * * cd /app && npx tsx scripts/verify-tag-linking.ts
-```
-
-### 4. 监控告警
+### 3. 监控告警
 
 - API响应时间监控
 - 缓存命中率监控

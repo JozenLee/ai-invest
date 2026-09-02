@@ -81,6 +81,25 @@ async function fetchKlineData(
   count: number = 120
 ): Promise<DailyData[]> {
   try {
+    const localResponse = await fetch(
+      `${DATA_SERVICE_URL}/api/data/local/indices/${encodeURIComponent(code)}?days=${Math.max(count, 30)}`,
+      { signal: AbortSignal.timeout(2500) }
+    )
+    if (localResponse.ok) {
+      const localPayload = await localResponse.json()
+      const localRows = localPayload?.data?.history
+      if (Array.isArray(localRows) && localRows.length > 0) {
+        return localRows.map((row: any) => ({
+          date: String(row.date || ''),
+          open: Number(row.open || 0),
+          high: Number(row.high || 0),
+          low: Number(row.low || 0),
+          close: Number(row.close || 0),
+          volume: Number(row.volume || 0),
+          amount: Number(row.amount || 0),
+        })).filter((row: DailyData) => row.close > 0)
+      }
+    }
     const response = await fetch(
       `${DATA_SERVICE_URL}/api/market/kline?code=${code}&period=${period}&count=${count}`,
       { signal: AbortSignal.timeout(10000) }

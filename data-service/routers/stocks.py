@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List
 from datetime import datetime, timedelta
 from providers.stock_provider import StockProvider
+from db import db
 
 router = APIRouter(prefix="/stocks", tags=["stocks"])
 stock_provider = StockProvider()
@@ -48,7 +49,8 @@ async def get_financial_report(
     - **market**: 市场类型
     """
     try:
-        data = await stock_provider.get_financial_report(symbol, report_type, market)
+        local = db.execute("SELECT reportPeriod, publishDate, metricsJson, source FROM stock_financial_reports WHERE stockCode = ? AND reportType = ? ORDER BY reportPeriod DESC", (symbol, report_type)) if market == 'cn' else []
+        data = [dict(row, **(__import__('json').loads(row['metricsJson']) if row.get('metricsJson') else {})) for row in local] if local else await stock_provider.get_financial_report(symbol, report_type, market)
         if data is None:
             raise HTTPException(status_code=404, detail="Financial report not found")
         return {"success": True, "data": data}
@@ -72,7 +74,8 @@ async def get_announcements(
     - **market**: 市场类型
     """
     try:
-        data = await stock_provider.get_announcements(symbol, start_date, end_date, market)
+        local = db.execute("SELECT announcementId, title, eventType, publishDate, url, content, source FROM stock_announcements WHERE stockCode = ? ORDER BY publishDate DESC LIMIT 100", (symbol,)) if market == 'cn' else []
+        data = local if local else await stock_provider.get_announcements(symbol, start_date, end_date, market)
         if data is None:
             raise HTTPException(status_code=404, detail="Announcements not found")
         return {"success": True, "data": data, "count": len(data)}

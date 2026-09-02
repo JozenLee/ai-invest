@@ -7,6 +7,22 @@ const CACHE_KEY = 'sector_flow'
 const CACHE_TTL_TRADING = 30 // 秒
 const CACHE_TTL_CLOSED = 120 // 秒
 
+function isTradingWindow(): boolean {
+  const now = new Date()
+  const day = now.getDay()
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  return day >= 1 && day <= 5 && ((minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900))
+}
+
+function isFreshCachedSectors(value: any): boolean {
+  if (!isTradingWindow()) return true
+  const meta = value?.meta
+  const dataDate = String(meta?.dataDate || '').replace(/-/g, '').slice(0, 8)
+  const now = new Date()
+  const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  return meta?.isRealtime === true && dataDate === today
+}
+
 /**
  * 获取板块资金流向数据
  * GET /api/market/sectors
@@ -20,13 +36,14 @@ export async function GET(request: Request) {
   if (!forceRefresh) {
     // 检查缓存
     const cached = apiCache.get<any>(CACHE_KEY)
-    if (cached) {
+    if (cached && isFreshCachedSectors(cached)) {
       return NextResponse.json(cached)
     }
   }
 
   try {
     const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/sector?indicator=今日${forceRefresh ? '&refresh=true' : ''}`, {
+      cache: 'no-store',
       signal: AbortSignal.timeout(15000),
     })
 

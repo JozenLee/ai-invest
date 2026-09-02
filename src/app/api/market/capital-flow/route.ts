@@ -8,6 +8,23 @@ const CACHE_KEY = 'capital_flow_enhanced'
 const CACHE_TTL_TRADING = 30 // 秒
 const CACHE_TTL_CLOSED = 120 // 秒
 
+function isTradingWindow(): boolean {
+  const now = new Date()
+  const day = now.getDay()
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  return day >= 1 && day <= 5 && ((minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900))
+}
+
+function isFreshCachedCapitalFlow(value: any): boolean {
+  if (!isTradingWindow()) return true
+  const meta = value?.meta || value?.data?.meta
+  const dataDate = String(value?.data?.dataDate || meta?.dataDate || '').replace(/-/g, '').slice(0, 8)
+  const now = new Date()
+  const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  const realtime = meta?.isRealtime === true || value?.data?.sectorRealtime === true
+  return realtime && dataDate === today
+}
+
 export async function GET(request: Request) {
   console.log('[capital-flow API] 收到请求')
 
@@ -24,7 +41,7 @@ export async function GET(request: Request) {
   if (!forceRefresh) {
     // 检查缓存
     const cached = apiCache.get<unknown>(CACHE_KEY)
-    if (cached) {
+    if (cached && isFreshCachedCapitalFlow(cached)) {
       console.log('[capital-flow API] 返回缓存数据')
       return NextResponse.json(cached)
     }
@@ -35,6 +52,7 @@ export async function GET(request: Request) {
   try {
     // 使用增强版资金流向API
     const response = await fetch(`${DATA_SERVICE_URL}/api/capital-flow/advanced/enhanced${forceRefresh ? '?refresh=true' : ''}`, {
+      cache: 'no-store',
       // 资金流向需要聚合多个数据源；必须低于前端 35 秒总超时，但不能过短导致正常慢响应被误判。
       signal: AbortSignal.timeout(30000),
     })

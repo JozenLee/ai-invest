@@ -247,7 +247,10 @@ class TushareProvider(DataProvider):
                 if df.empty:
                     return None
 
-                latest = df.iloc[0]  # Tushare 返回按日期降序
+                # 网关不保证排序方向，始终按交易日取最新记录。
+                date_column = "trade_date" if "trade_date" in df.columns else "date"
+                df = df.sort_values(date_column, ascending=False)
+                latest = df.iloc[0]
                 pure_code, market = code.split(".")
                 ak_code = f"{'sh' if market == 'SH' else 'sz'}{pure_code}"
                 trade_date = str(latest.get("trade_date", latest.get("date", "")))
@@ -531,7 +534,9 @@ class TushareProvider(DataProvider):
         df = await self._call_api("moneyflow_mkt_dc", trade_date=trade_date)
 
         if not df.empty:
-            latest = df.iloc[0]  # 按日期降序
+            date_column = "trade_date" if "trade_date" in df.columns else "date"
+            df = df.sort_values(date_column, ascending=False)
+            latest = df.iloc[0]
             net_amount = float(latest.get("net_amount", latest.get("net_mf_amount", 0)) or 0)
             # DC 接口的 buy_*_amount 字段是各档位净流入额，不是买入总额。
             main_net = net_amount
@@ -572,6 +577,7 @@ class TushareProvider(DataProvider):
         if frame.empty:
             raise last_error or Exception("Tushare 板块资金流向数据为空")
 
+        latest_date = end
         name_col = next((c for c in ("name", "industry", "sector", "ts_code") if c in frame.columns), None)
         net_col = next((c for c in ("net_amount", "net_mf_amount", "net_amount_x") if c in frame.columns), None)
         pct_col = next((c for c in ("pct_change", "pct_chg", "change_pct") if c in frame.columns), None)
@@ -586,6 +592,13 @@ class TushareProvider(DataProvider):
             else:
                 valid_dates = sorted(frame["trade_date"].unique())[-day_count:]
                 frame = frame[frame["trade_date"].isin(valid_dates)]
+
+        # 交易时段不能把上一交易日的行业资金快照当作“今日”数据。
+        # 抛出异常后由注册表继续尝试 AKShare，避免旧数据遮蔽备用实时源。
+        if is_trading_hours() and day_count == 1:
+            today = datetime.now().strftime("%Y%m%d")
+            if latest_date != today:
+                raise RuntimeError(f"Tushare 板块资金流向不是当日数据: {latest_date}")
 
         # 优先保留明确标记为行业的记录；若网关未返回分类字段，则 THS
         # 接口本身视为行业数据，DC 回退时排除明显的指数/互联互通/融资类名称。

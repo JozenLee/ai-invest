@@ -9,6 +9,22 @@ const CACHE_KEY = 'market_overview'
 const CACHE_TTL_TRADING = 30 // 交易中缓存30秒
 const CACHE_TTL_CLOSED = 120 // 非交易时段缓存2分钟
 
+function isTradingWindow(): boolean {
+  const now = new Date()
+  const day = now.getDay()
+  const minutes = now.getHours() * 60 + now.getMinutes()
+  return day >= 1 && day <= 5 && ((minutes >= 570 && minutes <= 690) || (minutes >= 780 && minutes <= 900))
+}
+
+function isFreshCachedOverview(value: any): boolean {
+  if (!isTradingWindow()) return true
+  const meta = value?.data?.meta
+  const dataDate = String(meta?.dataDate || '').replace(/-/g, '').slice(0, 8)
+  const now = new Date()
+  const today = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`
+  return meta?.isRealtime === true && dataDate === today
+}
+
 // 主要指数配置（Yahoo Finance 格式）
 const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
 
@@ -64,7 +80,7 @@ export async function GET(request: Request) {
   if (!forceRefresh) {
     // 检查缓存
     const cached = apiCache.get<any>(CACHE_KEY)
-    if (cached) {
+    if (cached && isFreshCachedOverview(cached)) {
       return NextResponse.json(cached)
     }
   }
@@ -72,6 +88,7 @@ export async function GET(request: Request) {
   try {
     // 优先：Python 数据服务（多源聚合）
     const response = await fetch(`${DATA_SERVICE_URL}/api/market/overview`, {
+      cache: 'no-store',
       signal: AbortSignal.timeout(15000), // Reduced from 20s to 15s for better UX
     })
 
@@ -110,13 +127,21 @@ export async function GET(request: Request) {
           indices: yahooData.map(q => ({
             code: q.code,
             name: q.name,
-            current: q.price,
+            price: q.price,
             change: q.change,
-            changePercent: q.changePct,
+            changePct: q.changePct,
             source: 'yahoo',
           })),
           source: 'yahoo',
           timestamp: new Date().toISOString(),
+          meta: {
+            isOpen: false,
+            isPreMarket: false,
+            isPostMarket: false,
+            status: 'closed',
+            statusText: '数据源降级（非实时）',
+            isRealtime: false,
+          },
         },
         source: 'yahoo',
       })

@@ -763,6 +763,22 @@ function CompanyPanel({ company, companies, dataOnly = false, referenceDate, com
       </CardContent>
     </Card>}
 
+    {/* AI分析报告 */}
+    {!dataOnly && reportText && <div className="space-y-5">
+      <Card className="border-primary/20 bg-primary/[0.025]">
+        <CardHeader><SectionHeading icon={TrendingUp} title="AI企业趋势分析" description="基于Top10核心企业的财报、公告和行情数据，提炼领域级趋势判断和投资建议。" badge="AI生成" /></CardHeader>
+        <CardContent className="space-y-5">
+          <div><div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary">领域趋势判断</div><ReportMarkdown value={trendJudgment} fallback="暂无趋势判断" /></div>
+          <div className="border-t pt-5"><div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary">关注重点</div><ReportMarkdown value={focusPoints} fallback="暂无关注重点" /></div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-amber-500/30 bg-amber-500/[0.035]">
+        <CardHeader><SectionHeading icon={FileText} title="投资建议" description="基于趋势分析判断领域机会与约束，给出明确的操作方向、适用条件和失效条件。" /></CardHeader>
+        <CardContent><ReportMarkdown value={investmentConclusion} fallback="暂无投资建议" /></CardContent>
+      </Card>
+    </div>}
+
     {/* 现有：全部企业 */}
     <Card>
       <CardHeader>
@@ -852,21 +868,6 @@ function CompanyPanel({ company, companies, dataOnly = false, referenceDate, com
         </div>
       </CardContent>
     </Card>
-
-    {!dataOnly && <div className="space-y-5">
-      <Card className="border-primary/20 bg-primary/[0.025]">
-        <CardHeader><SectionHeading icon={TrendingUp} title="趋势分析" description="把企业经营、关键公告和财报变化合并为领域级趋势判断，并列出下一步验证重点。" /></CardHeader>
-        <CardContent className="space-y-5">
-          <div><div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary">领域趋势判断</div><ReportMarkdown value={trendJudgment} fallback="暂无趋势判断" /></div>
-          <div className="border-t pt-5"><div className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-primary">关注重点</div><ReportMarkdown value={focusPoints} fallback="暂无关注重点" /></div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-amber-500/30 bg-amber-500/[0.035]">
-        <CardHeader><SectionHeading icon={FileText} title="投资建议" description="基于趋势分析判断领域机会与约束，给出明确的操作方向、适用条件和失效条件。" /></CardHeader>
-        <CardContent><ReportMarkdown value={investmentConclusion} fallback="暂无投资建议" /></CardContent>
-      </Card>
-    </div>}
 
   </div>
 }
@@ -1043,7 +1044,20 @@ export default function ComprehensiveReportPage() {
   const etfs = normalizedMarket.etfs
   const news = normalizedNews.items
   // 修复：使用summaries而不是topCompanies，展示全部企业而不只是AI筛选的8家
-  const companies = normalizedCompany.summaries
+  // 同时对企业列表去重，避免历史报告数据中的重复记录
+  const companiesRaw = normalizedCompany.summaries
+  const companiesMap = new Map<string, Record<string, unknown>>()
+  companiesRaw.forEach((company) => {
+    const symbol = display(company.symbol || company.code)
+    if (symbol && symbol !== '暂无' && symbol !== '暂无代码') {
+      // 如果有重复，保留综合评分更高的记录
+      const existing = companiesMap.get(symbol)
+      if (!existing || (numberValue(company.overall_score) ?? 0) > (numberValue(existing.overall_score) ?? 0)) {
+        companiesMap.set(symbol, company)
+      }
+    }
+  })
+  const companies = Array.from(companiesMap.values())
   const holdings = normalizedPortfolio.holdings
   const recommendations = asArray(advice.recommendations) as Recommendation[]
   const holdingValue = normalizedPortfolio.totalValue - normalizedPortfolio.cashBalance
@@ -1089,7 +1103,7 @@ export default function ComprehensiveReportPage() {
       {selectedTabs.includes('overview') && <TabsContent value="overview"><div ref={(node) => { tabRefs.current.overview = node }} className="min-w-0">{aiReportGenerated ? <OverviewPanel report={report} advice={advice} recommendations={recommendations} quality={displayQuality} modules={modules} /> : <DataOnlyOverviewPanel report={report} modules={modules} selectedTabs={selectedTabs} />}</div></TabsContent>}
       {selectedTabs.includes('market') && <TabsContent value="market"><div ref={(node) => { tabRefs.current.market = node }} className="min-w-0"><MarketPanel market={market} marketSnapshot={normalizedMarket} etfs={etfs} dataOnly={!aiReportGenerated} /></div></TabsContent>}
       {selectedTabs.includes('news') && <TabsContent value="news"><div ref={(node) => { tabRefs.current.news = node }} className="min-w-0"><NewsPanel payload={newsPayload} news={news} dataOnly={!aiReportGenerated} /></div></TabsContent>}
-      {selectedTabs.includes('company') && <TabsContent value="company"><div ref={(node) => { tabRefs.current.company = node }} className="min-w-0"><CompanyPanel company={company} companies={companies} dataOnly={!aiReportGenerated} referenceDate={report.createdAt} companySource={report.company?.company_source} /></div></TabsContent>}
+      {selectedTabs.includes('company') && <TabsContent value="company"><div ref={(node) => { tabRefs.current.company = node }} className="min-w-0"><CompanyPanel company={company} companies={companies} dataOnly={!aiReportGenerated} referenceDate={report.createdAt} companySource={asRecord(data.company).company_source as string} /></div></TabsContent>}
       {selectedTabs.includes('portfolio') && <TabsContent value="portfolio"><div ref={(node) => { tabRefs.current.portfolio = node }} className="min-w-0"><PortfolioPanel portfolio={portfolio} holdings={holdings} holdingValue={holdingValue} /></div></TabsContent>}
     </Tabs>
   </main>

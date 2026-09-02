@@ -1,5 +1,5 @@
-#!/bin/bash
-# 停止所有服务
+#!/usr/bin/env bash
+exec "$(cd "$(dirname "$0")" && pwd)/services.sh" stop all
 
 echo "=========================================="
 echo "停止 AI投资分析系统 服务"

@@ -7,11 +7,12 @@ import {
   BarChart3,
   Newspaper,
   GitBranch,
-  Brain,
   Briefcase,
   TrendingUp,
   ChevronRight,
   Send,
+  Lightbulb,
+  Database,
 } from 'lucide-react'
 import {
   Sheet,
@@ -42,9 +43,19 @@ const navigation = [
     icon: GitBranch,
   },
   {
-    name: 'AI分析',
-    href: '/analysis',
-    icon: Brain,
+    name: '领域分析',
+    href: '/industry-analysis',
+    icon: TrendingUp,
+  },
+  {
+    name: '综合分析',
+    href: '/comprehensive-analysis',
+    icon: Lightbulb,
+  },
+  {
+    name: '数据订阅',
+    href: '/data-center/subscriptions',
+    icon: Database,
   },
   {
     name: '持仓总览',

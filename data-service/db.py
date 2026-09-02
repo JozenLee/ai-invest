@@ -37,8 +37,11 @@ class Database:
         Returns:
             sqlite3.Connection: 数据库连接对象
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row  # 使用字典式访问
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def execute(self, query: str, params: tuple = ()):

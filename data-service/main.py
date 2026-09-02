@@ -37,7 +37,7 @@ os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact
-from routers import stocks, industry_analysis, fund
+from routers import stocks, industry_analysis, fund, local_data
 
 # 配置日志
 logging.basicConfig(level=logging.DEBUG)
@@ -302,6 +302,7 @@ app.include_router(industry_query.router)
 app.include_router(impact.router)
 app.include_router(stocks.router)
 app.include_router(industry_analysis.router, prefix="/api")
+app.include_router(local_data.router)
 
 @app.get("/health")
 async def health_check():

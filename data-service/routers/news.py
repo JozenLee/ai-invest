@@ -17,6 +17,7 @@ import pandas as pd
 from services.data_service import data_service
 from services.news_pipeline import NewsPipeline
 from services.sse_manager import sse_manager
+from db import db
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,23 @@ def _build_news_item(row: dict, idx: int, prefix: str = "cls") -> dict:
     }
 
 
+def _local_news_items(limit: int = 200, keyword: Optional[str] = None) -> List[dict]:
+    if keyword:
+        rows = db.execute("SELECT id, title, content, summary, source, url, publishTime, category, sentiment, impact, sectors FROM NewsArticle WHERE title LIKE ? OR content LIKE ? ORDER BY publishTime DESC LIMIT ?", (f"%{keyword}%", f"%{keyword}%", limit))
+    else:
+        rows = db.execute("SELECT id, title, content, summary, source, url, publishTime, category, sentiment, impact, sectors FROM NewsArticle ORDER BY publishTime DESC LIMIT ?", (limit,))
+    result = []
+    for row in rows:
+        item = dict(row)
+        if isinstance(item.get("sectors"), str):
+            try:
+                item["sectors"] = json.loads(item["sectors"])
+            except json.JSONDecodeError:
+                item["sectors"] = []
+        result.append(item)
+    return result
+
+
 @router.get("/feed")
 async def get_news_feed(
     category: Optional[str] = Query(default=None, description="新闻分类"),
@@ -187,15 +205,18 @@ async def get_news_feed(
     try:
         news_list = []
 
-        try:
-            df = await data_service.get_news(keyword="财联社", limit=200)
-            if not df.empty:
-                df = prepare_news_dataframe(df)
+        news_list = _local_news_items(min(500, limit + offset), keyword)
 
-                for idx, (_, row) in enumerate(df.iterrows()):
-                    news_list.append(_build_news_item(row.to_dict(), idx))
-        except Exception as e:
-            print(f"获取财联社新闻失败: {e}")
+        if not news_list:
+            try:
+                df = await data_service.get_news(keyword="财联社", limit=200)
+                if not df.empty:
+                    df = prepare_news_dataframe(df)
+
+                    for idx, (_, row) in enumerate(df.iterrows()):
+                        news_list.append(_build_news_item(row.to_dict(), idx))
+            except Exception as e:
+                print(f"获取财联社新闻失败: {e}")
 
         if not news_list:
             return {
@@ -260,21 +281,21 @@ async def get_news_feed(
 async def get_ai_hardware_news(limit: int = Query(default=20, ge=1, le=50)):
     """获取AI硬件相关新闻"""
     try:
-        news_list = []
+        news_list = [item for item in _local_news_items(500) if any(kw in str(item.get("title", "")) for kw in AI_HARDWARE_KEYWORDS)][:limit]
 
-        try:
-            df = await data_service.get_news(keyword="财联社", limit=200)
-            if not df.empty:
-                df = prepare_news_dataframe(df)
-
-                for idx, (_, row) in enumerate(df.iterrows()):
-                    title = str(row.get("新闻标题", ""))
-                    if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
-                        news_list.append(_build_news_item(row.to_dict(), idx, prefix="ai"))
-                        if len(news_list) >= limit:
-                            break
-        except Exception as e:
-            print(f"获取AI硬件新闻失败: {e}")
+        if not news_list:
+            try:
+                df = await data_service.get_news(keyword="财联社", limit=200)
+                if not df.empty:
+                    df = prepare_news_dataframe(df)
+                    for idx, (_, row) in enumerate(df.iterrows()):
+                        title = str(row.get("新闻标题", ""))
+                        if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
+                            news_list.append(_build_news_item(row.to_dict(), idx, prefix="ai"))
+                            if len(news_list) >= limit:
+                                break
+            except Exception as e:
+                print(f"获取AI硬件新闻失败: {e}")
 
         if not news_list:
             return {
@@ -302,19 +323,19 @@ async def get_sector_trends(
 ):
     """获取领域趋势"""
     try:
-        news_list = []
-        try:
-            df = await data_service.get_news(keyword="财联社", limit=200)
-            if not df.empty:
-                df = prepare_news_dataframe(df)
-
-                for idx, (_, row) in enumerate(df.iterrows()):
-                    title = str(row.get("新闻标题", ""))
-                    if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
-                        item = _build_news_item(row.to_dict(), idx, prefix="trend")
-                        news_list.append(item)
-        except Exception as e:
-            print(f"获取新闻失败: {e}")
+        news_list = [item for item in _local_news_items(500) if any(kw in str(item.get("title", "")) for kw in AI_HARDWARE_KEYWORDS)]
+        if not news_list:
+            try:
+                df = await data_service.get_news(keyword="财联社", limit=200)
+                if not df.empty:
+                    df = prepare_news_dataframe(df)
+                    for idx, (_, row) in enumerate(df.iterrows()):
+                        title = str(row.get("新闻标题", ""))
+                        if any(kw in title for kw in AI_HARDWARE_KEYWORDS):
+                            item = _build_news_item(row.to_dict(), idx, prefix="trend")
+                            news_list.append(item)
+            except Exception as e:
+                print(f"获取新闻失败: {e}")
 
         if not news_list:
             return {

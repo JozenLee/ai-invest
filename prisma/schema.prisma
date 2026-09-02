@@ -1106,3 +1106,203 @@ model GraphChangeApproval {
   @@index([changeId])
   @@map("graph_change_approvals")
 }
+
+// ==================== 工作流执行引擎 ====================
+
+model ExecutionRun {
+  id          String   @id @default(cuid())
+  workflowId  String   // 工作流标识，如 "comprehensive-analysis"
+  status      String   // PENDING, RUNNING, COMPLETED, FAILED, PAUSED
+  startedAt   DateTime @default(now())
+  completedAt DateTime?
+  error       String?  // 失败原因
+  metadata    String?  // JSON: 执行参数
+
+  steps ExecutionStep[]
+
+  @@index([workflowId, startedAt(sort: Desc)])
+  @@index([status])
+  @@map("execution_runs")
+}
+
+model ExecutionStep {
+  id          String    @id @default(cuid())
+  runId       String
+  stepName    String    // 步骤名称
+  stepIndex   Int       // 步骤序号
+  status      String    // PENDING, RUNNING, COMPLETED, FAILED, SKIPPED
+  startedAt   DateTime?
+  completedAt DateTime?
+  duration    Int?      // 执行时长(ms)
+  error       String?
+  progress    String?   // JSON: 进度信息
+
+  run       ExecutionRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  artifacts StepArtifact[]
+
+  @@unique([runId, stepName])
+  @@index([runId, stepIndex])
+  @@map("execution_steps")
+}
+
+model StepArtifact {
+  id           String   @id @default(cuid())
+  stepId       String
+  artifactKey  String   // 产物键
+  artifactType String   // REFERENCE, DATA, FILE
+  dataType     String   // JSON, TEXT, BINARY
+  data         String?  // JSON或引用ID
+  fileUrl      String?  // 文件存储路径
+  size         Int?     // 数据大小(bytes)
+  createdAt    DateTime @default(now())
+
+  step ExecutionStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@unique([stepId, artifactKey])
+  @@index([stepId])
+  @@map("step_artifacts")
+}
+
+// ==================== 本地数据订阅 ====================
+
+model Instrument {
+  id        String   @id @default(cuid())
+  type      String   // ETF / STOCK / INDEX
+  code      String
+  name      String?
+  market    String   @default("CN")
+  status    String   @default("active")
+  metadata  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscription DataSubscription?
+
+  @@unique([type, code])
+  @@index([type, status])
+  @@map("instruments")
+}
+
+model DataSubscription {
+  id           String   @id @default(cuid())
+  instrumentId String   @unique
+  enabled      Boolean  @default(true)
+  timezone     String   @default("Asia/Shanghai")
+  profile      String   @default("default")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  instrument Instrument             @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  datasets   SubscriptionDataset[]
+
+  @@index([enabled, updatedAt])
+  @@map("data_subscriptions")
+}
+
+model DataSubscriptionSchedule {
+  id                     String   @id @default(cuid())
+  scope                  String   @unique // market_index / etf_index / company_quote
+  enabled                Boolean  @default(true)
+  tradingIntervalSeconds Int
+  closedIntervalSeconds  Int
+  lastRunAt              DateTime?
+  updatedAt              DateTime @updatedAt
+  createdAt              DateTime @default(now())
+
+  @@map("data_subscription_schedules")
+}
+
+model SubscriptionDataset {
+  id                     String   @id @default(cuid())
+  subscriptionId         String
+  datasetKey             String
+  enabled                Boolean  @default(true)
+  tradingIntervalSeconds Int      @default(300)
+  closedIntervalSeconds  Int      @default(3600)
+  cronExpression         String?
+  retentionDays          Int      @default(365)
+  lastStartedAt          DateTime?
+  lastSuccessAt          DateTime?
+  nextRunAt              DateTime?
+  status                 String   @default("pending")
+  lastError              String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  subscription DataSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  runs         DataFetchRun[]
+
+  @@unique([subscriptionId, datasetKey])
+  @@index([enabled, nextRunAt])
+  @@index([datasetKey, status])
+  @@map("subscription_datasets")
+}
+
+model DataFetchRun {
+  id             String   @id @default(cuid())
+  datasetId      String
+  targetCode     String
+  provider       String?
+  status         String   @default("running")
+  fetchedCount   Int      @default(0)
+  storedCount    Int      @default(0)
+  durationMs     Int?
+  qualityStatus  String?
+  error          String?
+  startedAt      DateTime @default(now())
+  completedAt    DateTime?
+
+  dataset SubscriptionDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId, startedAt])
+  @@index([targetCode, status])
+  @@map("data_fetch_runs")
+}
+
+model StockFinancialReport {
+  id               String   @id @default(cuid())
+  stockCode        String
+  reportType       String
+  reportPeriod     String
+  publishDate      DateTime?
+  metricsJson      String
+  source           String?
+  sourceUpdatedAt  DateTime?
+  fetchedAt        DateTime @default(now())
+  contentHash      String
+
+  @@unique([stockCode, reportType, reportPeriod])
+  @@index([stockCode, publishDate])
+  @@map("stock_financial_reports")
+}
+
+model StockAnnouncement {
+  id             String   @id @default(cuid())
+  stockCode      String
+  announcementId String
+  title          String
+  eventType      String?
+  publishDate    DateTime?
+  url            String?
+  content        String?
+  source         String?
+  fetchedAt      DateTime @default(now())
+  contentHash    String
+
+  @@unique([stockCode, announcementId])
+  @@index([stockCode, publishDate])
+  @@map("stock_announcements")
+}
+
+model RawPayload {
+  id          String   @id @default(cuid())
+  datasetKey  String
+  targetCode  String
+  provider    String?
+  payload     String
+  contentHash String
+  fetchedAt   DateTime @default(now())
+
+  @@index([datasetKey, targetCode, fetchedAt])
+  @@map("raw_payloads")
+}

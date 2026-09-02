@@ -65,13 +65,14 @@ class DataService:
 
     # ==================== 指数数据 ====================
 
-    async def get_index_spot(self) -> pd.DataFrame:
+    async def get_index_spot(self, force_refresh: bool = False) -> pd.DataFrame:
         """获取指数实时行情快照"""
         result = await self.registry.fetch(
             category="index_spot",
             method="get_index_spot",
             cache_key="market_overview",  # 修改为与文件缓存名称一致
             cache_ttl=30,
+            force_refresh=force_refresh,
         )
         return self._ensure_dataframe(result)
 
@@ -197,13 +198,14 @@ class DataService:
         )
         return result if isinstance(result, list) else []
 
-    async def get_northbound_flow(self) -> Dict:
+    async def get_northbound_flow(self, force_refresh: bool = False) -> Dict:
         """获取北向资金流向"""
         result = await self.registry.fetch(
             category="northbound_flow",
             method="get_northbound_flow",
             cache_key="northbound_flow",
             cache_ttl=600,
+            force_refresh=force_refresh,
         )
         return result if isinstance(result, dict) else {}
 
@@ -231,23 +233,25 @@ class DataService:
         )
         return result if isinstance(result, list) else []
 
-    async def get_lhb_data(self) -> List[Dict]:
+    async def get_lhb_data(self, force_refresh: bool = False) -> List[Dict]:
         """获取龙虎榜数据"""
         result = await self.registry.fetch(
             category="lhb_data",
             method="get_lhb_data",
             cache_key="lhb_data",
             cache_ttl=600,
+            force_refresh=force_refresh,
         )
         return result if isinstance(result, list) else []
 
-    async def get_market_volume_amplification(self, lookback_days: int = 20) -> Dict:
+    async def get_market_volume_amplification(self, lookback_days: int = 20, force_refresh: bool = False) -> Dict:
         """获取大盘成交额相对近期均值的放大倍数。"""
         result = await self.registry.fetch(
             category="market_volume_amplification",
             method="get_market_volume_amplification",
             cache_key=f"market_volume_amplification_{lookback_days}",
             cache_ttl=600,
+            force_refresh=force_refresh,
             lookback_days=lookback_days,
         )
         return result if isinstance(result, dict) else {}

@@ -47,10 +47,49 @@ class SchedulerService:
             # Schedule influencer tasks
             self._schedule_influencer_tasks()
 
+            # 本地数据订阅任务由数据库驱动，调度器每分钟检查一次到期数据集。
+            self.scheduler.add_job(
+                self._run_subscription_sync,
+                trigger=IntervalTrigger(minutes=1),
+                id='data_subscription_sync',
+                name='Local Data Subscription Sync',
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                next_run_time=datetime.now(timezone.utc),
+            )
+            self.scheduler.add_job(
+                self._run_global_asset_sync,
+                trigger=IntervalTrigger(minutes=5),
+                id='global_asset_sync',
+                name='Global Market Asset Sync',
+                replace_existing=True,
+                coalesce=True,
+                max_instances=1,
+                next_run_time=datetime.now(timezone.utc),
+            )
+
             # Start scheduler
             self.scheduler.start()
             self.is_running = True
             logger.info('定时任务调度器已启动')
+
+    async def _run_subscription_sync(self):
+        try:
+            from services.subscription_sync_service import subscription_sync_service
+            count = await subscription_sync_service.run_due()
+            if count:
+                logger.info('本地数据订阅同步完成: %s 个数据集', count)
+        except Exception as error:
+            logger.error('本地数据订阅同步失败: %s', error, exc_info=True)
+
+    async def _run_global_asset_sync(self):
+        try:
+            from services.subscription_sync_service import subscription_sync_service
+            result = await subscription_sync_service.sync_global_assets()
+            logger.info('全局数据资产同步完成: %s', result)
+        except Exception as error:
+            logger.error('全局数据资产同步失败: %s', error, exc_info=True)
 
     async def stop(self):
         """停止调度器"""

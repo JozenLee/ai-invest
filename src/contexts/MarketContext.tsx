@@ -217,7 +217,7 @@ export function MarketProvider({ children }: MarketProviderProps) {
     // 交易时段每1分钟刷新，非交易时段每5分钟刷新
     const refreshInterval = marketMeta?.isOpen ? 60 * 1000 : 5 * 60 * 1000
     const interval = setInterval(() => {
-      fetchData() // Automatic refresh uses cache
+      fetchData(true)
     }, refreshInterval)
 
     if (process.env.NODE_ENV === 'development') {

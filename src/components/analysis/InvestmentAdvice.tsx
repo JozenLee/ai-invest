@@ -183,7 +183,27 @@ export function InvestmentAdvice() {
   }, [])
   useEffect(() => { fetch('/api/graph/industries').then((response) => response.json()).then((payload) => { const list = Array.isArray(payload.data) ? payload.data : []; setIndustries(list); if (list[0] && !selectedIndustry) setSelectedIndustry(list[0].id) }).catch(() => setError('产业列表加载失败，请刷新后重试')) }, [selectedIndustry])
   useEffect(() => { if (!preferencesReady) return; localStorage.setItem(preferenceKey, JSON.stringify({ selectedIndustry, moduleCount, riskTolerance, investmentHorizon, companySource, generateAiReport: Object.values(aiModules).every(Boolean) })) }, [preferencesReady, selectedIndustry, moduleCount, riskTolerance, investmentHorizon, companySource, aiModules])
-  useEffect(() => { if (!selectedIndustry) return; fetch(`/api/analysis/reports?industryId=${encodeURIComponent(selectedIndustry)}&type=comprehensive&limit=20`).then((response) => response.json()).then((payload) => { const list = Array.isArray(payload.reports) ? payload.reports : []; setHistory(list); setHistoryId(list[0]?.id || '') }).catch(() => setHistory([])) }, [selectedIndustry])
+  useEffect(() => {
+    let cancelled = false
+    setHistoryId('')
+    if (!selectedIndustry) {
+      setHistory([])
+      return () => { cancelled = true }
+    }
+
+    fetch(`/api/analysis/reports?industryId=${encodeURIComponent(selectedIndustry)}&type=comprehensive&limit=20`)
+      .then((response) => response.json())
+      .then((payload) => {
+        if (cancelled) return
+        const list = Array.isArray(payload.reports) ? payload.reports : []
+        setHistory(list)
+      })
+      .catch(() => {
+        if (!cancelled) setHistory([])
+      })
+
+    return () => { cancelled = true }
+  }, [selectedIndustry])
 
   const activeModules = MODULES.slice(0, moduleCount)
   const groupedSteps = useMemo(() => Object.fromEntries(MODULES.slice(0, moduleCount).map((module) => [module.key, FLOW_STEPS.filter((step) => step.module === module.key)])) as Record<ModuleKey, FlowStep[]>, [moduleCount])

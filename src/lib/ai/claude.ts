@@ -47,6 +47,25 @@ export class ClaudeClient {
   private model: string
   private maxTokens: number
 
+  readonly messages = {
+    create: async (params: {
+      prompt?: string
+      model?: string
+      system?: string
+      max_tokens?: number
+      temperature?: number
+      messages?: Array<{ role: string; content: string }>
+    }) => {
+      const prompt = params.prompt || params.messages?.map((message) => message.content).join('\n') || ''
+      const text = await this.complete({
+        prompt,
+        system: params.system,
+        maxTokens: params.max_tokens
+      })
+      return { content: [{ type: 'text' as const, text }] }
+    }
+  }
+
   constructor(config?: ClaudeConfig) {
     this.model = config?.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514'
     this.maxTokens = config?.maxTokens || 4096

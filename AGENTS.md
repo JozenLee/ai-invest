@@ -11,7 +11,7 @@
 - **数据服务**: FastAPI + AKShare (Python)
 
 ## 环境配置
-1. 复制环境变量模板：`cp .env.example .env`
+1. 使用项目根目录的 `.env` 作为唯一环境配置文件
 2. 编辑 `.env` 文件，填写 `ANTHROPIC_API_KEY` 等配置
 
 ## 常用命令
@@ -31,8 +31,17 @@ python main.py       # 启动数据服务 (端口8000)
 # 单元测试
 npm run test:unit
 
-# 验收测试
-bash scripts/acceptance-test.sh
+# API测试
+npm run test:api
+
+# 服务控制（脱离当前终端运行）
+npm run services:start
+npm run services:stop
+npm run services:restart
+npm run services:status
+
+# macOS 登录后自动启动（可选）
+npm run services:install
 ```
 
 ## 项目结构
@@ -126,8 +135,8 @@ ai-invest/
 ### 决策分析
 - `POST /api/analysis/etf` - ETF AI分析
 
-## 验收测试
-运行 `bash scripts/acceptance-test.sh` 执行自动化验收测试，覆盖所有API接口。
+## 测试
+运行 `npm run test:api` 执行 API 测试。
 
 ## 注意事项
 - MVP阶段仅支持A股ETF，不直接推荐个股

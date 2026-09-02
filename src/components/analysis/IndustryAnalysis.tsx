@@ -66,22 +66,22 @@ interface CompanyTrend {
   totalCompanies: number
   analyzedCompanies?: number
   topCompanies: CompanyTrendCompany[]
-  company_summaries?: CompanyTrendCompany[]
+  companySummaries?: CompanyTrendCompany[]
   graph?: {
-    stage_count?: number
-    segment_count?: number
-    company_count?: number
-    stages?: Array<{ id?: string; name: string; segments: string[]; company_count: number }>
+    stageCount?: number
+    segmentCount?: number
+    companyCount?: number
+    stages?: Array<{ id?: string; name: string; segments: string[]; companyCount: number }>
   }
-  data_coverage?: {
-    graph_companies?: number
-    fetched_companies?: number
-    analyzed_companies?: number
-    companies_with_any_data?: number
-    quote_coverage?: number
-    financial_coverage?: number
-    announcement_coverage?: number
-    missing_symbol?: number
+  dataCoverage?: {
+    graphCompanies?: number
+    fetchedCompanies?: number
+    analyzedCompanies?: number
+    companiesWithAnyData?: number
+    quoteCoverage?: number
+    financialCoverage?: number
+    announcementCoverage?: number
+    missingSymbol?: number
   }
   source?: {
     provider?: string
@@ -261,6 +261,7 @@ export function IndustryAnalysis() {
     error: null,
     data: null
   })
+  const [companyReportGenerating, setCompanyReportGenerating] = useState(false)
   const [marketSection, setMarketSection] = useState<AnalysisSection<MarketTrend>>({
     loading: false,
     error: null,
@@ -912,48 +913,25 @@ export function IndustryAnalysis() {
     )
   }
 
-  // 1. 获取企业发展趋势
+  // 1. 获取企业发展趋势（两阶段：先获取数据，再生成AI报告）
   const fetchCompanyTrend = async () => {
     const industry = getSelectedIndustry()
     if (!industry) return
 
     setCompanySection({ loading: true, error: null, data: null })
     setSelectedCompanyReportId(null)
+    setCompanyReportGenerating(false)
 
     try {
+      // 阶段1: 获取全部企业数据（不生成AI报告，避免后端AI筛选阻塞）
       const response = await fetch(
-        buildAIAnalysisEndpoint(getAIAnalysisModule('company'), selectedIndustry, industry.name)
+        buildAIAnalysisEndpoint(getAIAnalysisModule('company'), selectedIndustry, industry.name, 90, { generateAiReport: false })
       )
 
       const data = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(data.error || '获取企业数据失败')
 
-      if (data.success) {
-        const companyData: CompanyTrend = {
-          totalCompanies: data.total_companies || 0,
-          analyzedCompanies: data.analyzed_companies || 0,
-          topCompanies: data.top_companies || [],
-          company_summaries: data.company_summaries || [],
-          graph: data.graph,
-          data_coverage: data.data_coverage,
-          source: data.source,
-          trendReport: data.trend_report || '',
-        }
-
-        setCompanySection({
-          loading: false,
-          error: null,
-          data: companyData,
-        })
-        try {
-          await saveCompanyReport(industry.id, industry.name, companyData)
-        } catch (saveError) {
-          setCompanySection((current) => ({
-            ...current,
-            error: saveError instanceof Error ? saveError.message : '数据已完成，但历史报告保存失败',
-          }))
-        }
-      } else {
+      if (!data.success) {
         const stageLabel: Record<string, string> = {
           graph: '图谱读取',
           company_data: '企业数据获取',
@@ -967,6 +945,79 @@ export function IndustryAnalysis() {
             ? `服务未返回具体原因（错误码：${data.error_code}）`
             : '服务未返回具体原因'
         throw new Error(`${stage}${errorMessage}`)
+      }
+
+      // 前端规则筛选Top10企业（使用现有的综合评分逻辑）
+      // 优先使用company_summaries（全部企业），如果不存在再使用top_companies
+      const allCompanies = data.company_summaries || data.top_companies || []
+      const topCompanies = allCompanies.slice(0, 10) // 取前10家企业
+      const topCompanySymbols = topCompanies.map((c: CompanyTrendCompany) => c.symbol).filter(Boolean)
+
+      // 阶段2: 对Top10企业生成AI报告（如果有符号的企业）
+      setCompanyReportGenerating(true)
+      let trendReport = ''
+      if (topCompanySymbols.length > 0) {
+        try {
+          const aiResponse = await fetch(
+            buildAIAnalysisEndpoint(getAIAnalysisModule('company'), selectedIndustry, industry.name, 90, {
+              generateAiReport: true,
+              topCompanies: topCompanySymbols
+            })
+          )
+          const aiData = await aiResponse.json().catch(() => ({}))
+          if (aiResponse.ok && aiData.success) {
+            trendReport = aiData.trend_report || ''
+          }
+        } catch (aiError) {
+          console.warn('AI报告生成失败，使用数据模式:', aiError)
+          // AI报告生成失败不影响主流程，继续使用数据模式
+        }
+      }
+      setCompanyReportGenerating(false)
+
+      const companyData: CompanyTrend = {
+        totalCompanies: data.total_companies || 0,
+        analyzedCompanies: data.analyzed_companies || 0,
+        topCompanies: topCompanies,
+        companySummaries: data.company_summaries || [],
+        graph: {
+          stageCount: data.graph?.stage_count,
+          segmentCount: data.graph?.segment_count,
+          companyCount: data.graph?.company_count,
+          stages: data.graph?.stages?.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            segments: s.segments,
+            companyCount: s.company_count
+          }))
+        },
+        dataCoverage: {
+          graphCompanies: data.data_coverage?.graph_companies,
+          fetchedCompanies: data.data_coverage?.fetched_companies,
+          analyzedCompanies: data.data_coverage?.analyzed_companies,
+          companiesWithAnyData: data.data_coverage?.companies_with_any_data,
+          quoteCoverage: data.data_coverage?.quote_coverage,
+          financialCoverage: data.data_coverage?.financial_coverage,
+          announcementCoverage: data.data_coverage?.announcement_coverage,
+          missingSymbol: data.data_coverage?.missing_symbol,
+        },
+        source: data.source,
+        trendReport: trendReport,
+      }
+
+      setCompanySection({
+        loading: false,
+        error: null,
+        data: companyData,
+      })
+
+      try {
+        await saveCompanyReport(industry.id, industry.name, companyData)
+      } catch (saveError) {
+        setCompanySection((current) => ({
+          ...current,
+          error: saveError instanceof Error ? saveError.message : '数据已完成，但历史报告保存失败',
+        }))
       }
     } catch (err) {
       setCompanySection({
@@ -1010,7 +1061,7 @@ export function IndustryAnalysis() {
   }
 
   const loadCompanyReport = (reportId: string) => {
-    // 与“资讯与产业链分析”保持一致：历史报告只用于选择和跳转，
+    // 与"资讯与产业链分析"保持一致：历史报告只用于选择和跳转，
     // 不把历史报告的数据重新注入当前分析页，完整内容统一在独立报告页查看。
     if (!savedCompanyReports.some((item) => item.id === reportId)) return
     setSelectedCompanyReportId(reportId)
@@ -1238,7 +1289,7 @@ export function IndustryAnalysis() {
         loadingMessage="正在匹配标的、计算技术指标并生成市场报告..."
         reportTitle="AI大盘趋势分析报告"
         reportBadge="基于当前领域数据"
-        reportDescription="报告已经生成，点击“查看完整报告”了解指数、ETF 数据和 AI 趋势结论。"
+        reportDescription="报告已经生成，点击查看完整报告了解指数、ETF数据和AI趋势结论。"
         reportReady={Boolean(marketData && showCurrentMarketReport && selectedReportId)}
         onOpenReport={() => {
           const industry = getSelectedIndustry()
@@ -1262,7 +1313,7 @@ export function IndustryAnalysis() {
             router.push(`/analysis/market-report?reportId=${selectedReportId}&industryId=${selectedIndustry}&industryName=${encodeURIComponent(industry.name)}`)
           },
         }}
-        emptyTitle="点击“开始分析”获取大盘趋势解读"
+        emptyTitle="点击开始分析获取大盘趋势解读"
         emptyDescription="分析完成后，可在完整报告中查看市场数据和分析结论"
       />
 
@@ -1287,15 +1338,15 @@ export function IndustryAnalysis() {
         onAnalyze={fetchCompanyTrend}
         steps={[
           { icon: Network, label: '知识图谱企业', detail: '读取产业阶段、环节与全部企业', active: Boolean(companySection.data?.graph) },
-          { icon: Newspaper, label: '企业级资讯', detail: '汇总行情、财报与公告信息', active: Boolean(companySection.data?.data_coverage) },
+          { icon: Newspaper, label: '企业级资讯', detail: '汇总行情、财报与公告信息', active: Boolean(companySection.data?.dataCoverage) },
           { icon: BarChart3, label: '指标与对比', detail: '计算覆盖度、增长与综合评分', active: Boolean(companySection.data?.analyzedCompanies) },
           { icon: FileText, label: 'AI分析报告', detail: '生成可追溯的完整趋势报告', active: Boolean(companySection.data?.trendReport) },
         ]}
         loadingMessage="正在读取企业图谱、整理行情财报并生成趋势报告..."
         reportTitle="AI企业发展趋势分析报告"
         reportBadge="AI生成"
-        reportDescription="报告已经生成，点击“查看完整报告”进入独立页面查看完整企业数据、产业链上下文和 AI 趋势结论。"
-        reportReady={Boolean(companySection.data && selectedCompanyReportId)}
+        reportDescription="报告已经生成，点击查看完整报告进入独立页面查看完整企业数据、产业链上下文和AI趋势结论。"
+        reportReady={Boolean(companySection.data && selectedCompanyReportId && !companyReportGenerating)}
         onOpenReport={() => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`)}
         history={{
           label: '历史企业趋势报告',
@@ -1310,7 +1361,7 @@ export function IndustryAnalysis() {
           onChange: (value) => value && loadCompanyReport(value),
           onOpen: () => selectedCompanyReportId && router.push(`/analysis/report/${selectedCompanyReportId}`),
         }}
-        emptyTitle="点击“开始分析”获取企业发展趋势解读"
+        emptyTitle="点击开始分析获取企业发展趋势解读"
         emptyDescription="分析过程会读取知识图谱企业，并整理行情、财报和公告数据"
       />
 
@@ -1561,7 +1612,7 @@ export function IndustryAnalysis() {
               const Icon = step.icon
               const active = companySection.loading
                 || (index === 0 && companySection.data?.graph)
-                || (index === 1 && companySection.data?.data_coverage)
+                || (index === 1 && companySection.data?.dataCoverage)
                 || (index === 2 && companySection.data?.analyzedCompanies)
                 || (index === 3 && companySection.data?.trendReport)
 
@@ -1651,14 +1702,14 @@ export function IndustryAnalysis() {
                   </Button>
                 </div>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                  报告已经生成，点击“查看完整报告”进入独立页面查看完整企业数据、产业链上下文和 AI 趋势结论。
+                  报告已经生成，点击查看完整报告进入独立页面查看完整企业数据、产业链上下文和AI趋势结论。
                 </p>
               </div>
           )}
           {!companySection.loading && !companySection.data && !companySection.error && (
             <div className="rounded-lg border border-dashed py-10 text-center">
               <Sparkles className="mx-auto h-8 w-8 text-muted-foreground" />
-              <p className="mt-3 text-sm font-medium">点击“开始分析”获取企业发展趋势解读</p>
+              <p className="mt-3 text-sm font-medium">点击开始分析获取企业发展趋势解读</p>
               <p className="mt-1 text-xs text-muted-foreground">分析过程会读取知识图谱企业，并整理行情、财报和公告数据</p>
             </div>
           )}
@@ -1909,7 +1960,7 @@ export function IndustryAnalysis() {
           )}
           {!comprehensiveSection.loading && !comprehensiveSection.data && !comprehensiveSection.error && (
             <div className="text-sm text-muted-foreground text-center py-8">
-              点击右上角“开始分析”按钮生成综合投资分析报告
+              点击右上角"开始分析"按钮生成综合投资分析报告
             </div>
           )}
         </CardContent>

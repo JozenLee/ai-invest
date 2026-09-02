@@ -4,6 +4,12 @@ export function middleware(request: NextRequest) {
   const start = Date.now()
   const { pathname } = request.nextUrl
 
+  if (request.nextUrl.hostname === '127.0.0.1') {
+    const canonicalUrl = request.nextUrl.clone()
+    canonicalUrl.hostname = 'localhost'
+    return NextResponse.redirect(canonicalUrl, 307)
+  }
+
   // 只记录API请求
   if (pathname.startsWith('/api/')) {
     console.log(`[${new Date().toISOString()}] → ${request.method} ${pathname}`)
@@ -24,5 +30,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
 }

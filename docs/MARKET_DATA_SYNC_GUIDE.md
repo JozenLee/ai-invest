@@ -200,7 +200,7 @@ tail -f /tmp/data-service.log
 **解决方案：**
 1. 确认数据服务正在运行：`curl http://localhost:8000/health`
 2. 检查端口是否被占用：`lsof -i :8000`
-3. 检查 `.env.local` 中的 `DATA_SERVICE_URL` 配置
+3. 检查 `.env` 中的 `DATA_SERVICE_URL` 配置
 
 ### 问题3: ETF数据同步失败
 
