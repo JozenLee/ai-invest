@@ -1,5 +1,6 @@
 """本地数据资产查询接口。"""
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, HTTPException, Query
 
@@ -97,6 +98,13 @@ async def get_local_subscriptions():
         row["datasets"] = db.execute("SELECT datasetKey, enabled, status, nextRunAt, lastSuccessAt, lastError FROM subscription_datasets WHERE subscriptionId = ? ORDER BY datasetKey", (row["id"],))
     return {"success": True, "data": rows}
 
+@router.post("/subscriptions/refresh-due")
+async def refresh_due_subscriptions():
+    """Start queued subscription datasets immediately after an explicit refresh."""
+    from services.subscription_sync_service import subscription_sync_service
+    asyncio.create_task(subscription_sync_service.run_due())
+    return {"success": True}
+
 
 @router.post("/subscriptions/{code}/refresh")
 async def refresh_local_subscription(code: str):
@@ -107,4 +115,8 @@ async def refresh_local_subscription(code: str):
     now = datetime.now(timezone.utc).isoformat()
     for row in rows:
         db.update("UPDATE subscription_datasets SET status='queued', nextRunAt=?, lastError=NULL, updatedAt=? WHERE id=?", (now, now, row["id"]))
+    # Wake the worker immediately for manual/page-triggered refreshes; the scheduler
+    # remains responsible for periodic due checks and retries.
+    from services.subscription_sync_service import subscription_sync_service
+    asyncio.create_task(subscription_sync_service.run_due())
     return {"success": True, "data": {"code": code, "queuedDatasets": len(rows)}}

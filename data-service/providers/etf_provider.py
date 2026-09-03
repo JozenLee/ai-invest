@@ -81,6 +81,9 @@ class ETFProvider:
             round((asyncio.get_running_loop().time() - tushare_started_at) * 1000),
         )
         if tushare_result:
+            if len(tushare_result) < 10:
+                fallback = await asyncio.to_thread(self._get_eastmoney_holdings_direct, ticker)
+                tushare_result = self._merge_holdings(tushare_result, fallback)
             logger.info(
                 "ETF持仓请求结束: code=%s status=success source=tushare rows=%s duration_ms=%s",
                 ticker,
@@ -174,6 +177,22 @@ class ETFProvider:
             round((asyncio.get_running_loop().time() - started_at) * 1000),
         )
         return []
+
+    @staticmethod
+    def _merge_holdings(primary: List[Dict], fallback: List[Dict]) -> List[Dict]:
+        """合并不同报告期/来源的持仓，按代码去重并保留权重较高的一条。"""
+        merged: Dict[str, Dict] = {}
+        for row in [*(primary or []), *(fallback or [])]:
+            raw_code = str(row.get('stock_code') or row.get('stockCode') or '').strip()
+            code = raw_code.split('.')[0].removeprefix('sh').removeprefix('sz')
+            if not code:
+                continue
+            row = {**row, 'stock_code': code}
+            current = merged.get(code)
+            weight = float(row.get('weight') or 0)
+            if current is None or weight > float(current.get('weight') or 0):
+                merged[code] = row
+        return sorted(merged.values(), key=lambda row: float(row.get('weight') or 0), reverse=True)
 
     @staticmethod
     def _get_eastmoney_holdings_direct(ticker: str) -> List[Dict]:
@@ -332,6 +351,7 @@ class ETFProvider:
             periods = self._recent_report_periods(
                 count=max(1, int(os.getenv("ETF_HOLDINGS_REPORT_PERIODS", "2")))
             )
+            combined: List[Dict] = []
             for period in periods:
                 started_at = asyncio.get_running_loop().time()
                 try:
@@ -356,7 +376,9 @@ class ETFProvider:
                     if result:
                         for item in result:
                             item['report_period'] = item.get('report_period') or period
-                        return result
+                        combined = self._merge_holdings(combined, result)
+                        if len(combined) >= 10:
+                            return combined
                 except Exception as error:
                     logger.warning(
                         'ETF定期披露持仓异常: code=%s period=%s duration_ms=%s error=%s',
@@ -365,7 +387,7 @@ class ETFProvider:
                         round((asyncio.get_running_loop().time() - started_at) * 1000),
                         error,
                     )
-            return []
+            return combined
         except Exception as error:
             logger.warning('ETF %s Tushare持仓调用异常: %s', ticker, error)
             return []

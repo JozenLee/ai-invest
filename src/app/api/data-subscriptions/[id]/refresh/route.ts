@@ -6,7 +6,7 @@ export async function POST(_request: NextRequest, { params }: { params: Promise<
   const subscription = await prisma.dataSubscription.findUnique({ include: { instrument: true, datasets: true }, where: { id } })
   if (!subscription) return NextResponse.json({ success: false, error: '订阅不存在' }, { status: 404 })
 
-  const datasets = subscription.datasets.filter((dataset) => dataset.enabled && ['etf_realtime', 'etf_holdings', 'constituent_stock_realtime'].includes(dataset.datasetKey))
+  const datasets = subscription.datasets.filter((dataset) => dataset.enabled && ['etf_realtime', 'etf_daily', 'etf_holdings', 'constituent_stock_realtime', 'constituent_stock_daily', 'stock_financial', 'stock_announcement'].includes(dataset.datasetKey))
   const runs = await prisma.$transaction(datasets.map((dataset) => prisma.dataFetchRun.create({
     data: { datasetId: dataset.id, targetCode: subscription.instrument.code, status: 'queued', qualityStatus: 'pending' },
   })))

@@ -27,6 +27,27 @@ function isFreshCachedOverview(value: any): boolean {
 
 // 主要指数配置（Yahoo Finance 格式）
 const INDEX_CODES = ['sh000001', 'sz399001', 'sz399006', 'sh000688', 'sh000300']
+const INDEX_NAMES: Record<string, string> = {
+  sh000001: '上证指数', '000001': '上证指数',
+  sz399001: '深证成指', '399001': '深证成指',
+  sz399006: '创业板指', '399006': '创业板指',
+  sh000688: '科创50', '000688': '科创50',
+  sh000300: '沪深300', '000300': '沪深300',
+}
+
+function normalizeIndexNames(result: any): any {
+  if (!result?.data?.indices) return result
+  return {
+    ...result,
+    data: {
+      ...result.data,
+      indices: result.data.indices.map((index: any) => {
+        const code = String(index.code || '').trim().toLowerCase()
+        return { ...index, name: INDEX_NAMES[code] || index.name || index.code }
+      }),
+    },
+  }
+}
 
 // 验证指数数据是否为真实数据（排除测试假数据）
 function isValidIndexData(indices: any[]): boolean {
@@ -65,10 +86,10 @@ function ensureCompleteIndices(result: any): any {
     }
   }
 
-  return {
+  return normalizeIndexNames({
     ...result,
     data: { ...result.data, indices: filled },
-  }
+  })
 }
 
 export async function GET(request: Request) {
@@ -81,7 +102,7 @@ export async function GET(request: Request) {
     // 检查缓存
     const cached = apiCache.get<any>(CACHE_KEY)
     if (cached && isFreshCachedOverview(cached)) {
-      return NextResponse.json(cached)
+      return NextResponse.json(normalizeIndexNames(cached))
     }
   }
 
@@ -158,10 +179,11 @@ export async function GET(request: Request) {
     const cachedOverview = getCachedMarketOverview()
     if (cachedOverview && isValidIndexData(cachedOverview?.data?.indices)) {
       console.warn('所有实时数据源不可用，使用本地缓存数据')
-      apiCache.set(CACHE_KEY, cachedOverview, CACHE_TTL_CLOSED)
+      const normalizedCachedOverview = normalizeIndexNames(cachedOverview)
+      apiCache.set(CACHE_KEY, normalizedCachedOverview, CACHE_TTL_CLOSED)
       return NextResponse.json({
-        ...cachedOverview,
-        source: `${cachedOverview.source || 'cached'}-stale`,
+        ...normalizedCachedOverview,
+        source: `${normalizedCachedOverview.source || 'cached'}-stale`,
       })
     }
   } catch (error) {

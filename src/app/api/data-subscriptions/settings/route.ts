@@ -23,7 +23,7 @@ export async function PATCH(request: NextRequest) {
       ...(Number.isFinite(Number(body.closedIntervalSeconds)) ? { closedIntervalSeconds: Math.max(60, Number(body.closedIntervalSeconds)) } : {}),
     },
   })
-  const datasetKeys = scope === 'etf_index' ? ['etf_realtime'] : scope === 'company_quote' ? ['constituent_stock_realtime'] : []
+  const datasetKeys = scope === 'etf_index' ? ['etf_realtime'] : scope === 'company_quote' ? ['constituent_stock_realtime', 'constituent_stock_daily', 'stock_financial', 'stock_announcement'] : []
   if (datasetKeys.length) {
     await prisma.subscriptionDataset.updateMany({
       where: { datasetKey: { in: datasetKeys } },

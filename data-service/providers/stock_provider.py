@@ -54,6 +54,15 @@ class StockProvider:
             },
         }
 
+    @staticmethod
+    def _normalize_cn_symbol(symbol: str) -> str:
+        value = str(symbol or '').strip().lower()
+        if value.startswith(('sh', 'sz')):
+            value = value[2:]
+        if value.endswith(('.sh', '.sz')):
+            value = value[:-3]
+        return value
+
     async def get_stock_info(self, symbol: str, market: str = 'cn') -> Optional[Dict[str, Any]]:
         """
         获取股票基本信息
@@ -66,6 +75,7 @@ class StockProvider:
             股票基本信息字典
         """
         if market == 'cn':
+            symbol = self._normalize_cn_symbol(symbol)
             tushare_info = await self._get_tushare_stock_info(symbol)
             if tushare_info:
                 return tushare_info
@@ -73,6 +83,25 @@ class StockProvider:
                 return await self._get_cn_stock_info(symbol.split('.')[0])
             return {}
         return await self.openbb.get_stock_info(symbol, market)
+
+    async def get_stock_names(self, symbols: List[str]) -> Dict[str, str]:
+        """批量读取 A 股简称，作为持仓名称补全的低成本兜底。"""
+        if not symbols or ak is None:
+            return {}
+        try:
+            frame = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+            if frame is None or frame.empty:
+                return {}
+            result: Dict[str, str] = {}
+            for _, row in frame.iterrows():
+                code = str(row.get('代码') or '').strip()
+                name = str(row.get('名称') or '').strip()
+                if code in symbols and name and name != code:
+                    result[code] = name
+            return result
+        except Exception as error:
+            self.logger.warning('批量补全股票名称失败: %s', error)
+            return {}
 
     async def get_financial_report(
         self,
@@ -92,6 +121,7 @@ class StockProvider:
             财报数据列表
         """
         if market == 'cn':
+            symbol = self._normalize_cn_symbol(symbol)
             # 优先使用 Tushare，失败时降级到 AKShare
             tushare_data = await self._get_tushare_financial_report(symbol, report_type)
             if tushare_data:
@@ -120,7 +150,12 @@ class StockProvider:
             公告列表
         """
         if market == 'cn':
-            # 优先使用AKShare获取公告，Tushare anns_d接口不稳定
+            symbol = self._normalize_cn_symbol(symbol)
+            # 优先使用 Tushare anns_d 获取指定时间窗；失败后降级到公开公告接口。
+            tushare_rows = await self._get_tushare_announcements(symbol, start_date, end_date)
+            if tushare_rows:
+                return tushare_rows
+            # AKShare 公告接口在不同版本中可用性不一致。
             akshare_rows = await self._get_akshare_announcements(symbol, start_date, end_date)
             if akshare_rows:
                 return akshare_rows
@@ -152,6 +187,7 @@ class StockProvider:
             K线数据列表
         """
         if market == 'cn':
+            symbol = self._normalize_cn_symbol(symbol)
             if not self.tushare.available:
                 return await self._get_eastmoney_kline(symbol, period, start_date, end_date, adjust)
             try:
@@ -583,7 +619,9 @@ class StockProvider:
         }
         for source, target in aliases.items():
             if source in row and target not in normalized:
-                normalized[target] = format_date(row.get(source)) if source in ['end_date', 'ann_date'] else row.get(source)
+                # 保留 Tushare 原始报告期（YYYYMMDD）作为稳定主键；同时保留
+                # 已格式化的 end_date/ann_date 字段供展示和范围判断。
+                normalized[target] = row.get(source) if source == 'end_date' else format_date(row.get(source)) if source == 'ann_date' else row.get(source)
         normalized.setdefault('报告类型', 'Tushare')
         return normalized
 

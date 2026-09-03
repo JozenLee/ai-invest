@@ -348,6 +348,10 @@ class TushareProvider(DataProvider):
                     records.append({
                         "代码": symbol,
                         "名称": "",
+                        "日期": str(latest.get("trade_date") or latest.get("date") or ""),
+                        "开盘": float(latest.get("open", latest.get("今开", 0)) or 0),
+                        "最高": float(latest.get("high", latest.get("最高", 0)) or 0),
+                        "最低": float(latest.get("low", latest.get("最低", 0)) or 0),
                         "最新价": float(latest.get("close", 0)),
                         "涨跌额": float(latest.get("change", 0)),
                         "涨跌幅": float(latest.get("pct_chg", 0)),
