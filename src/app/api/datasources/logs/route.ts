@@ -1,86 +1,43 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { prisma } from '@/lib/db/prisma';
+import { NextRequest, NextResponse } from 'next/server'
+import { prisma } from '@/lib/db/prisma'
+import { Prisma } from '@prisma/client'
 
-/**
- * GET /api/datasources/logs
- * 获取采集日志列表
- *
- * Query参数:
- * - sourceId: 数据源ID过滤（可选）
- * - status: 状态过滤 success/failed/running（可选）
- * - limit: 限制数量，默认50
- * - offset: 偏移量，默认0
- */
 export async function GET(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const sourceId = searchParams.get('sourceId');
-    const status = searchParams.get('status');
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
-    const offset = parseInt(searchParams.get('offset') || '0');
-
-    // 构建查询条件
-    const where: any = {};
-    if (sourceId) {
-      where.sourceId = sourceId;
-    }
-    if (status) {
-      where.status = status;
-    }
-
-    // 查询总数
-    const total = await prisma.dataSourceLog.count({ where });
-
-    // 查询日志列表
-    const logs = await prisma.dataSourceLog.findMany({
-      where,
-      include: {
-        source: {
-          select: {
-            name: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-      take: limit,
-      skip: offset,
-    });
-
-    // 格式化响应
-    const items = logs.map(log => ({
-      id: log.id,
-      sourceId: log.sourceId,
-      sourceName: log.source.name,
-      status: log.status,
-      message: log.message || '',
-      fetchedCount: log.fetchedCount || 0,
-      processedCount: log.processedCount || 0,
-      failedCount: log.failedCount || 0,
-      duration: log.duration || 0,
-      error: log.errorDetail,
-      createdAt: log.createdAt.toISOString(),
-    }));
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        total,
-        items,
-        limit,
-        offset,
-      },
-    });
-  } catch (error) {
-    console.error('Error fetching datasource logs:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to fetch logs',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
-    );
+    const params = request.nextUrl.searchParams
+    const sourceId = params.get('sourceId'), status = params.get('status')
+    const limit = Math.max(1, Math.min(parseInt(params.get('limit') || '50') || 50, 100))
+    const offset = Math.max(0, parseInt(params.get('offset') || '0') || 0)
+    // Deleted sources retain immutable log snapshots in the local archive.
+    const history = Prisma.sql`
+      SELECT l.id,l.sourceId,d.name AS sourceName,l.status,l.message,l.fetchedCount,l.processedCount,l.failedCount,l.duration,l.errorDetail AS error,l.createdAt,0 AS archived
+      FROM DataSourceLog l JOIN DataSource d ON d.id=l.sourceId
+      UNION ALL
+      SELECT json_extract(j.value,'$.id'),r.targetCode,json_extract(r.payload,'$.source.name'),
+        json_extract(j.value,'$.status'),json_extract(j.value,'$.message'),
+        json_extract(j.value,'$.fetchedCount'),json_extract(j.value,'$.processedCount'),
+        json_extract(j.value,'$.failedCount'),json_extract(j.value,'$.duration'),
+        json_extract(j.value,'$.errorDetail'),json_extract(j.value,'$.createdAt'),1
+      FROM raw_payloads r JOIN json_each(r.payload,'$.logs') j
+      WHERE r.datasetKey='deleted_news_source'`
+    const filters: Prisma.Sql[] = []
+    if (sourceId) filters.push(Prisma.sql`sourceId=${sourceId}`)
+    if (status) filters.push(Prisma.sql`status=${status}`)
+    const where = filters.length ? Prisma.sql`WHERE ${Prisma.join(filters,' AND ')}` : Prisma.empty
+    const counts = await prisma.$queryRaw<Array<{ total: number | bigint }>>(Prisma.sql`SELECT COUNT(*) AS total FROM (${history}) h ${where}`)
+    const logs = await prisma.$queryRaw<Array<Record<string, any>>>(Prisma.sql`
+      SELECT * FROM (${history}) h ${where}
+      ORDER BY CASE WHEN CAST(createdAt AS TEXT) NOT LIKE '%-%' THEN CAST(createdAt AS REAL)
+        ELSE (julianday(CASE WHEN length(createdAt) IN (19,26) THEN createdAt || '+08:00' ELSE createdAt END)-2440587.5)*86400000 END DESC
+      LIMIT ${limit} OFFSET ${offset}`)
+    const items = logs.map(log => {
+      const raw = String(log.createdAt)
+      const date = /^\d+$/.test(raw) ? new Date(Number(raw)) : new Date(/[zZ]$|[+-]\d{2}:\d{2}$/.test(raw) ? raw : raw+'+08:00')
+      return { ...log, archived: Boolean(log.archived), message: (log.archived ? '【已删除源归档】' : '') + (log.message || ''), createdAt: date.toISOString(), duration: Number(log.duration || 0), fetchedCount: Number(log.fetchedCount || 0), processedCount: Number(log.processedCount || 0), failedCount: Number(log.failedCount || 0) }
+    })
+    return NextResponse.json({success:true,data:{total:Number(counts[0].total),items,limit,offset}})
+  } catch(error) {
+    console.error('读取资讯更新记录失败',error)
+    return NextResponse.json({success:false,error:'读取更新记录失败'}, {status:500})
   }
 }

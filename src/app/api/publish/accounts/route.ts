@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
       accessToken: null,
       refreshToken: null,
       tokenExpiresAt: null,
-      defaultVisibility: body.defaultVisibility === 'private' ? 'private' : 'public',
+      defaultVisibility: body.defaultVisibility === 'public' ? 'public' : 'private',
       allowComments: body.allowComments !== false,
       watermarkEnabled: body.watermarkEnabled !== false,
       defaultTopics: JSON.stringify(Array.isArray(body.defaultTopics) ? body.defaultTopics.filter((topic: unknown) => typeof topic === 'string') : []),

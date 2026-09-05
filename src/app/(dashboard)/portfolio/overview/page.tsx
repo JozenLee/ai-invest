@@ -155,15 +155,14 @@ export default function PortfolioOverviewPage() {
   }
 
   const syncPortfolio = async () => {
-    if (!portfolio) return
     setIsSyncing(true)
     setSyncMessage(null)
     setError(null)
     try {
-      const res = await fetch(`/api/portfolio/${portfolio.id}/sync`, { method: 'POST' })
+      const res = await fetch('/api/portfolio/import-email', { method: 'POST' })
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data.error ?? '邮箱同步失败')
-      setSyncMessage(`已同步 ${data.data.holdings.length} 只基金和余额`)
+      setSyncMessage(`已同步 ${data.count} 只基金和余额`)
       await fetchPortfolio()
     } catch (err) {
       setError(err instanceof Error ? err.message : '邮箱同步失败')
@@ -352,7 +351,7 @@ export default function PortfolioOverviewPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" size="sm" onClick={syncPortfolio} disabled={isSyncing || !portfolio}>
+          <Button variant="outline" size="sm" onClick={syncPortfolio} disabled={isSyncing}>
             <Mail className={`mr-2 h-4 w-4 ${isSyncing ? 'animate-pulse' : ''}`} />
             {isSyncing ? '同步中...' : '从邮箱同步'}
           </Button>

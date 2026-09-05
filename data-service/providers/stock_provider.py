@@ -6,6 +6,9 @@ from typing import Optional, List, Dict, Any
 import logging
 import os
 import asyncio
+import re
+import html
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -17,6 +20,8 @@ except ImportError:
 
 from providers.openbb_provider import OpenBBProvider
 from providers.tushare_provider import TushareProvider
+from providers.international_stock_provider import InternationalStockProvider
+from providers.stock_symbols import canonical_stock_code, provider_symbol, stock_market
 
 
 class StockProvider:
@@ -29,6 +34,9 @@ class StockProvider:
         self.openbb = OpenBBProvider()
         self.tushare = TushareProvider()
         self.timeout_seconds = max(1, int(os.getenv('STOCK_PROVIDER_TIMEOUT_SECONDS', '20')))
+        self.international = InternationalStockProvider(self.tushare, self.openbb, ak, self.logger)
+        self._announcement_excerpt_cache = {}
+        self._financial_indicator_cache = {}
 
     def capabilities(self) -> Dict[str, Any]:
         return {
@@ -82,26 +90,89 @@ class StockProvider:
             if ak is not None:
                 return await self._get_cn_stock_info(symbol.split('.')[0])
             return {}
-        return await self.openbb.get_stock_info(symbol, market)
+        return await self.openbb.get_stock_info(provider_symbol(symbol), market)
 
     async def get_stock_names(self, symbols: List[str]) -> Dict[str, str]:
-        """批量读取 A 股简称，作为持仓名称补全的低成本兜底。"""
-        if not symbols or ak is None:
+        """批量读取 A 股和港股简称，作为持仓名称补全的低成本兜底。"""
+        if not symbols:
             return {}
-        try:
-            frame = await asyncio.to_thread(ak.stock_zh_a_spot_em)
+
+        requested = {canonical_stock_code(symbol) for symbol in symbols if symbol}
+        result = await asyncio.to_thread(self._get_direct_stock_names, requested)
+        requested -= result.keys()
+        if not requested or ak is None:
+            return result
+
+        def read_names(function_name: str) -> Dict[str, str]:
+            function = getattr(ak, function_name, None)
+            if function is None:
+                return {}
+            frame = function()
             if frame is None or frame.empty:
                 return {}
-            result: Dict[str, str] = {}
+            names: Dict[str, str] = {}
             for _, row in frame.iterrows():
-                code = str(row.get('代码') or '').strip()
+                raw_code = str(row.get('代码') or '').strip()
+                code = canonical_stock_code(
+                    f'{raw_code}.hk' if function_name == 'stock_hk_spot_em' else raw_code
+                )
                 name = str(row.get('名称') or '').strip()
-                if code in symbols and name and name != code:
-                    result[code] = name
+                if code in requested and name and name != raw_code:
+                    names[code] = name
+            return names
+
+        try:
+            functions = []
+            if any(stock_market(symbol) == 'cn' for symbol in requested):
+                functions.append('stock_zh_a_spot_em')
+            if any(stock_market(symbol) == 'hk' for symbol in requested):
+                functions.append('stock_hk_spot_em')
+            batches = await asyncio.gather(
+                *(asyncio.to_thread(read_names, function_name) for function_name in functions),
+                return_exceptions=True,
+            )
+            for function_name, batch in zip(functions, batches):
+                if isinstance(batch, dict):
+                    result.update(batch)
+                elif isinstance(batch, Exception):
+                    self.logger.warning('批量补全股票名称失败 %s: %s', function_name, batch)
             return result
         except Exception as error:
             self.logger.warning('批量补全股票名称失败: %s', error)
-            return {}
+            return result
+
+    def _get_direct_stock_names(self, symbols) -> Dict[str, str]:
+        """按证券代码直连查询简称，避免全市场列表接口及系统代理故障。"""
+        query_symbols = {}
+        for symbol in symbols:
+            market = stock_market(symbol)
+            if market == 'hk':
+                query_symbols[f'hk{provider_symbol(symbol, "akshare")}'] = symbol
+            elif market == 'cn':
+                prefix = 'bj' if symbol.startswith(('4', '8', '92')) else 'sh' if symbol.startswith(('6', '9')) else 'sz'
+                query_symbols[f'{prefix}{symbol}'] = symbol
+        names: Dict[str, str] = {}
+        keys = list(query_symbols)
+        with requests.Session() as session:
+            session.trust_env = False
+            session.headers.update({'User-Agent': 'Mozilla/5.0'})
+            for offset in range(0, len(keys), 100):
+                try:
+                    response = session.get(
+                        'https://qt.gtimg.cn/',
+                        params={'q': ','.join(keys[offset:offset + 100])},
+                        timeout=self.timeout_seconds,
+                    )
+                    response.raise_for_status()
+                    for quote_symbol, payload in re.findall(r'v_([a-z0-9]+)="([^"]*)"', response.content.decode('gb18030')):
+                        symbol = query_symbols.get(quote_symbol)
+                        fields = payload.split('~')
+                        name = fields[1].strip() if len(fields) > 2 else ''
+                        if symbol and name and name.lower() not in {'nan', 'none', 'null', '-'} and canonical_stock_code(name) != symbol:
+                            names[symbol] = name
+                except Exception as error:
+                    self.logger.warning('直连补全股票名称失败: %s', error)
+        return names
 
     async def get_financial_report(
         self,
@@ -128,7 +199,7 @@ class StockProvider:
                 return tushare_data
             # 降级到 AKShare
             return await self._get_akshare_financial_report(symbol, report_type)
-        return await self.openbb.get_financial_report(symbol, report_type, market)
+        return await self.international.financial(symbol, market, report_type)
 
     async def get_announcements(
         self,
@@ -161,7 +232,7 @@ class StockProvider:
                 return akshare_rows
             # 降级到东方财富
             return await self._get_eastmoney_announcements(symbol, start_date, end_date)
-        return await self.openbb.get_announcements(symbol, start_date, end_date, market)
+        return await self.openbb.get_announcements(provider_symbol(symbol), start_date, end_date, market)
 
     async def get_kline(
         self,
@@ -202,7 +273,7 @@ class StockProvider:
             except Exception as error:
                 self.logger.warning("Tushare行情失败，切换东方财富 %s: %s", symbol, error)
             return await self._get_eastmoney_kline(symbol, period, start_date, end_date, adjust)
-        return await self.openbb.get_kline(symbol, start_date, end_date, market)
+        return await self.international.kline(symbol, market, start_date, end_date)
 
     async def get_realtime_quote(
         self,
@@ -224,7 +295,8 @@ class StockProvider:
                 return []
             frame = await self.tushare.get_stock_spot(symbols)
             return frame.to_dict('records') if frame is not None and not frame.empty else []
-        return None
+        batches = await asyncio.gather(*(self.international.quote(canonical_stock_code(symbol), market) for symbol in symbols))
+        return [row for batch in batches for row in batch]
 
     async def _get_cn_stock_info(self, symbol: str) -> Dict[str, Any]:
         """获取国内股票基本信息"""
@@ -286,7 +358,13 @@ class StockProvider:
             # 分析的主入口：即使 income 无权限或暂未返回，也能拿到报告期、
             # 现金流和盈利能力字段；income 成功时再合并收入与净利润。
             try:
-                indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+                cached = self._financial_indicator_cache.get(ts_code)
+                if cached and time.monotonic() - cached[0] < 3600:
+                    indicator = cached[1]
+                else:
+                    indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+                    if indicator is not None and not indicator.empty:
+                        self._financial_indicator_cache[ts_code] = (time.monotonic(), indicator)
                 if indicator is None or indicator.empty:
                     self.logger.info("Tushare fina_indicator返回空 %s", symbol)
                 else:
@@ -449,10 +527,28 @@ class StockProvider:
                 title = row.get('notice_title') or row.get('公告标题') or row.get('title')
                 if not title:
                     continue
+                article_id = str(row.get('art_code') or '')
+                url = row.get('url') or row.get('art_url') or (f'https://data.eastmoney.com/notices/detail/{symbol.split(".")[0]}/{article_id}.html' if article_id else '')
+                excerpt = self._announcement_excerpt_cache.get(article_id)
+                if not excerpt and article_id and len(normalized) < 3:
+                    try:
+                        detail_response = requests.get('https://np-cnotice-stock.eastmoney.com/api/content/ann', params={'art_code': article_id, 'client_source': 'web', 'page_index': 1}, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                        detail_response.raise_for_status()
+                        detail = detail_response.json().get('data') or {}
+                        text = detail.get('notice_content') or detail.get('content') or ''
+                        excerpt = re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', ' ', str(text)))).strip()[:1200]
+                        if excerpt:
+                            self._announcement_excerpt_cache[article_id] = excerpt
+                    except Exception:
+                        pass  # Metadata and original link remain useful without an excerpt.
                 normalized.append({
+                    'id': article_id or url,
                     '公告标题': str(title),
                     '公告日期': date,
-                    '网址': row.get('url') or row.get('art_url') or '',
+                    '网址': url,
+                    'url': url,
+                    'content': excerpt or None,
+                    'event_type': ' / '.join(str(item.get('column_name') or '') for item in row.get('columns', [])) or '公司公告',
                     'source': 'eastmoney_direct',
                 })
             return normalized
@@ -462,6 +558,13 @@ class StockProvider:
         except Exception as error:
             self.logger.warning("东方财富公告失败 %s: %s", symbol, error)
             return []
+
+    async def get_subscription_announcements(self, symbol, start_date, end_date, market):
+        if market == 'cn':
+            rows = await self._get_eastmoney_announcements(symbol, start_date, end_date)
+            if rows:
+                return rows
+        return await self.get_announcements(symbol, start_date, end_date, market)
 
     async def _get_eastmoney_kline(
         self,
@@ -581,6 +684,8 @@ class StockProvider:
                     'date': format_date(row.get('ann_date') or row.get('pub_date') or ''),
                     'url': str(row.get('url') or ''),
                     'source': 'tushare_anns_d',
+                    'content': row.get('content') or row.get('summary'),
+                    'event_type': row.get('type') or '公司公告',
                 }
                 for row in frame.to_dict('records')
                 if row.get('title')
@@ -623,6 +728,7 @@ class StockProvider:
                 # 已格式化的 end_date/ann_date 字段供展示和范围判断。
                 normalized[target] = row.get(source) if source == 'end_date' else format_date(row.get(source)) if source == 'ann_date' else row.get(source)
         normalized.setdefault('报告类型', 'Tushare')
+        normalized.setdefault('source', 'tushare')
         return normalized
 
     @staticmethod

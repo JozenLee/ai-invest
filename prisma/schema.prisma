@@ -1165,6 +1165,36 @@ model StepArtifact {
 
 // ==================== 本地数据订阅 ====================
 
+model SubscriptionConfiguration {
+  id        String   @id @default("global")
+  payload   String
+  updatedAt DateTime @updatedAt
+
+  @@map("subscription_configuration")
+}
+
+model MarketQuote {
+  id             String   @id @default(cuid())
+  instrumentType String
+  code           String
+  market         String   @default("CN")
+  currency       String?
+  price          Float
+  previousClose  Float?
+  open           Float?
+  high           Float?
+  low            Float?
+  volume         Float?
+  amount         Float?
+  changePct      Float?
+  tradeDate      String
+  source         String?
+  fetchedAt      DateTime @default(now())
+
+  @@unique([instrumentType, code])
+  @@map("market_quotes")
+}
+
 model Instrument {
   id        String   @id @default(cuid())
   type      String   // ETF / STOCK / INDEX
@@ -1305,4 +1335,26 @@ model RawPayload {
 
   @@index([datasetKey, targetCode, fetchedAt])
   @@map("raw_payloads")
+}
+
+model PublishSchedule {
+  id        String @id
+  payload   String
+  updatedAt String
+  @@map("publish_schedule")
+}
+
+model PublishScheduleRun {
+  id         String @id
+  slot       String
+  industryId String
+  status     String
+  config     String
+  runId      String?
+  reportId   String?
+  error      String?
+  createdAt  String
+  updatedAt  String
+  @@unique([slot, industryId])
+  @@map("publish_schedule_runs")
 }

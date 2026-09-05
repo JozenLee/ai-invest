@@ -1,4 +1,9 @@
 import { ExecutionOrchestrator } from '../execution-orchestrator'
+import { freezeResearchStep } from '../steps/freeze-research-step'
+import { fetchPortfolioStep } from '../steps/fetch-portfolio-step'
+import { portfolioAnalysisStep } from '../steps/portfolio-analysis-step'
+import { socialReportStep } from '../steps/social-report-step'
+import { assessDataQualityStep } from '../steps/assess-data-quality-step'
 import { fetchETFsStep } from '../steps/fetch-etfs-step'
 import { fetchETFDataStep } from '../steps/fetch-etf-data-step'
 import { fetchETFHoldingsStep } from '../steps/fetch-etf-holdings-step'
@@ -12,12 +17,15 @@ import { newsAnalysisStep } from '../steps/news-analysis-step'
 import { companyAnalysisStep } from '../steps/company-analysis-step'
 import { industryOverviewStep } from '../steps/industry-overview-step'
 import { investmentAdviceStep } from '../steps/investment-advice-step'
+import { etfActionStep } from '../steps/etf-action-step'
 import { generateReportStep } from '../steps/generate-report-step'
 
 /**
  * 综合分析工作流
  *
- * 执行流程分为两个阶段：
+ * 新轮次先冻结研究快照，再执行数据投影与AI解释；动作由规则引擎决定。
+ * 共20步（含冻结、私有持仓旁支和可降级的一页版），以数组定义为准。
+ * 以下为旧版主干的步骤说明，仅用于理解数据依赖：
  *
  * 阶段1: 数据获取（7个步骤）
  * 1. fetch-etfs: 获取产业相关ETF列表
@@ -39,7 +47,8 @@ import { generateReportStep } from '../steps/generate-report-step'
 export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
   'comprehensive-analysis',
   [
-    // 数据获取阶段
+    // 冻结后其余数据步骤仅投影此版本，不再混入新数据。
+    freezeResearchStep,
     fetchMarketSnapshotStep,
     fetchETFsStep,
     fetchETFDataStep,
@@ -47,14 +56,19 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     fetchCompaniesStep,
     fetchCompanyDataStep,
     fetchNewsStep,
+    fetchPortfolioStep,
     calculateMarketTrendsStep,
+    assessDataQualityStep,
+    etfActionStep,
 
     // AI分析报告阶段
     marketAnalysisStep,
     newsAnalysisStep,
     companyAnalysisStep,
+    portfolioAnalysisStep,
     industryOverviewStep,
     investmentAdviceStep,
+    socialReportStep,
     generateReportStep
   ]
 )

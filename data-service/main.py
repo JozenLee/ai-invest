@@ -2,6 +2,7 @@
 # FastAPI + AKShare
 
 import logging
+import json
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -66,6 +67,9 @@ async def lifespan(app: FastAPI):
     # 初始化全局AI分析器（延迟加载产业细分领域）
     # 产业细分领域将在服务启动后由后台任务加载
     logger.info("✅ AI分析器将在服务启动后自动加载产业细分领域")
+
+    from services.news_source_defaults import ensure_news_sources
+    ensure_news_sources()
 
     # 启动定时任务调度器
     await scheduler_service.start()
@@ -228,6 +232,32 @@ async def lifespan(app: FastAPI):
         minutes=1,
     )
     logger.info("已注册持仓同步监控任务 (每分钟检查，到点执行)")
+
+    async def research_review_monitor():
+        """Local-only opt-in rule review. No external AI, publication or trading."""
+        from pathlib import Path
+        import shutil
+        import asyncio
+        from db import db
+        rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey='research_schedule'")
+        if not any(json.loads(row['payload']).get('enabled') for row in rows):
+            return
+        node = shutil.which('node')
+        if not node:
+            logger.warning('投研定时复核不可用：找不到node')
+            return
+        root = Path(__file__).resolve().parent.parent
+        process = await asyncio.create_subprocess_exec(node, '--import', 'tsx', str(root / 'scripts/run-research-schedule.ts'), cwd=str(root), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            code = await asyncio.wait_for(process.wait(), timeout=180)
+            if code:
+                logger.warning('投研定时复核失败，请查看研究复核记录')
+        except asyncio.TimeoutError:
+            process.terminate()
+            await process.wait()
+            logger.warning('投研定时复核超时')
+
+    await scheduler_service.add_interval_job(job_id='research_review_monitor', func=research_review_monitor, minutes=1)
 
     # 注册数据清理任务（每天凌晨2:00执行）
     from workers.data_cleanup import run_cleanup_task

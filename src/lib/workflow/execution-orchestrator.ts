@@ -73,7 +73,7 @@ export class ExecutionOrchestrator {
     // 更新状态为运行中
     await prisma.executionStep.update({
       where: { id: stepRecord.id },
-      data: { status: 'RUNNING', startedAt: new Date() }
+      data: { status: 'RUNNING', startedAt: new Date(), completedAt: null, error: null }
     })
 
     const startTime = Date.now()
@@ -101,8 +101,17 @@ export class ExecutionOrchestrator {
         }
       }
 
-      // 执行步骤
-      await stepDef.execute(context)
+      const snapshot = artifacts.get('research-snapshot')
+      const projection = snapshot?.projections?.[stepName]
+      if (this.workflowId === 'comprehensive-analysis' && stepName !== 'freeze-research' && !snapshot) {
+        throw new Error('该轮次没有冻结的研究证据，请新建分析；不使用当前数据改写旧轮次')
+      }
+      if (projection) {
+        for (const [key, value] of Object.entries(projection)) await context.saveArtifact(key, value, 'DATA')
+        await context.updateProgress(1, 1, `读取冻结证据 ${snapshot.asOf}`)
+      } else {
+        await stepDef.execute(context)
+      }
 
       // 标记完成
       const duration = Date.now() - startTime
@@ -138,6 +147,7 @@ export class ExecutionOrchestrator {
 
     if (!run) throw new Error('Run not found')
     if (run.status === 'COMPLETED') return
+    if (run.steps.some(step => step.status === 'RUNNING')) throw new Error('尚有执行中的步骤，请等待完成或由后台恢复中断任务')
 
     await this.updateRunStatus(runId, 'RUNNING')
 
@@ -174,6 +184,7 @@ export class ExecutionOrchestrator {
       include: { steps: { orderBy: { stepIndex: 'asc' } } }
     })
     if (!refreshedRun) throw new Error('Run not found')
+    if (refreshedRun.steps.some(step => step.status === 'RUNNING')) throw new Error('已有步骤执行中，请勿重复启动')
 
     const nextStep = refreshedRun.steps.find(
       (s) => s.status === 'PENDING' || s.status === 'FAILED'
@@ -232,6 +243,8 @@ export class ExecutionOrchestrator {
     })
 
     const incomplete = steps.filter((s) => !['COMPLETED', 'SKIPPED'].includes(s.status))
+    const missing = dependencies.filter(name => !steps.some(step => step.stepName === name))
+    if (missing.length) throw new Error(`Missing dependency steps: ${missing.join(', ')}；请新建包含最新流程的轮次`)
     if (incomplete.length > 0) {
       throw new Error(
         `Dependencies not met: ${incomplete.map((s) => s.stepName).join(', ')}`
@@ -240,6 +253,21 @@ export class ExecutionOrchestrator {
   }
 
   private async applyConditionalSteps(runId: string): Promise<void> {
+    // Subscription analysis always reads holdings for coverage, even when the
+    // user chooses the graph intersection as the company candidate set.
+    if (this.workflowId === 'comprehensive-analysis') {
+      const input=await this.loadInput(runId)
+      if(input.rulesOnly){
+        const optional=['market-analysis','news-analysis','company-analysis','portfolio-analysis','industry-overview','investment-advice','social-report']
+        const steps=await prisma.executionStep.findMany({where:{runId,stepName:{in:optional},status:'PENDING'}})
+        for(const step of steps){
+          await this.saveArtifact(step.id,step.stepName,step.stepName==='social-report'||step.stepName==='portfolio-analysis'?null:{analysis:'本轮为本地规则复核，未调用AI；请查看规则条件与证据变化。'},'DATA')
+          if(step.stepName==='social-report')await this.saveArtifact(step.id,'social-report-status',{status:'not-requested',message:'本地规则复核，不生成AI一页版'},'DATA')
+          await prisma.executionStep.update({where:{id:step.id},data:{status:'SKIPPED',completedAt:new Date()}})
+        }
+      }
+      return
+    }
     const run = await prisma.executionRun.findUnique({ where: { id: runId }, select: { metadata: true } })
     const metadata = run?.metadata ? JSON.parse(run.metadata) : {}
     const source = metadata.companySource === 'graph' ? 'graph' : 'etf'
@@ -368,7 +396,7 @@ export class ExecutionOrchestrator {
       where: { id: runId },
       data: {
         status,
-        error,
+        error: error ?? null,
         completedAt:
           status === 'COMPLETED' || status === 'FAILED' ? new Date() : undefined
       }
@@ -377,7 +405,7 @@ export class ExecutionOrchestrator {
 
   private async cleanupOldRuns(): Promise<void> {
     const runs = await prisma.executionRun.findMany({
-      where: { workflowId: this.workflowId },
+      where: { workflowId: this.workflowId, status: 'FAILED', steps: { none: { artifacts: { some: { artifactKey: 'report-id' } } } } },
       orderBy: { startedAt: 'desc' },
       select: { id: true }
     })
@@ -393,7 +421,7 @@ export class ExecutionOrchestrator {
   /**
    * 获取执行详情
    */
-  async getRunDetails(runId: string) {
+  async getRunDetails(runId: string, compact = false) {
     return prisma.executionRun.findUnique({
       where: { id: runId },
       include: {
@@ -401,6 +429,7 @@ export class ExecutionOrchestrator {
           orderBy: { stepIndex: 'asc' },
           include: {
             artifacts: {
+              ...(compact ? {where:{artifactKey:{in:['report-id','data-quality','research-evaluation','market-analysis','news-analysis','company-analysis','industry-overview','investment-advice','social-report-status']}}} : {}),
               select: {
                 artifactKey: true,
                 artifactType: true,
@@ -418,15 +447,16 @@ export class ExecutionOrchestrator {
   /**
    * 获取轮次列表
    */
-  async listRuns(limit: number = 50) {
+  async listRuns(limit: number = 50, industryId?: string) {
     const runs = await prisma.executionRun.findMany({
-      where: { workflowId: this.workflowId },
+      where: { workflowId: this.workflowId, ...(industryId ? {metadata:{contains:JSON.stringify({industryId}).slice(1,-1)}} : {}) },
       orderBy: { startedAt: 'desc' },
       take: limit,
       include: {
         steps: {
           select: {
-            status: true
+            status: true,
+            artifacts: { where: { artifactKey: 'report-id' }, select: { data: true } }
           }
         }
       }
@@ -435,12 +465,13 @@ export class ExecutionOrchestrator {
     // 计算每个轮次的进度
     return runs.map((run) => {
       const total = run.steps.length
-      const completed = run.steps.filter((s) => s.status === 'COMPLETED').length
+      const completed = run.steps.filter((s) => ['COMPLETED','SKIPPED'].includes(s.status)).length
       const failed = run.steps.filter((s) => s.status === 'FAILED').length
 
       return {
         ...run,
-        metadata: run.metadata ? JSON.parse(run.metadata) : null,
+        metadata: run.metadata ? JSON.parse(run.metadata) : {},
+        reportId: (() => { const value = run.steps.flatMap(step => step.artifacts)[0]?.data; if (!value) return null; try { return JSON.parse(value) } catch { return value } })(),
         progress: {
           total,
           completed,

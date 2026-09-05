@@ -11,7 +11,7 @@ export function MarketStatusBadge({
 }) {
   const Icon = isRealtime ? Radio : statusBadge.icon === 'loader' ? Loader2 : Activity
   const label =
-    statusBadge.label === '获取中...'
+    ['获取中...', '订阅数据库快照'].includes(statusBadge.label)
       ? statusBadge.label
       : isRealtime
         ? '实时数据'

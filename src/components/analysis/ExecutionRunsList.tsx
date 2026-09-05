@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -10,6 +11,7 @@ import { Eye, Play, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface RunData {
+  reportId?: string | null
   id: string
   workflowId: string
   status: string
@@ -228,9 +230,10 @@ function RunCard({
 
         {/* 操作按钮 */}
         <div className="flex shrink-0 gap-2">
+          {run.reportId && <Link className="inline-flex min-h-9 items-center rounded-md border px-3 text-sm hover:bg-muted" href={'/comprehensive-analysis/report/' + encodeURIComponent(run.reportId)}>查看报告</Link>}
           <Button size="sm" variant="outline" onClick={() => onSelect(run.id)}>
             <Eye className="h-4 w-4 mr-1" />
-            查看
+            查看完整流程
           </Button>
 
           {run.status === 'FAILED' && (

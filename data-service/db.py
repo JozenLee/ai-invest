@@ -268,7 +268,7 @@ class Database:
                 article_data.get('content'),
                 article_data.get('summary'),
                 article_data.get('source'),
-                article_data.get('url'),
+                article_data.get('url') or None,
                 article_data.get('publishTime'),
                 category_code,
                 category_id,
@@ -330,7 +330,7 @@ class Database:
 
     def insert_datasource_log(self, log_data: dict) -> bool:
         """插入数据源采集日志"""
-        from datetime import datetime
+        from datetime import datetime, timezone
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -350,7 +350,7 @@ class Database:
                 log_data.get('failedCount', 0),
                 log_data.get('duration'),
                 log_data.get('errorDetail'),
-                datetime.now().isoformat()
+                datetime.now(timezone.utc).isoformat()
             ))
             conn.commit()
             return True

@@ -150,6 +150,7 @@ export function parseBalancePdf(pdf: Buffer) {
 }
 
 export function parsePortfolioEmails(messages: EmailMessage[]): ParsedPortfolioEmails {
+  messages = [...messages].filter(message => message.attachments.length > 0 && message.subject.includes('支付宝业务凭证')).sort((a, b) => (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0))
   const withFunds = messages.map(message => ({ message, holdings: message.attachments.flatMap(parseFundPdf) }))
   const funds = withFunds.find(item => item.holdings.length > 0)
   const balance = messages.find(message => message.attachments.some(attachment => parseFundPdf(attachment).length === 0))
@@ -189,7 +190,7 @@ class ImapClient {
     this.socket.write(`${id} ${command}\r\n`)
     const response = await this.readUntil(value => new RegExp(`\\r?\\n${id} (OK|NO|BAD)`).test(value))
     this.buffer = ''
-    if (!new RegExp(`\\r?\\n${id} OK`).test(response)) throw new Error(`IMAP 命令失败: ${command}`)
+    if (!new RegExp(`\\r?\\n${id} OK`).test(response)) throw new Error(`IMAP 命令失败: ${command.split(' ')[0]}`)
     return response
   }
 

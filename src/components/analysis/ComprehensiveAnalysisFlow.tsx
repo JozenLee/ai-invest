@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
+import { PromptDialog } from '@/components/analysis/PromptDialog'
 import { Progress } from '@/components/ui/progress'
 import { ExecutionRunsList } from './ExecutionRunsList'
 import {
@@ -67,6 +68,10 @@ interface ExecutionData {
 }
 
 const STEP_LABELS: Record<string, { title: string; detail: string }> = {
+  'fetch-portfolio': { title: '读取邮箱持仓', detail: '基于最新本地邮箱快照计算组合风险与产业暴露' },
+  'portfolio-analysis': { title: '私有持仓分析', detail: '仅供本人查看，不进入社媒报告' },
+  'social-report': { title: '社媒报告编辑', detail: '将公开研究证据转成普通读者易读的报告' },
+  'assess-data-quality': { title: '订阅数据质量门禁', detail: '逐数据项、ETF与模块校验；不足时只作缺口研究，禁止新增风险' },
   'fetch-etfs': {
     title: '定位产业关联 ETF',
     detail: '查询产业图谱与绑定关系，去重整理 ETF 候选'
@@ -81,23 +86,24 @@ const STEP_LABELS: Record<string, { title: string; detail: string }> = {
   },
   'fetch-companies': {
     title: '提取产业链企业节点',
-    detail: '从产业图谱中提取关联企业与所属环节'
+    detail: '分别读取ETF持仓企业与领域领先企业，按细分环节保留代表样本'
   },
   'fetch-company-data': {
-    title: '采集企业行情数据',
-    detail: '批量补充企业最新价格、涨跌等市场数据'
+    title: '读取企业订阅证据',
+    detail: '从订阅数据库读取行情、财报与公告，不现场采集'
   },
   'fetch-news': {
-    title: '采集产业资讯并汇总情绪',
-    detail: '获取近 30 天新闻，提取热点并计算情感分布'
+    title: '清洗本地资讯与公告事件',
+    detail: '按事件类型、时效和重要性归并；短讯保留为线索，转载不重复计票'
   },
+  'freeze-research': {title:'冻结研究证据',detail:'同一事务读取配置、日历与数据，断点恢复不混入新版本'},
   'fetch-market-snapshot': {
     title: '分析市场指数与板块资金',
     detail: '获取市场指数及关键指标、板块资金流向并准备趋势分析输入'
   },
   'calculate-market-trends': {
-    title: '计算 ETF 与企业趋势指标',
-    detail: '汇总涨跌表现，计算市场热度与整体趋势强度'
+    title: '计算去重指数趋势与广度',
+    detail: '同一指数只计一次，统一交易日计算相对强弱和趋势覆盖'
   },
   'market-analysis': {
     title: '解读 ETF 行情与资金趋势',
@@ -116,16 +122,17 @@ const STEP_LABELS: Record<string, { title: string; detail: string }> = {
     detail: '汇总市场、资讯与企业分析，判断行业阶段与展望'
   },
   'investment-advice': {
-    title: '生成综合评分与配置建议',
-    detail: '结合全部分析给出评分、配置比例、周期与风险提示'
+    title: '形成产业ETF研究论点',
+    detail: '整合投资论点、情景与反证'
   },
+  'etf-actions': { title: '逐只ETF操作决策', detail: '分别给出未持有与已持有时的操作、触发条件和退出条件' },
   'generate-report': {
     title: '汇编并保存综合分析报告',
     detail: '整合行业、产业链、资讯与投资建议，生成可查看报告'
   }
 }
 
-const DATA_STEP_ORDER = ['fetch-market-snapshot', 'fetch-etfs', 'fetch-etf-data', 'fetch-etf-holdings', 'fetch-companies', 'fetch-company-data', 'fetch-news', 'calculate-market-trends']
+const DATA_STEP_ORDER = ['freeze-research','fetch-market-snapshot', 'fetch-etfs', 'fetch-etf-data', 'fetch-etf-holdings', 'fetch-companies', 'fetch-company-data', 'fetch-news', 'calculate-market-trends', 'fetch-portfolio', 'assess-data-quality']
 
 function getStepLabel(name: string) {
   return STEP_LABELS[name] || { title: name, detail: '' }
@@ -177,6 +184,9 @@ export function ComprehensiveAnalysisFlow() {
   const queryRunId = searchParams.get('runId') || ''
   const [industries, setIndustries] = useState<Industry[]>([])
   const [selectedIndustry, setSelectedIndustry] = useState<string>('')
+  const [aiDestination, setAiDestination] = useState('')
+  const [portfolioConsent, setPortfolioConsent] = useState(false)
+  useEffect(() => { void fetch('/api/analysis/privacy').then(res => res.json()).then(data => setAiDestination(data.destination)).catch(() => undefined) }, [])
   const [companySource, setCompanySource] = useState<'etf' | 'graph'>('etf')
   const [currentRunId, setCurrentRunId] = useState<string>('')
   const [creating, setCreating] = useState(false)
@@ -199,7 +209,7 @@ export function ComprehensiveAnalysisFlow() {
   useEffect(() => {
     const fetchIndustries = async () => {
       try {
-        const res = await fetch('/api/graph/industries')
+        const res = await fetch('/api/data-subscriptions/industries')
         if (!res.ok) throw new Error('Failed to fetch industries')
         const response = await res.json()
         const data = response.success && Array.isArray(response.data) ? response.data : []
@@ -228,21 +238,9 @@ export function ComprehensiveAnalysisFlow() {
         const data = await res.json()
         setExecution(data)
 
-        // 如果执行完成，停止轮询并跳转
-        if (data.status === 'COMPLETED') {
-          setPolling(false)
-          const reportStep = data.steps.find(
-            (s: StepData) => s.stepName === 'generate-report' && s.status === 'COMPLETED'
-          )
-          if (reportStep) {
-            const reportArtifact = reportStep.artifacts.find(
-              (a: { artifactKey: string }) => a.artifactKey === 'report-id'
-            )
-            if (reportArtifact?.data) {
-              router.push(`/comprehensive-analysis/report/${reportArtifact.data}`)
-            }
-          }
-        }
+        // 已完成的轮次仍留在流程页，报告通过独立入口打开。
+        if (data.metadata?.industryId) setSelectedIndustry(data.metadata.industryId)
+        if (data.status === 'COMPLETED') setPolling(false)
 
         if (data.status === 'FAILED') {
           setPolling(false)
@@ -273,7 +271,7 @@ export function ComprehensiveAnalysisFlow() {
       const res = await fetch('/api/analysis/comprehensive', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ industryId: selectedIndustry, companySource })
+        body: JSON.stringify({ industryId: selectedIndustry, companySource, publicOnly:!portfolioConsent,portfolioAiConsent: portfolioConsent ? aiDestination : null })
       })
       if (!res.ok) throw new Error('Failed to create analysis')
       const { runId } = await res.json()
@@ -342,9 +340,8 @@ export function ComprehensiveAnalysisFlow() {
 
   // 查看历史记录
   const handleSelectRun = (runId: string) => {
-    setCurrentRunId(runId)
     setShowHistory(false)
-    setPolling(true)
+    router.push(`/comprehensive-analysis?runId=${encodeURIComponent(runId)}`)
   }
 
   // 计算步骤统计
@@ -362,14 +359,14 @@ export function ComprehensiveAnalysisFlow() {
     }
 
     const dataSteps = currentExecution.steps.filter(s =>
-      ['fetch-etfs', 'fetch-etf-data', 'fetch-etf-holdings',
+      ['freeze-research','fetch-etfs', 'fetch-etf-data', 'fetch-etf-holdings',
        'fetch-companies', 'fetch-company-data', 'fetch-news',
-       'fetch-market-snapshot', 'calculate-market-trends'].includes(s.stepName)
+       'fetch-market-snapshot', 'calculate-market-trends', 'fetch-portfolio', 'assess-data-quality'].includes(s.stepName)
     ).sort((a, b) => DATA_STEP_ORDER.indexOf(a.stepName) - DATA_STEP_ORDER.indexOf(b.stepName))
 
     const aiSteps = currentExecution.steps.filter(s =>
       ['market-analysis', 'news-analysis', 'company-analysis',
-       'industry-overview', 'investment-advice', 'generate-report'].includes(s.stepName)
+       'industry-overview', 'investment-advice', 'etf-actions', 'portfolio-analysis', 'social-report', 'generate-report'].includes(s.stepName)
     )
 
     const activeDataSteps = dataSteps.filter(s => s.status !== 'SKIPPED')
@@ -457,14 +454,12 @@ export function ComprehensiveAnalysisFlow() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium" htmlFor="company-source-select">企业来源</label>
-                  <Select value={companySource} onValueChange={(value) => setCompanySource(value as 'etf' | 'graph')} disabled={isBusy}>
-                    <SelectTrigger id="company-source-select" className="h-10 bg-background"><SelectValue>{companySource === 'graph' ? '知识图谱' : 'ETF持仓'}</SelectValue></SelectTrigger>
-                    <SelectContent><SelectItem value="etf">ETF持仓</SelectItem><SelectItem value="graph">知识图谱</SelectItem></SelectContent>
-                  </Select>
+                  <p className="text-sm font-medium">企业研究范围</p>
+                  <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">ETF持仓暴露 + 领域配置中的领先企业</p>
+                  <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><input type="checkbox" checked={portfolioConsent || Boolean(aiDestination && execution?.metadata?.portfolioAiConsent === aiDestination)} disabled={isBusy} onChange={event => setPortfolioConsent(event.target.checked)} className="mt-1" /><span>同意将持仓名称、代码和权重发送至 {aiDestination || '加载AI目的地中…'} 进行私有分析。不发送账户金额、邮箱或份额。未同意时跳过私有分析，公开研究仍可完成。</span></label>
                 </div>
               </div>
-              <p className="text-[11px] text-muted-foreground">仅执行所选来源，另一条企业提取步骤将标记为已跳过。</p>
+              <p className="text-xs text-muted-foreground">企业池按领域配置分别保留；领先企业不要求属于ETF持仓。新轮次统一冻结证据，历史轮次保持原样。</p>
 
               {/* 当前任务信息 */}
               {currentRunId && execution && (
@@ -817,7 +812,7 @@ function AIStepCard({ step, index, onView }: { step: StepData; index: number; on
             step.status === 'COMPLETED' && 'bg-green-500/10 text-green-600',
             step.status === 'FAILED' && 'bg-destructive/10 text-destructive',
             step.status === 'PENDING' && 'bg-muted text-muted-foreground'
-          )}>{getStepStatusLabel(step.status)}</span><Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" disabled={step.status !== 'COMPLETED'} onClick={onView} aria-label={`查看${step.stepName === 'generate-report' ? '报告' : '数据'}`}><FileText className="mr-1 h-3 w-3" />{step.stepName === 'generate-report' ? '查看报告' : '查看数据'}</Button></div>
+          )}>{getStepStatusLabel(step.status)}</span><Button type="button" variant="ghost" size="sm" className="h-6 px-1.5 text-[10px]" disabled={step.status !== 'COMPLETED'} onClick={onView} aria-label={`查看${step.stepName === 'generate-report' ? '报告' : '数据'}`}><FileText className="mr-1 h-3 w-3" />{step.stepName === 'generate-report' ? '查看报告' : '查看数据'}</Button>{step.stepName !== 'generate-report' && <PromptDialog artifacts={step.artifacts} />}</div>
         </div>
         {getStepLabel(step.stepName).detail && (
           <p className="text-[10px] text-muted-foreground mt-0.5">

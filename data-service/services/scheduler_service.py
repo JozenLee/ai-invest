@@ -36,6 +36,8 @@ class SchedulerService:
     async def start(self):
         """启动调度器"""
         if not self.is_running:
+            from services.subscription_sync_service import subscription_sync_service
+            subscription_sync_service.recover_interrupted_runs()
             # Initialize influencer services
             await self._init_influencer_services()
 
@@ -70,6 +72,8 @@ class SchedulerService:
             )
 
             # Start scheduler
+            from services.publish_schedule_service import run_publish_schedule
+            self.scheduler.add_job(run_publish_schedule, trigger=IntervalTrigger(minutes=1), id='publish_schedule', replace_existing=True, coalesce=True, max_instances=1)
             self.scheduler.start()
             self.is_running = True
             logger.info('定时任务调度器已启动')
@@ -79,7 +83,7 @@ class SchedulerService:
             from services.subscription_sync_service import subscription_sync_service
             count = await subscription_sync_service.run_due()
             if count:
-                logger.info('本地数据订阅同步完成: %s 个数据集', count)
+                logger.info('本地数据订阅任务已派发: %s 个数据集', count)
         except Exception as error:
             logger.error('本地数据订阅同步失败: %s', error, exc_info=True)
 

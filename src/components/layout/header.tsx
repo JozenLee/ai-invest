@@ -14,6 +14,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { getDomainByCode } from '@/config/etf-domains'
 import { cn } from '@/lib/utils'
 import { useEffect, useState } from 'react'
+import { chineseNarrative } from '@/lib/analysis/chinese-labels'
 
 export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
   const pathname = usePathname()
@@ -56,14 +57,14 @@ export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
     }
 
     // 综合报告的 [id] 不能直接展示数据库主键，改为加载报告标题作为面包屑名称。
-    const reportTypeIndex = segments.indexOf('comprehensive-report')
+    const reportTypeIndex = segments.includes('comprehensive-report') ? segments.indexOf('comprehensive-report') : segments.includes('comprehensive-analysis') && segments.includes('report') ? segments.indexOf('report') : -1
     if (reportTypeIndex >= 0 && segments[reportTypeIndex + 1]) {
       const reportId = segments[reportTypeIndex + 1]
       fetch(`/api/analysis/reports/${encodeURIComponent(reportId)}`)
         .then(res => res.json())
         .then(data => {
-          const title = data?.report?.title || data?.report?.industryName
-          if (data?.success && title) setDynamicNames(prev => ({ ...prev, [reportId]: title }))
+          const title = data?.report?.title || data?.report?.industryName || data?.title || data?.industryName
+          if (title) setDynamicNames(prev => ({ ...prev, [reportId]: title }))
         })
         .catch(err => console.error('Failed to load report name:', err))
     }
@@ -158,11 +159,11 @@ export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
 function getBreadcrumbName(segment: string, dynamicNames: Record<string, string> = {}): string {
   // 检查是否有动态名称
   if (dynamicNames[segment]) {
-    return dynamicNames[segment]
+    return chineseNarrative(dynamicNames[segment])
   }
 
   const nameMap: Record<string, string> = {
-    market: '市场数据',
+    market: '数据概览',
     overview: '概览',
     sectors: '板块轮动',
     capital: '资金流向',
@@ -180,6 +181,7 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
     report: '综合报告',
     'market-report': '市场分析报告',
     'comprehensive-report': '综合分析完整报告',
+    'comprehensive-analysis': '综合分析',
     new: '新建',
   }
 
@@ -191,7 +193,7 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
   // 尝试作为领域代码查询
   const domain = getDomainByCode(segment)
   if (domain) {
-    return domain.name
+    return chineseNarrative(domain.name)
   }
 
   // 默认返回原始segment

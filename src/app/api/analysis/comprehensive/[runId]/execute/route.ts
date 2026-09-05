@@ -1,50 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { comprehensiveAnalysisWorkflow } from '@/lib/workflow/workflows/comprehensive-analysis'
+import { prisma } from '@/lib/db'
+import { dispatchAnalysis } from '@/lib/workflow/background-runner'
+import { sameOriginRequest } from '@/lib/security/request-origin'
 
-/**
- * POST /api/analysis/comprehensive/[runId]/execute
- * 执行工作流
- * Query: mode=all|next|resume&stepName=xxx
- */
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ runId: string }> }
-) {
+export async function POST(request: NextRequest, { params }: { params: Promise<{ runId: string }> }) {
+  if(!sameOriginRequest(request))return NextResponse.json({error:'不接受跨站执行分析'},{status:403})
+  const { runId } = await params
+  const mode = request.nextUrl.searchParams.get('mode') || 'all'
+  const stepName = request.nextUrl.searchParams.get('stepName')
+  if (!['all', 'next', 'resume', 'step'].includes(mode) || (mode === 'step' && !stepName)) return NextResponse.json({ error: '无效执行模式' }, { status: 400 })
+  const run = await prisma.executionRun.findUnique({ where: { id: runId }, include: { steps: { select: { stepName: true } } } })
+  if (!run) return NextResponse.json({ error: '分析轮次不存在' }, { status: 404 })
+  if (stepName && !run.steps.some(step => step.stepName === stepName)) return NextResponse.json({ error: '步骤不存在' }, { status: 400 })
+  if (run.status === 'COMPLETED') return NextResponse.json({ success: true, completed: true })
   try {
-    const { runId } = await params
-    const mode = request.nextUrl.searchParams.get('mode') || 'all'
-    const stepName = request.nextUrl.searchParams.get('stepName')
-
-    if (mode === 'all') {
-      // 执行完整工作流
-      await comprehensiveAnalysisWorkflow.executeAll(runId)
-      return NextResponse.json({ success: true, completed: true })
-    }
-
-    if (mode === 'next') {
-      // 执行下一步
-      const result = await comprehensiveAnalysisWorkflow.executeNext(runId)
-      return NextResponse.json({ success: true, ...result })
-    }
-
-    if (mode === 'resume') {
-      // 断点续执行
-      await comprehensiveAnalysisWorkflow.resume(runId)
-      return NextResponse.json({ success: true, completed: true })
-    }
-
-    if (mode === 'step' && stepName) {
-      // 执行指定步骤
-      await comprehensiveAnalysisWorkflow.executeStep(runId, stepName)
-      return NextResponse.json({ success: true })
-    }
-
-    return NextResponse.json(
-      { error: 'Invalid mode or missing stepName' },
-      { status: 400 }
-    )
-  } catch (error) {
-    console.error('Failed to execute workflow:', error)
-    return NextResponse.json({ error: String(error) }, { status: 500 })
-  }
+    const result = await dispatchAnalysis(runId, mode, stepName)
+    return NextResponse.json({ success: true, accepted: true, ...result }, { status: 202 })
+  } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : '后台派发失败' }, { status: 503 }) }
 }

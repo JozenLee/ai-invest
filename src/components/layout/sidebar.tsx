@@ -23,7 +23,7 @@ import {
 
 const navigation = [
   {
-    name: '市场数据',
+    name: '数据概览',
     href: '/market',
     icon: BarChart3,
   },
@@ -34,18 +34,12 @@ const navigation = [
     children: [
       { name: '资讯流', href: '/events/feed' },
       { name: '领域趋势', href: '/events/trends' },
-      { name: '数据源', href: '/events/sources' },
     ],
   },
   {
     name: '知识图谱',
     href: '/graph',
     icon: GitBranch,
-  },
-  {
-    name: '领域分析',
-    href: '/industry-analysis',
-    icon: TrendingUp,
   },
   {
     name: '综合分析',

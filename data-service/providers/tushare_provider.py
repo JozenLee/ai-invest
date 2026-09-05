@@ -122,7 +122,7 @@ class TushareProvider(DataProvider):
         def _request():
             # 网关对 upstream_busy 通常会固定等待约 8 秒；重复重试只会放大
             # 综合分析耗时，应立即交给本地/其他数据源降级。
-            busy_retries = max(0, int(os.getenv("TUSHARE_BUSY_RETRIES", "0")))
+            busy_retries = max(0, int(os.getenv("TUSHARE_BUSY_RETRIES", "4")))
             with _TUSHARE_GATEWAY_SEMAPHORE:
                 for attempt in range(busy_retries + 1):
                     response = requests.get(
@@ -132,11 +132,20 @@ class TushareProvider(DataProvider):
                         verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
                         timeout=request_timeout,
                     )
-                    if response.status_code == 503 and "upstream concurrency" in response.text.lower():
+                    # Promax can report the same transient upstream saturation as
+                    # 429/5xx with different response bodies. A single partial
+                    # research bundle would otherwise leave an ETF permanently
+                    # without factors/index evidence until the next day.
+                    if response.status_code in (429, 500, 502, 503, 504):
                         if attempt < busy_retries:
-                            time.sleep(1.0 * (attempt + 1))
+                            retry_after = response.headers.get("Retry-After", "")
+                            try:
+                                delay = min(8.0, max(0.5, float(retry_after)))
+                            except (TypeError, ValueError):
+                                delay = min(8.0, 2.0 ** attempt)
+                            time.sleep(delay)
                             continue
-                        raise RuntimeError(f"Tushare API {api} 上游并发受限: {response.text[:240]}")
+                        raise RuntimeError(f"Tushare API {api} 临时不可用: HTTP {response.status_code}")
                     response.raise_for_status()
                     payload = response.json()
                     if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
@@ -320,49 +329,60 @@ class TushareProvider(DataProvider):
 
     # ==================== 个股数据 ====================
 
-    async def get_stock_spot(self, symbols: List[str]) -> pd.DataFrame:
-        """获取个股实时行情快照
-
-        通过 daily 获取最新交易日数据模拟实时行情。
-        """
-        self._check_available()
-
-        today = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
-
-        records = []
-        trading = is_trading_hours()
-        for symbol in symbols:
-            try:
-                ts_code = self._to_ts_code(symbol, default_market="SZ" if symbol.startswith(("0", "3")) else "SH")
-                if trading:
+    @staticmethod
+    def _normalize_quote(latest, symbol, realtime):
+        def number(*keys):
+            for key in keys:
+                value = latest.get(key)
+                if value is not None and not pd.isna(value):
                     try:
-                        df = await self._call_api("rt_k", ts_code=ts_code)
-                    except Exception:
-                        df = await self._call_api("daily", ts_code=ts_code, start_date=start, end_date=today)
-                else:
-                    # 非交易时间没有实时快照，直接取最近交易日日线，避免 rt_k 等待上游超时。
-                    df = await self._call_api("daily", ts_code=ts_code, start_date=start, end_date=today)
-                if not df.empty:
-                    latest = df.iloc[0]
-                    records.append({
-                        "代码": symbol,
-                        "名称": "",
-                        "日期": str(latest.get("trade_date") or latest.get("date") or ""),
-                        "开盘": float(latest.get("open", latest.get("今开", 0)) or 0),
-                        "最高": float(latest.get("high", latest.get("最高", 0)) or 0),
-                        "最低": float(latest.get("low", latest.get("最低", 0)) or 0),
-                        "最新价": float(latest.get("close", 0)),
-                        "涨跌额": float(latest.get("change", 0)),
-                        "涨跌幅": float(latest.get("pct_chg", 0)),
-                        "成交量": float(latest.get("vol", latest.get("volume", 0))),
-                        "成交额": float(latest.get("amount", 0)),
-                    })
-            except Exception as e:
-                print(f"[Tushare] 获取个股 {symbol} 失败: {e}")
-                continue
+                        value = float(value)
+                        if pd.notna(value) and abs(value) != float('inf'):
+                            return value
+                    except (TypeError, ValueError):
+                        pass
+            return None
+        price = number('close', 'last', 'price')
+        previous = number('pre_close', 'prev_close')
+        if price is None or price <= 0:
+            raise ValueError('实时源没有有效价格')
+        change = number('pct_chg', 'percent', 'change_pct')
+        if change is None and previous and previous > 0:
+            change = (price / previous - 1) * 100
+        raw_date = str(latest.get('trade_date') or latest.get('date') or '')
+        # rt_k is the current-session endpoint; it can omit its date field.
+        # Daily fallback must always preserve the exchange trade_date instead.
+        date = raw_date or (datetime.now().strftime('%Y-%m-%d') if realtime else '')
+        if not date:
+            raise ValueError('日线源缺少交易日期')
+        return {'代码': symbol, '名称': str(latest.get('name') or ''), '日期': date,
+                '最新价': price, '昨收': previous, '涨跌幅': change,
+                '开盘': number('open'), '最高': number('high'), '最低': number('low'),
+                '成交量': number('vol', 'volume'), '成交额': number('amount'),
+                'source': 'tushare_rt_k' if realtime else 'tushare_daily',
+                'dateBasis': 'rt_k_current_session' if realtime and not raw_date else 'provider'}
 
-        return pd.DataFrame(records) if records else pd.DataFrame()
+    async def _instrument_quotes(self, symbols, daily_api):
+        self._check_available()
+        today = datetime.now().strftime('%Y%m%d')
+        start = (datetime.now() - timedelta(days=10)).strftime('%Y%m%d')
+        trading = is_trading_hours()
+        records = []
+        for symbol in symbols:
+            ts_code = self._to_ts_code(symbol, default_market='SZ' if symbol.startswith(('0', '1', '3')) else 'SH')
+            if trading:
+                # Failure must be visible; never label yesterday's daily close as live.
+                frame = await self._call_api('rt_k', ts_code=ts_code)
+            else:
+                frame = await self._call_api(daily_api, ts_code=ts_code, start_date=start, end_date=today)
+                if not frame.empty and 'trade_date' in frame:
+                    frame = frame.sort_values('trade_date', ascending=False)
+            if not frame.empty:
+                records.append(self._normalize_quote(frame.iloc[0], symbol, trading))
+        return pd.DataFrame(records)
+
+    async def get_stock_spot(self, symbols: List[str]) -> pd.DataFrame:
+        return await self._instrument_quotes(symbols, 'daily')
 
     async def get_stock_daily(self, ticker: str, start_date: str, end_date: str,
                                adjust: str = "qfq") -> pd.DataFrame:
@@ -417,44 +437,7 @@ class TushareProvider(DataProvider):
     # ==================== ETF 数据 ====================
 
     async def get_etf_realtime(self, symbols: List[str]) -> pd.DataFrame:
-        """获取ETF实时行情
-
-        通过 fund_daily 获取最新数据模拟。
-        """
-        self._check_available()
-
-        today = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
-
-        records = []
-        trading = is_trading_hours()
-        for symbol in symbols:
-            try:
-                # ETF 代码格式：510300.SH / 159919.SZ
-                ts_code = self._to_ts_code(symbol, default_market="SH" if symbol.startswith("5") else "SZ")
-                if trading:
-                    try:
-                        df = await self._call_api("rt_k", ts_code=ts_code)
-                    except Exception:
-                        df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start, end_date=today)
-                else:
-                    # 非交易时间使用最近交易日的 ETF 日线，不调用实时快照接口。
-                    df = await self._call_api("fund_daily", ts_code=ts_code, start_date=start, end_date=today)
-                if not df.empty:
-                    latest = df.iloc[0]
-                    records.append({
-                        "代码": symbol,
-                        "名称": "",
-                        "最新价": float(latest.get("close", latest.get("price", 0))),
-                        "涨跌幅": float(latest.get("pct_chg", 0)),
-                        "成交量": float(latest.get("vol", latest.get("volume", 0))),
-                        "成交额": float(latest.get("amount", 0)),
-                    })
-            except Exception as e:
-                print(f"[Tushare] 获取 ETF {symbol} 失败: {e}")
-                continue
-
-        return pd.DataFrame(records) if records else pd.DataFrame()
+        return await self._instrument_quotes(symbols, 'fund_daily')
 
     async def get_etf_scale(self, ticker: str) -> Optional[Dict[str, Any]]:
         """获取 ETF 最新份额，供上层计算可用于排序的规模值。
@@ -702,17 +685,26 @@ class TushareProvider(DataProvider):
             if valid_rows.empty:
                 raise Exception("Tushare 北向资金返回空值或零值")
             latest = valid_rows.iloc[-1]
-            north_money = float(latest.get("north_money", 0))  # 北向资金（万元）
+            north_money = float(latest.get("north_money", 0))  # 官方接口标准单位：百万元
             # Tushare moneyflow_hsgt 使用 hgt/sgt 表示沪股通/深股通。
             # 兼容部分网关返回的 sh_money/sz_money 别名。
             sh_money = float(latest.get("hgt", latest.get("sh_money", 0)) or 0)  # 沪股通（万元）
             sz_money = float(latest.get("sgt", latest.get("sz_money", 0)) or 0)  # 深股通（万元）
+            # Aggregators may have already converted the official million-CNY unit.
+            # Only normalize an explicitly returned unit; preserve unlabelled raw values.
+            source_unit = str(latest.get('_unit', latest.get('unit', 'unknown')))
+            divisor = {'百万元': 100, '万元': 10000, '元': 100000000, '亿元': 1}.get(source_unit)
 
             return {
                 "date": str(latest.get("trade_date", today)),
-                "value": north_money / 10000,  # 万元 → 亿元
-                "shConnect": sh_money / 10000,
-                "szConnect": sz_money / 10000,
+                "value": north_money / divisor if divisor else None,
+                "shConnect": sh_money / divisor if divisor else None,
+                "szConnect": sz_money / divisor if divisor else None,
+                "rawValues": {"north_money": north_money, "hgt": sh_money, "sgt": sz_money},
+                "sourceUnit": source_unit,
+                "standardContractUnit": "百万元（不代表该聚合网关已核验）",
+                "semanticStatus": "unverified-post-disclosure-change",
+                "decisionEligible": False,
                 "source": "tushare_hsgt",
                 "unit": "亿元",
                 "stale": str(latest.get("trade_date", today)) != today,
@@ -839,14 +831,36 @@ class TushareProvider(DataProvider):
         endpoint = "major_news" if api in {"major_news", "tushare_major_news"} else "news"
         now = datetime.now()
         params = {
-            "start_date": (now - timedelta(days=2)).strftime("%Y%m%d%H%M%S"),
-            "end_date": now.strftime("%Y%m%d%H%M%S"),
+            "start_date": (now - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S"),
+            "end_date": now.strftime("%Y-%m-%d %H:%M:%S"),
         }
-        source_map = {"财联社": "cls", "新浪财经": "sina", "华尔街见闻": "wallstreetcn"}
-        source = source_map.get(keyword, keyword if keyword in {"cls", "sina", "wallstreetcn"} else "")
+        from services.news_source_defaults import TUSHARE_CHANNELS, MAJOR_CHANNELS
+        source_map = {name: code for code, name in TUSHARE_CHANNELS.items()}
+        source = keyword if endpoint == 'major_news' and keyword in MAJOR_CHANNELS else source_map.get(keyword, keyword if keyword in TUSHARE_CHANNELS else "")
+        if endpoint == 'major_news':
+            params['fields'] = 'title,content,pub_time,src'
+        elif not source:
+            raise ValueError('未知Tushare快讯来源: ' + keyword)
         if source:
             params["src"] = source
-        frame = await self._call_api(endpoint, **params)
+        # 新闻采集允许有限退避；瞬时网关故障不是无效数据源。
+        for attempt in range(3):
+            try:
+                frame = await self._call_api(endpoint, **params)
+                break
+            except (requests.HTTPError, requests.ConnectionError, requests.Timeout) as error:
+                status = getattr(getattr(error, 'response', None), 'status_code', None)
+                if attempt == 2 and status in (502, 503, 504) and endpoint == 'news':
+                    alternative = {'10jqka': '同花顺', 'wallstreetcn': '华尔街见闻'}.get(source)
+                    if alternative:
+                        # 同媒体快讯不可用时读取其长文，保留真实来源及发布时间。
+                        return await self.get_news(keyword=alternative, limit=limit, api='major_news')
+                    if source == 'eastmoney':
+                        from providers.akshare_provider import AKShareProvider
+                        return await AKShareProvider().get_news(keyword='财经', limit=limit, api='stock_news_em')
+                if attempt == 2 or (status is not None and status not in (429, 500, 502, 503, 504)):
+                    raise
+                await asyncio.sleep(2 ** attempt)
         if frame.empty:
             return frame
 
@@ -858,7 +872,7 @@ class TushareProvider(DataProvider):
 
         rows = []
         # Tushare news / major_news 不接受 limit 参数，统一在本地截取结果。
-        for row in frame.to_dict("records")[:max(limit, 0)]:
+        for row in frame.to_dict("records"):
             title = first(row, "title", "新闻标题", "content")
             content = first(row, "content", "新闻内容", "title")
             rows.append({
@@ -866,9 +880,10 @@ class TushareProvider(DataProvider):
                 "新闻内容": str(content),
                 "新闻链接": str(first(row, "url", "新闻链接")),
                 "发布时间": str(first(row, "pub_time", "pubTime", "datetime", "date", "trade_date")),
-                "来源": str(first(row, "src", "source")) or "Tushare",
+                "来源": str(first(row, "src", "source")) or ("Tushare/" + (TUSHARE_CHANNELS.get(source, source) or endpoint)),
             })
-        return pd.DataFrame(rows)
+        rows.sort(key=lambda row: row['发布时间'], reverse=True)
+        return pd.DataFrame(rows[:max(limit, 0)])
 
     # ==================== 工具方法 ====================
 

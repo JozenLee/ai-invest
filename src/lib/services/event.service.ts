@@ -3,6 +3,7 @@
 
 import { aiAnalysisService, EventAnalysisRequest, EventAnalysisResponse } from '@/lib/services/ai-analysis.service'
 import prisma from '@/lib/db/prisma'
+import { getNewsTaxonomy } from '@/lib/news-taxonomy'
 
 export interface NewsArticle {
   id: string
@@ -79,12 +80,15 @@ export class EventService {
       const where: any = {}
 
       // 产业/Segment筛选（新增）
-      if (industryId) {
+      if (industryId || segmentCodes?.length) {
         try {
           let segmentsToQuery = segmentCodes || []
 
           // 如果只选择了产业，没有选择Segment，则获取该产业下所有Segment
-          if (segmentsToQuery.length === 0) {
+          if (segmentsToQuery.length === 0 && industryId) {
+            segmentsToQuery = (await getNewsTaxonomy()).filter(row => row.industry_id === industryId).map(row => row.segment_code)
+          }
+          if (segmentsToQuery.length === 0 && industryId) {
             const segmentsResponse = await fetch(
               `${DATA_SERVICE_URL}/api/v1/industry-graph/${industryId}/segments`
             )
@@ -109,7 +113,7 @@ export class EventService {
           }
         } catch (error) {
           console.error('获取Segment筛选失败:', error)
-          // 继续执行，不阻塞其他筛选条件
+          throw error // 筛选失败不能返回无关产业新闻
         }
       }
 
@@ -124,9 +128,9 @@ export class EventService {
       if (domainIds && domainIds.length > 0) {
         // domainIds是JSON字符串，需要匹配数组中的任一元素
         // SQLite不支持JSON函数，所以使用字符串匹配
-        where.OR = domainIds.map(domainId => ({
+        where.AND = [...(where.AND || []), { OR: domainIds.map(domainId => ({
           domainIds: { contains: `"${domainId}"` }
-        }))
+        })) }]
       }
 
       // 数据源筛选（支持多选）
@@ -150,7 +154,7 @@ export class EventService {
         }).filter(Boolean)
 
         if (sentimentConditions.length > 0) {
-          where.OR = sentimentConditions
+          where.AND = [...(where.AND || []), { OR: sentimentConditions }]
         }
       }
 
@@ -240,7 +244,15 @@ export class EventService {
           segment_name: string
         }> = {}
 
-        if (allSegmentCodes.size > 0) {
+        let taxonomyRows: Awaited<ReturnType<typeof getNewsTaxonomy>> = []
+        try {
+          taxonomyRows = await getNewsTaxonomy()
+          for (const segment of taxonomyRows) {
+            if (allSegmentCodes.has(segment.segment_code)) segmentToIndustryMap[segment.segment_code] = segment
+          }
+        } catch (error) { console.warn('分类词典不可用，保留原始分类代码', error) }
+
+        if (allSegmentCodes.size > 0 && Object.keys(segmentToIndustryMap).length === 0) {
           try {
             console.log(`🔍 开始构建 Segment 映射...`)
             // 获取所有产业列表
@@ -319,13 +331,15 @@ export class EventService {
             const segmentKeys = new Set<string>()
 
             segmentCodes.forEach(segmentCode => {
-              const segmentInfo = segmentToIndustryMap[segmentCode]
+              const matches = taxonomyRows.filter(row => row.segment_code === segmentCode)
+              for (const segmentInfo of matches.length ? matches : [segmentToIndustryMap[segmentCode] || { industry_code: 'unresolved', industry_name: '产业名称待同步', segment_code: segmentCode, segment_name: segmentCode }]) {
               if (segmentInfo) {
                 const key = `${segmentInfo.industry_code}-${segmentInfo.segment_code}`
                 if (!segmentKeys.has(key)) {
                   segmentKeys.add(key)
                   industrySegments.push(segmentInfo)
                 }
+              }
               }
             })
 
@@ -360,12 +374,13 @@ export class EventService {
 
       // 如果使用了产业筛选但本地无结果，直接返回空，不降级
       // 因为产业筛选依赖本地Tag表，Python服务无法处理
-      if (industryId) {
+      if (industryId || segmentCodes?.length) {
         return { total: 0, items: [], source: 'local' }
       }
 
       console.log('⚠️ 本地数据库无数据，降级到Python服务')
     } catch (error) {
+      if (industryId || segmentCodes?.length) throw error
       console.error('❌ 本地数据库查询失败，降级到Python服务:', error)
     }
 

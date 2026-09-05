@@ -1,19 +1,11 @@
 import { prisma } from '@/lib/db'
-
-export const SUBSCRIPTION_SCOPES = {
-  market_index: { label: '市场指数', tradingIntervalSeconds: 30, closedIntervalSeconds: 120 },
-  etf_index: { label: 'ETF指数', tradingIntervalSeconds: 180, closedIntervalSeconds: 3600 },
-  company_quote: { label: '企业行情', tradingIntervalSeconds: 1800, closedIntervalSeconds: 86400 },
-} as const
+import { Prisma } from '@prisma/client'
+import { companySyncState } from '@/lib/subscription-sync-status'
+import { DEFAULT_SUBSCRIPTION_CONFIG, MARKET_INDEXES } from '@/lib/subscription-config'
+import { ensureMarketIndexSubscriptions } from '@/lib/market-index-subscriptions'
+import { readStoredOverview } from '@/lib/stored-market-data'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
-const MARKET_INDEXES = [
-  { code: 'sh000001', name: '上证指数' },
-  { code: 'sz399001', name: '深证成指' },
-  { code: 'sz399006', name: '创业板指' },
-  { code: 'sh000688', name: '科创50' },
-  { code: 'sh000300', name: '沪深300' },
-]
 
 type GraphEtf = { code?: string; ticker?: string; name?: string; etfName?: string; relevance?: number }
 type Industry = { id: string; name: string; code?: string }
@@ -35,7 +27,22 @@ function isPlaceholderInstrumentName(name: unknown, code: string) {
   return !value || ['nan', 'none', 'null'].includes(value.toLowerCase()) || normalizeCode(value) === normalizeCode(code)
 }
 
-async function getGraphSnapshot() {
+async function latestPrices(table: 'StockDaily' | 'ETFDaily', codes: string[]) {
+  if (!codes.length) return []
+  const rows = await prisma.$queryRaw<Array<{ ticker: string; name: string | null; date: string | number; close: number }>>(Prisma.sql`
+    SELECT ticker, name, date, close FROM (
+      SELECT ticker, ${table === 'ETFDaily' ? Prisma.sql`name` : Prisma.sql`NULL`} AS name, date, close,
+        ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rank
+      FROM ${Prisma.raw(table)} WHERE ticker IN (${Prisma.join(codes)}) AND close > 0
+    ) WHERE rank <= 2`)
+  return rows.map((row) => ({ ...row, date: new Date(row.date) })).sort((a, b) => b.date.getTime() - a.date.getTime())
+}
+
+let cachedGraph: Array<Industry & { etfs: GraphEtf[] }> = []
+let graphCachedAt = 0
+
+async function getGraphSnapshot(force = false) {
+  if (!force && cachedGraph.length && Date.now() - graphCachedAt < 300000) return cachedGraph
   let response: Response
   try {
     response = await fetch(`${DATA_SERVICE_URL}/api/v1/industries`, { cache: 'no-store', signal: AbortSignal.timeout(15000) })
@@ -56,16 +63,29 @@ async function getGraphSnapshot() {
         const code = normalizeCode(etf.code || etf.ticker)
         if (code && !unique.has(code)) unique.set(code, { ...etf, code, name: etf.name || etf.etfName || code })
       }
-      return { ...industry, etfs: [...unique.values()] }
+      let companies: Array<Record<string, unknown>> = []
+      if (force) {
+        try {
+          const companyResponse = await fetch(`${DATA_SERVICE_URL}/api/v1/industries/${encodeURIComponent(industry.id)}/graph`, { cache: 'no-store', signal: AbortSignal.timeout(15000) })
+          if (companyResponse.ok) {
+            const payload = await companyResponse.json()
+            const nodes = payload.nodes || (payload.stages || []).flatMap((stage: any) => stage.segments || [])
+            companies = nodes.flatMap((node: any) => (node.companies || []).map((company: any) => ({ ...company, nodeName: node.name })))
+          }
+        } catch { /* Missing company metadata must not discard valid ETF bindings. */ }
+      }
+      return { ...industry, etfs: [...unique.values()], companies }
     } catch {
       return { ...industry, etfs: [] as GraphEtf[] }
     }
   }))
+  if (groups.length) { cachedGraph = groups; graphCachedAt = Date.now() }
   return groups
 }
 
 export async function syncGraphEtfSubscriptions() {
-  const groups = await getGraphSnapshot()
+  const groups = await getGraphSnapshot(true)
+  if (groups.length) await prisma.rawPayload.create({ data: { datasetKey: 'industry_graph', targetCode: 'all', provider: 'graph', payload: JSON.stringify(groups), contentHash: 'graph-snapshot' } })
   const etfs = new Map<string, { code: string; name: string; industryId: string; industryName: string }>()
   for (const group of groups) for (const etf of group.etfs) {
     const code = normalizeCode(etf.code || etf.ticker)
@@ -82,26 +102,11 @@ export async function syncGraphEtfSubscriptions() {
     })
     const subscription = await prisma.dataSubscription.upsert({
       where: { instrumentId: instrument.id },
-      create: { instrumentId: instrument.id, profile: JSON.stringify({ industryId: etf.industryId, industryName: etf.industryName }), datasets: { create: [
-        { datasetKey: 'etf_realtime', tradingIntervalSeconds: 180, closedIntervalSeconds: 3600 },
-        { datasetKey: 'etf_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-        { datasetKey: 'etf_holdings', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-        { datasetKey: 'constituent_stock_realtime', tradingIntervalSeconds: 300, closedIntervalSeconds: 3600 },
-        { datasetKey: 'constituent_stock_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-        { datasetKey: 'stock_financial', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-        { datasetKey: 'stock_announcement', tradingIntervalSeconds: 900, closedIntervalSeconds: 3600 },
-      ] } },
+      create: { instrumentId: instrument.id, profile: JSON.stringify({ industryId: etf.industryId, industryName: etf.industryName }), datasets: { create: Object.entries(DEFAULT_SUBSCRIPTION_CONFIG.policies).filter(([, policy]) => policy.scope !== 'market_index').map(([datasetKey, policy]) => ({ datasetKey, tradingIntervalSeconds: policy.tradingIntervalSeconds, closedIntervalSeconds: policy.closedIntervalSeconds })) } },
       update: { enabled: true, profile: JSON.stringify({ industryId: etf.industryId, industryName: etf.industryName }) },
     })
-    for (const dataset of [
-      { datasetKey: 'etf_realtime', tradingIntervalSeconds: 180, closedIntervalSeconds: 3600 },
-      { datasetKey: 'etf_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-      { datasetKey: 'etf_holdings', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-      { datasetKey: 'constituent_stock_realtime', tradingIntervalSeconds: 300, closedIntervalSeconds: 3600 },
-      { datasetKey: 'constituent_stock_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-      { datasetKey: 'stock_financial', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
-      { datasetKey: 'stock_announcement', tradingIntervalSeconds: 900, closedIntervalSeconds: 3600 },
-    ]) {
+    for (const [datasetKey, policy] of Object.entries(DEFAULT_SUBSCRIPTION_CONFIG.policies).filter(([, item]) => item.scope !== 'market_index')) {
+      const dataset = { datasetKey, tradingIntervalSeconds: policy.tradingIntervalSeconds, closedIntervalSeconds: policy.closedIntervalSeconds }
       await prisma.subscriptionDataset.upsert({
         where: { subscriptionId_datasetKey: { subscriptionId: subscription.id, datasetKey: dataset.datasetKey } },
         create: { subscriptionId: subscription.id, ...dataset },
@@ -113,17 +118,18 @@ export async function syncGraphEtfSubscriptions() {
 }
 
 export async function getSubscriptionOverview(syncGraph = false) {
-  // Industry classification is metadata owned by the graph service. It is read
-  // for grouping only; all market/holding/quote payloads below come from SQLite.
+  await ensureMarketIndexSubscriptions()
+  // Polling reads only the persisted subscription snapshot. Graph sync is explicit.
   let graphSnapshot: Awaited<ReturnType<typeof getGraphSnapshot>>
   if (syncGraph) {
     try {
       graphSnapshot = (await syncGraphEtfSubscriptions()).groups
     } catch {
-      graphSnapshot = await getGraphSnapshot()
+      graphSnapshot = []
     }
   } else {
-    graphSnapshot = await getGraphSnapshot()
+    const snapshot = await prisma.rawPayload.findFirst({ where: { datasetKey: 'industry_graph' }, orderBy: { fetchedAt: 'desc' } })
+    graphSnapshot = snapshot ? JSON.parse(snapshot.payload) : []
   }
   const storedSubscriptions = await prisma.dataSubscription.findMany({ where: { instrument: { type: 'ETF' } }, include: { instrument: true, datasets: true } })
   const storedByCode = new Map(storedSubscriptions.map((subscription) => [normalizeCode(subscription.instrument.code), subscription]))
@@ -134,18 +140,37 @@ export async function getSubscriptionOverview(syncGraph = false) {
     etfs: group.etfs.filter((etf) => storedByCode.has(normalizeCode(etf.code || etf.ticker))),
   }))
   const storedGroups = new Map<string, { id: string; name: string; etfs: GraphEtf[] }>(graphGroups.map((group) => [group.id, group]))
+  const groupedCodes = new Set(graphGroups.flatMap((group) => group.etfs.map((etf) => normalizeCode(etf.code || etf.ticker))))
+  for (const subscription of storedSubscriptions) {
+    const code = normalizeCode(subscription.instrument.code)
+    if (groupedCodes.has(code)) continue
+    let profile: { industryId?: string; industryName?: string } = {}
+    try { profile = JSON.parse(subscription.profile || '{}') } catch { /* Legacy profile. */ }
+    const id = profile.industryId || 'unclassified'
+    const group = storedGroups.get(id) || { id, name: profile.industryName || '未分类订阅', etfs: [] }
+    group.etfs.push({ code, name: subscription.instrument.name || code })
+    storedGroups.set(id, group)
+  }
   const graph = { groups: [...storedGroups.values()], etfCount: storedSubscriptions.length }
   const codes = [...new Set(graph.groups.flatMap((group) => group.etfs.map((etf) => normalizeCode(etf.code || etf.ticker)).filter(Boolean)))]
-  const [schedules, subscriptions, marketRows, etfRows, holdingRows] = await Promise.all([
-    prisma.dataSubscriptionSchedule.findMany({ orderBy: { scope: 'asc' } }),
+  const [subscriptions, indexSubscriptions, marketRows, etfRows, allHoldingRows, quotes] = await Promise.all([
     prisma.dataSubscription.findMany({ where: { instrument: { type: 'ETF', code: { in: codes } } }, include: { instrument: true, datasets: true } }),
+    prisma.dataSubscription.findMany({ where: { instrument: { type: 'INDEX' } }, include: { instrument: true, datasets: true } }),
     prisma.indexDaily.findMany({ where: { code: { in: MARKET_INDEXES.flatMap((item) => [item.code, item.code.slice(2)]) } }, orderBy: { date: 'desc' }, take: 100 }),
-    prisma.eTFDaily.findMany({ where: { ticker: { in: codes } }, orderBy: { date: 'desc' } }),
+    latestPrices('ETFDaily', codes),
     prisma.eTFHolding.findMany({ where: { etfCode: { in: codes } }, orderBy: { weight: 'desc' } }),
+    prisma.marketQuote.findMany({ where: { OR: [{ instrumentType: 'INDEX' }, { instrumentType: 'ETF', code: { in: codes } }, { instrumentType: 'STOCK' }] } }),
   ])
-  const stockRows = holdingRows.length
-    ? await prisma.stockDaily.findMany({ where: { ticker: { in: [...new Set(holdingRows.map((holding) => normalizeCode(holding.stockCode)))] } }, orderBy: { date: 'desc' } })
-    : []
+  const holdingRows = codes.flatMap((code) => {
+    const unique = new Map<string, (typeof allHoldingRows)[number]>()
+    for (const holding of allHoldingRows.filter((row) => normalizeCode(row.etfCode) === code)) {
+      const symbol = normalizeCode(holding.stockCode)
+      if (!unique.has(symbol)) unique.set(symbol, holding)
+      if (unique.size === 10) break
+    }
+    return [...unique.values()]
+  })
+  const stockRows = await latestPrices('StockDaily', [...new Set(holdingRows.map((holding) => normalizeCode(holding.stockCode)))])
   const holdingCodes = [...new Set(holdingRows.map((holding) => normalizeCode(holding.stockCode)).filter(Boolean))]
   const graphStocks = await prisma.graphStock.findMany({ where: { stockCode: { in: holdingCodes } }, select: { stockCode: true, stockName: true } })
   // 企业是跨 ETF 复用的实体：按标准化证券代码建立唯一 STOCK Instrument，
@@ -166,6 +191,8 @@ export async function getSubscriptionOverview(syncGraph = false) {
     const name = !isPlaceholderStockName(candidate, code)
       ? String(candidate).trim()
       : !isPlaceholderStockName(existing, code) ? existing : code
+    // Polling must not rewrite every instrument every two seconds.
+    if (existing === name) return
     const instrument = await prisma.instrument.upsert({
       where: { type_code: { type: 'STOCK', code } },
       create: { type: 'STOCK', code, name },
@@ -175,28 +202,27 @@ export async function getSubscriptionOverview(syncGraph = false) {
     instrumentNameMap.set(code, instrument.name)
   }))
   const stockNameMap = new Map(uniqueHoldingCodes.map((code) => [code, instrumentNameMap.get(code) || graphNameMap.get(code)]))
-  const scheduleMap = new Map(schedules.map((schedule) => [schedule.scope, schedule]))
-  const settings = Object.entries(SUBSCRIPTION_SCOPES).map(([scope, defaults]) => ({ scope, ...defaults, ...(scheduleMap.get(scope) || {}) }))
+  const quoteMap = new Map(quotes.map((quote) => [`${quote.instrumentType}:${normalizeCode(quote.code)}`, quote]))
+  const canonicalOverview = await readStoredOverview()
   const market = MARKET_INDEXES.map((item) => {
     const rows = marketRows.filter((row) => normalizeCode(row.code) === normalizeCode(item.code)).sort((a, b) => b.date.getTime() - a.date.getTime())
     const latest = rows[0]
-    return { ...item, price: latest?.close || null, changePct: latest?.changePct || 0, fetchedAt: latest?.date?.toISOString() || null, dataPoints: rows.length }
+    const quote = quoteMap.get(`INDEX:${normalizeCode(item.code)}`)
+    const subscription = indexSubscriptions.find((candidate) => normalizeCode(candidate.instrument.code) === normalizeCode(item.code))
+    const datasets = subscription?.datasets || []
+    const active = datasets.find((dataset) => ['queued', 'running'].includes(dataset.status))
+    const failed = datasets.find((dataset) => ['failed', 'partial'].includes(dataset.status))
+    const canonical = canonicalOverview.data.indices.find(row=>row.code===item.code)
+    return { ...item, price: canonical?.price ?? null, changePct: canonical?.changePct ?? null, dataDate: canonical?.dataDate, fetchedAt: canonical?.fetchedAt || null, status: active?.status || failed?.status || (datasets.length ? 'success' : 'pending'), lastError: failed?.lastError || null }
   })
   const subscriptionMap = new Map(subscriptions.map((item) => [normalizeCode(item.instrument.code), item]))
-  const companyDatasetKeys = ['constituent_stock_realtime', 'constituent_stock_daily', 'stock_financial', 'stock_announcement']
-  const companyDatasets = subscriptions.flatMap((subscription) => subscription.datasets.filter((dataset) => companyDatasetKeys.includes(dataset.datasetKey)))
-  const companySyncStatus = companyDatasets.some((dataset) => ['queued', 'running'].includes(dataset.status))
-    ? 'running'
-    : companyDatasets.some((dataset) => dataset.status === 'failed')
-      ? 'failed'
-      : companyDatasets.length ? 'success' : 'pending'
   const etfByCode = new Map<string, (typeof etfRows)[number]>()
   for (const row of etfRows) {
     const code = normalizeCode(row.ticker)
     const current = etfByCode.get(code)
     if (!current || row.date > current.date) etfByCode.set(code, row)
   }
-  const topHoldings = [...new Map(codes.flatMap((code) => holdingRows.filter((holding) => normalizeCode(holding.etfCode) === code).slice(0, 10).map((holding) => [`${code}:${normalizeCode(holding.stockCode)}`, holding] as const))).values()]
+  const topHoldings = codes.flatMap((code) => [...new Map(holdingRows.filter((holding) => normalizeCode(holding.etfCode) === code).map((holding) => [normalizeCode(holding.stockCode), holding] as const)).values()].slice(0, 10))
   const etfs = graph.groups.map((group) => ({
     industryId: group.id,
     industryName: group.name,
@@ -212,7 +238,8 @@ export async function getSubscriptionOverview(syncGraph = false) {
       const latestSuccess = relevantDatasets.reduce<Date | null>((latest, candidate) => candidate.lastSuccessAt && (!latest || candidate.lastSuccessAt > latest) ? candidate.lastSuccessAt : latest, null)
       const instrumentName = subscription?.instrument.name
       const name = !isPlaceholderInstrumentName(instrumentName, code) ? instrumentName : !isPlaceholderInstrumentName(etf.name, code) ? etf.name : !isPlaceholderInstrumentName(row?.name, code) ? row?.name : code
-      return { code, name, relevance: etf.relevance || 0, price: row?.close || null, changePct, fetchedAt: row?.date?.toISOString() || null, dataPoints: etfRows.filter((candidate) => candidate.ticker === code).length, subscribed: Boolean(subscription?.enabled), status: activeDataset?.status || failedDataset?.status || (relevantDatasets.length ? 'success' : 'pending'), lastSyncedAt: latestSuccess?.toISOString() || row?.date?.toISOString() || null }
+      const quote = quoteMap.get(`ETF:${code}`)
+      return { code, name, relevance: etf.relevance || 0, price: quote?.price ?? row?.close ?? null, changePct: quote?.changePct ?? changePct, fetchedAt: quote?.fetchedAt.toISOString() || row?.date?.toISOString() || null, subscribed: Boolean(subscription?.enabled), status: activeDataset?.status || failedDataset?.status || (relevantDatasets.length ? 'success' : 'pending'), lastError: failedDataset?.lastError || null, lastSyncedAt: latestSuccess?.toISOString() || quote?.fetchedAt.toISOString() || row?.date?.toISOString() || null }
     }),
   }))
   const industryByEtf = new Map(graph.groups.flatMap((group) => group.etfs.map((etf) => [normalizeCode(etf.code || etf.ticker), group.name] as const)))
@@ -236,6 +263,10 @@ export async function getSubscriptionOverview(syncGraph = false) {
     const current = stockByCode.get(company.stockCode)
     const previous = stockRows.find((candidate) => normalizeCode(candidate.ticker) === company.stockCode && current && candidate.date < current.date)
     const changePct = current?.close && previous?.close ? ((current.close - previous.close) / previous.close) * 100 : null
-    return { ...company, price: current?.close ?? null, changePct, dataPoints: stockRows.filter((row) => normalizeCode(row.ticker) === company.stockCode).length, lastSyncedAt: current?.date?.toISOString() || company.fetchedAt, status: companySyncStatus }
-  }), settings, syncedEtfCount: graph.etfCount }
+    const relatedEtfs = new Set(topHoldings.filter((holding) => normalizeCode(holding.stockCode) === company.stockCode).map((holding) => normalizeCode(holding.etfCode)))
+    const datasets = subscriptions.filter((subscription) => subscription.enabled && relatedEtfs.has(normalizeCode(subscription.instrument.code))).flatMap((subscription) => subscription.datasets)
+    const state = companySyncState(company.stockCode, datasets)
+    const quote = quoteMap.get(`STOCK:${company.stockCode}`)
+    return { ...company, price: quote?.price ?? current?.close ?? null, changePct: quote?.changePct ?? changePct, ...state, lastSyncedAt: quote?.fetchedAt.toISOString() || state.lastSyncedAt || current?.date?.toISOString() || company.fetchedAt }
+  }), syncedEtfCount: graph.etfCount }
 }

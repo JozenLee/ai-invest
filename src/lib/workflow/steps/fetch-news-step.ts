@@ -1,78 +1,22 @@
-import { newsProvider } from '@/lib/providers'
 import { prisma } from '@/lib/db'
+import { getNewsTaxonomy, matchesNewsIndustry } from '@/lib/news-taxonomy'
 import type { StepDefinition } from '../types'
-
-/**
- * 步骤5: 获取相关新闻和热点
- */
 export const fetchNewsStep: StepDefinition = {
-  name: 'fetch-news',
-  description: '获取相关新闻资讯',
-  dependencies: ['fetch-etfs'],
-  estimatedDuration: 10000,
-
+  name: 'fetch-news', description: '读取并清洗已入库资讯', dependencies: ['fetch-etfs'], estimatedDuration: 1000,
   async execute(context) {
-    const industryInfo = context.artifacts.get('industry-info') as any
-
-    if (!industryInfo) {
-      throw new Error('Missing industry info from previous step')
-    }
-
-    await context.updateProgress(0, 3, '正在获取相关新闻...')
-
-    try {
-      const localNews = await prisma.newsArticle.findMany({ where: { OR: [{ domainId: industryInfo.id }, { segmentCodes: { contains: industryInfo.code || industryInfo.name || '' } }] }, orderBy: { publishTime: 'desc' }, take: 50 })
-      if (localNews.length > 0) {
-        const newsArticles = localNews.map((article) => ({ id: article.id, title: article.title, content: article.content, summary: article.summary, source: article.source, url: article.url, publishTime: article.publishTime.toISOString(), sentiment: article.sentiment, impact: article.impact }))
-        const sentimentSummary = { totalNews: newsArticles.length, positive: newsArticles.filter((n) => Number(n.sentiment || 0) > 0.3).length, neutral: newsArticles.filter((n) => Math.abs(Number(n.sentiment || 0)) <= 0.3).length, negative: newsArticles.filter((n) => Number(n.sentiment || 0) < -0.3).length, avgSentiment: newsArticles.reduce((sum, n) => sum + Number(n.sentiment || 0), 0) / newsArticles.length }
-        await context.updateProgress(3, 3, `已读取本地数据库中的 ${newsArticles.length} 条资讯`)
-        await context.saveArtifact('news-articles', newsArticles, 'DATA')
-        await context.saveArtifact('news-trends', { hot_keywords: [], sentiment_summary: sentimentSummary }, 'DATA')
-        await context.saveArtifact('news-sentiment', sentimentSummary, 'DATA')
-        return
-      }
-      // 从FastAPI获取产业相关新闻
-      const newsData = await newsProvider.fetch<any>(
-        `/api/v1/industries/${industryInfo.id}/news?days=30&limit=50`,
-        undefined,
-        `industry-news:${industryInfo.id}:30d`,
-        60000 // 1分钟缓存
-      )
-
-      const newsArticles = newsData?.articles || newsData?.news || newsData?.data || []
-
-      await context.updateProgress(1, 3, `获取到 ${newsArticles.length} 条新闻`)
-
-      // 提取热点趋势
-      const trends = newsData?.trends || {
-        hot_keywords: [],
-        sentiment_summary: { positive: 0, neutral: 0, negative: 0 }
-      }
-
-      await context.updateProgress(2, 3, '分析新闻热点...')
-
-      // 计算情感汇总
-      const sentimentSummary = {
-        totalNews: newsArticles.length,
-        positive: newsArticles.filter((n: any) => n.sentiment > 0.3).length,
-        neutral: newsArticles.filter((n: any) => Math.abs(n.sentiment || 0) <= 0.3).length,
-        negative: newsArticles.filter((n: any) => (n.sentiment || 0) < -0.3).length,
-        avgSentiment: newsArticles.reduce((sum: number, n: any) => sum + (n.sentiment || 0), 0) / (newsArticles.length || 1)
-      }
-
-      await context.updateProgress(3, 3, `已完成 ${newsArticles.length} 条资讯采集与情绪汇总`)
-
-      // 保存新闻数据
-      await context.saveArtifact('news-articles', newsArticles, 'DATA')
-      await context.saveArtifact('news-trends', trends, 'DATA')
-      await context.saveArtifact('news-sentiment', sentimentSummary, 'DATA')
-
-    } catch (error) {
-      console.warn('Failed to fetch news, using empty data:', error)
-      // 新闻失败不阻断流程，使用空数据
-      await context.saveArtifact('news-articles', [], 'DATA')
-      await context.saveArtifact('news-trends', { hot_keywords: [], sentiment_summary: {} }, 'DATA')
-      await context.saveArtifact('news-sentiment', { totalNews: 0, positive: 0, neutral: 0, negative: 0, avgSentiment: 0 }, 'DATA')
-    }
+    const industry = context.artifacts.get('industry-info') as any
+    const codes = new Set((await getNewsTaxonomy()).filter(row => row.industry_id === industry.id).map(row => row.segment_code))
+    if (!codes.size) throw new Error('该产业没有有效分类词典，停止资讯分析以避免混入无关资讯')
+    const candidates = await prisma.newsArticle.findMany({ where: { aiProcessed: true, publishTime: { gte: new Date(Date.now() - 30 * 86400000), lte: new Date() }, OR: [...codes].map(code => ({ segmentCodes: { contains: JSON.stringify(code) } })) }, orderBy: { publishTime: 'desc' }, take: 100 })
+    const rows = candidates.filter(row => matchesNewsIndustry(row.segmentCodes, codes))
+    const meaningful = rows.filter(row => { const body = (row.content || '').replace(/\s+/g, '').trim(); return body.length >= 80 && body !== row.title.replace(/\s+/g, '').trim() })
+    const articles = [...new Map(meaningful.filter((row) => row.title.trim() && row.source && !/基因芯片|育种|生物芯片/.test(row.title)).map((row) => [row.title.trim(), row])).values()].slice(0, 50)
+    await context.saveArtifact('news-evidence-gaps', { fetched: rows.length, excludedWithoutSubstantiveBody: rows.length - meaningful.length, usable: articles.length, rule: '正文至少80字且不是标题复制；正文缺失只记录缺口，不用于AI事实推断' }, 'DATA')
+    const scored = articles.filter((row) => row.sentiment !== null && Number.isFinite(row.sentiment))
+    const summary = { totalNews: articles.length, scoredNews: scored.length, positive: scored.filter((row) => row.sentiment! > 0.3).length, negative: scored.filter((row) => row.sentiment! < -0.3).length, neutral: scored.filter((row) => Math.abs(row.sentiment!) <= 0.3).length, avgSentiment: scored.length ? scored.reduce((sum, row) => sum + row.sentiment!, 0) / scored.length : null }
+    await context.saveArtifact('news-articles', articles, 'DATA')
+    await context.saveArtifact('news-trends', { hot_keywords: [], sentiment_summary: summary }, 'DATA')
+    await context.saveArtifact('news-sentiment', summary, 'DATA')
+    await context.updateProgress(1, 1, '已清洗 ' + articles.length + ' 条本地资讯；未评分不视为中性')
   }
 }

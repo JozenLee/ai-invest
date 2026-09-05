@@ -12,7 +12,7 @@ export async function GET(
   try {
     const { runId } = await params
 
-    const run = await comprehensiveAnalysisWorkflow.getRunDetails(runId)
+    const run = await comprehensiveAnalysisWorkflow.getRunDetails(runId, request.nextUrl.searchParams.get('view') === 'workspace')
 
     if (!run) {
       return NextResponse.json({ error: 'Run not found' }, { status: 404 })
@@ -26,14 +26,19 @@ export async function GET(
     // 解析 JSON 字段
     const result = {
       ...run,
-      metadata: parseJson(run.metadata),
+      metadata: parseJson(run.metadata) || {},
       steps: run.steps.map((step) => ({
         ...step,
         progress: parseJson(step.progress),
-        artifacts: step.artifacts.map((artifact) => ({
-          ...artifact,
-          data: parseJson(artifact.data)
-        }))
+        artifacts: step.artifacts.map((artifact) => {
+          const data=parseJson(artifact.data)
+          if(request.nextUrl.searchParams.get('view')==='workspace'&&artifact.artifactKey==='research-evaluation'&&data&&typeof data==='object'){
+            const evaluation=data as Record<string,unknown>
+            const evidence=Array.isArray(evaluation.evidence)?evaluation.evidence:[],events=Array.isArray(evaluation.events)?evaluation.events:[]
+            return {...artifact,data:{...evaluation,evidenceTotal:evidence.length,eventsTotal:events.length,evidence:evidence.slice(0,50),events:events.slice(0,30)}}
+          }
+          return {...artifact,data}
+        })
       }))
     }
 

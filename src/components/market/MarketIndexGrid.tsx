@@ -40,7 +40,7 @@ export function MarketIndexGrid({
           <div className="text-center text-muted-foreground">
             <TriangleAlert className="mx-auto mb-2 h-8 w-8" aria-hidden="true" />
             <p className="font-medium">暂无指数数据</p>
-            <p className="mt-1 text-xs">请确认数据服务已启动后重试</p>
+            <p className="mt-1 text-xs">请前往数据订阅更新指数数据</p>
           </div>
         </CardContent>
       </Card>
@@ -70,9 +70,9 @@ export function MarketIndexGrid({
                 {formatNumber(index.price)}
               </div>
               <p className={`mt-1 flex items-center gap-1 text-xs font-medium ${tone}`}>
-                <span>{trendLabel}</span>
-                <span className="tabular-nums">{formatNumber(Math.abs(index.changePct))}%</span>
-                <span className="text-muted-foreground">({formatNumber(Math.abs(index.change))})</span>
+                <span>{Number.isFinite(index.changePct) ? trendLabel : '涨跌未知'}</span>
+                <span className="tabular-nums">{Number.isFinite(index.changePct) ? `${formatNumber(Math.abs(index.changePct))}%` : '—'}</span>
+                <span className="text-muted-foreground">({Number.isFinite(index.change) ? formatNumber(Math.abs(index.change)) : '—'})</span>
               </p>
             </CardContent>
           </Card>

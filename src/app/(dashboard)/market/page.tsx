@@ -26,6 +26,7 @@ import {
 import { useMarketContext } from '@/contexts/MarketContext'
 import { usePreferences } from '@/hooks/usePreferences'
 import { MarketIndexGrid } from '@/components/market/MarketIndexGrid'
+import { MarketReferenceData } from '@/components/market/MarketReferenceData'
 import { DataSourceBadge, MarketStatusBadge } from '@/components/market/MarketMetaBadges'
 
 // 数据说明配置
@@ -111,7 +112,7 @@ export default function DashboardPage() {
   const { preferences } = usePreferences()
 
   const formatNumber = (num: number | undefined | null, decimals = 2) => {
-    if (num === undefined || num === null || isNaN(num)) return '0.00'
+    if (num === undefined || num === null || isNaN(num)) return '—'
     return num.toFixed(decimals)
   }
 
@@ -132,9 +133,9 @@ export default function DashboardPage() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">市场监控</p>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">市场数据</h1>
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">数据概览</h1>
             <p className="mt-1 text-muted-foreground">
-              市场概览与资金流向分析
+              每30秒重读订阅数据库；趋势指标由原始数据计算，刷新不会触发外部采集。
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {/* 市场状态 */}
@@ -166,7 +167,7 @@ export default function DashboardPage() {
             className="self-start"
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            刷新数据
+            重读数据库
           </Button>
         </div>
 
@@ -179,7 +180,7 @@ export default function DashboardPage() {
             </div>
             <p className="text-sm mt-1">{error}</p>
             <p className="text-xs mt-2 text-yellow-600 dark:text-yellow-400">
-              请确认 Python 数据服务已启动：cd data-service && python main.py
+              请前往数据订阅查看入库记录与数据状态。
             </p>
           </div>
         )}
@@ -198,10 +199,11 @@ export default function DashboardPage() {
           <MarketIndexGrid indices={indices} isLoading={isLoading} />
         </section>
 
+        <MarketReferenceData />
         {/* 第二区域：资金流向 */}
         {capitalFlow && (
           <section>
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex flex-wrap items-center gap-2 mb-4">
               <div className="flex items-center gap-2">
                 <span className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
                   <CircleDollarSign className="h-4 w-4" aria-hidden="true" />
@@ -367,6 +369,7 @@ export default function DashboardPage() {
                           <p className="text-xs text-muted-foreground">
                             沪股通 {formatNumber(nb.shConnect)}亿 · 深股通 {formatNumber(nb.szConnect)}亿
                           </p>
+                          <p className="mt-1 text-xs text-muted-foreground">数据日期 {nb.dataDate}{nb.stale ? ' · 历史快照' : ''}</p>
                         </>
                       ) : (
                         <div className="text-2xl font-bold text-muted-foreground">暂无</div>
@@ -505,37 +508,7 @@ export default function DashboardPage() {
           </section>
         )}
 
-        {/* 页面底部：Tushare 可补充但当前未展示的数据 */}
-        {capitalFlow && (
-          <section>
-            <div className="mb-4 flex items-center gap-2">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Info className="h-4 w-4" aria-hidden="true" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">Tushare 可补充但当前未展示的数据</h2>
-                <p className="text-xs text-muted-foreground">这些接口能补充资金来源、持续性和风险验证，当前页面尚未接入可视化。</p>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {[
-                ['moneyflow（个股资金流）', '按个股拆分超大单、大单、中单、小单净流入，可用于验证板块排名中的龙头个股、识别个股资金与板块方向是否一致。'],
-                ['top_inst（龙虎榜机构明细）', '按营业部/机构席位拆分买卖金额，能回答“是谁在买卖”；当前 top_list 只有上榜股票明细，不能替代该接口。'],
-                ['moneyflow_cnt_ths（概念资金流）', '提供同花顺概念/题材维度的资金流向，可与当前行业维度对照，识别“行业上涨但题材资金分散”等结构差异。'],
-                ['margin / margin_detail（融资融券）', '融资余额、融资买入额、融券余额等杠杆资金数据，可用于判断风险偏好和上涨是否由杠杆资金推动。'],
-                ['moneyflow_ind_dc 额外字段', '除净额外还包含净流入占比、超大单/大单等分档字段，可补充资金强度和参与结构；当前仅展示净额与板块涨跌幅。'],
-                ['index_daily / daily_basic 历史指标', '可补充成交额趋势、换手率、量价关系和历史分位，用于把当前单日快照扩展为可回溯的资金持续性分析。'],
-              ].map(([title, description]) => (
-                <Card key={title} className="bg-muted/20">
-                  <CardContent className="p-4">
-                    <p className="text-sm font-semibold">{title}</p>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </section>
-        )}
+        <p className="text-sm text-muted-foreground">数据更新与来源管理：<a href="/data-center/subscriptions" className="text-primary underline underline-offset-4">前往数据订阅</a>。以上数据仅供研究参考。</p>
 
         {/* 无数据时的提示 */}
         {!capitalFlow && !isLoading && (
@@ -544,7 +517,7 @@ export default function DashboardPage() {
               <div className="text-center text-muted-foreground">
                 <AlertCircle className="h-8 w-8 mx-auto mb-2" />
                 <p>暂无资金流向数据</p>
-                <p className="text-xs mt-1">请确认数据服务已启动</p>
+                <p className="text-xs mt-1">请在数据订阅中更新市场数据</p>
               </div>
             </CardContent>
           </Card>

@@ -12,6 +12,7 @@ describe('data subscription contracts', () => {
       'etf_realtime',
       'etf_daily',
       'etf_holdings',
+      'etf_research',
       'constituent_stock_realtime',
       'constituent_stock_daily',
       'stock_financial',

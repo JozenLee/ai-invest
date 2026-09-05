@@ -1,4 +1,6 @@
 import { prisma } from '@/lib/db'
+import { fullResearchMarkdown } from '@/lib/analysis/full-research-report'
+import { applyContinuityReview, type SocialReport } from '@/lib/analysis/social-report'
 import type { StepDefinition } from '../types'
 
 /**
@@ -7,7 +9,7 @@ import type { StepDefinition } from '../types'
 export const generateReportStep: StepDefinition = {
   name: 'generate-report',
   description: '生成综合分析报告',
-  dependencies: ['investment-advice'],
+  dependencies: ['social-report', 'portfolio-analysis', 'etf-actions'],
   estimatedDuration: 5000,
 
   async execute(context) {
@@ -22,55 +24,42 @@ export const generateReportStep: StepDefinition = {
     const etfBindings = (context.artifacts.get('etf-bindings') as any[]) || []
 
     // 生成报告标题
-    const title = `${industryInfo?.name || '行业'} - 综合投资分析报告`
-    const timestamp = new Date().toLocaleString('zh-CN')
+    const title = `${industryInfo?.name || '行业'} - ${context.input.rulesOnly?'规则复核':'综合投资分析'}报告`
 
     // 构建Markdown格式报告
-    const reportContent = `# ${title}
-
-> 生成时间: ${timestamp}
-
-## 一、行业概况
-
-${industryAnalysis}
-
-## 二、产业链结构
-
-${companyAnalysis}
-
-## 三、市场情绪与热点
-
-${sentimentAnalysis}
-
-## 四、投资建议
-
-${investmentAdvice}
-
-## 五、相关ETF
-
-${etfBindings.map((etf: any, index: number) => `
-### ${index + 1}. ${etf.etf_name || etf.etfName || 'ETF'} (${etf.etf_code || etf.etfCode || ''})
-- 权重: ${etf.weight ?? '-'}
-- 类型: ${(etf.bind_type || etf.bindType) === 'tracking' ? '跟踪型' : '主题型'}
-`).join('\n')}
-
----
-
-**免责声明**: 本报告由AI系统自动生成，仅供投资参考，不构成投资建议。投资有风险，决策需谨慎。
-`
+    const draft = context.artifacts.get('social-report') as SocialReport | null | undefined
+    const social = draft ? applyContinuityReview(draft, context.artifacts.get('data-quality')) : null
+    await context.saveArtifact('public-report-validation', { continuityGuard: true, validatedReport: social }, 'DATA')
+    const actions = context.artifacts.get('etf-actions') || []
+    const reportContent = fullResearchMarkdown({ title, onePageAvailable: !!social, actions, sections: [
+      { title: '市场分析', value: context.artifacts.get('market-analysis') },
+      { title: '产业资讯分析', value: sentimentAnalysis },
+      { title: '产业链企业分析', value: companyAnalysis },
+      { title: '行业总览', value: industryAnalysis },
+      { title: '投资建议与反证', value: investmentAdvice },
+    ] })
 
     await context.updateProgress(1, 2, '正在保存报告...')
 
     // 保存到数据库
-    const report = await prisma.aIAnalysisReport.create({
-      data: {
+    const data = {
         type: 'comprehensive',
         industryId: industryInfo.id,
         industryName: industryInfo.name,
-        title,
-        summary: investmentAdvice.substring(0, 500),
+        title: social?.title || title,
+        summary: context.input.rulesOnly?'本地规则复核已完成，未调用AI；请查看条件变化与证据。':social?.subtitle || '完整研究与ETF操作建议已生成；一页发布版暂不可用。',
         content: reportContent,
         dataJson: JSON.stringify({
+          socialReport: social,
+          socialReportStatus: context.artifacts.get('social-report-status'),
+          etfActions: actions,
+          researchEvaluation: context.artifacts.get('research-evaluation'),
+          researchManifest: context.artifacts.get('research-manifest'),
+          researchPreflight: context.artifacts.get('research-preflight'),
+          dataQuality: context.artifacts.get('data-quality'),
+          privatePortfolioAnalysis: context.artifacts.get('portfolio-analysis'),
+          marketSnapshot: context.artifacts.get('market-snapshot'),
+          marketAnalysis: context.artifacts.get('market-analysis'),
           industryAnalysis,
           companyAnalysis,
           sentimentAnalysis,
@@ -78,11 +67,17 @@ ${etfBindings.map((etf: any, index: number) => `
           etfBindings,
           metadata: {
             runId: context.runId,
+            parentRunId: context.input.parentRunId || null,
+            kind: context.input.parentRunId ? 'review' : 'analysis',
             generatedAt: new Date().toISOString()
           }
         })
       }
-    })
+    // Recover from a save succeeding before the worker could persist report-id.
+    const existing = await prisma.aIAnalysisReport.findFirst({ where: { type: 'comprehensive', dataJson: { contains: JSON.stringify({ runId: context.runId }).slice(1, -1) } } })
+    const report = existing
+      ? await prisma.aIAnalysisReport.update({ where: { id: existing.id }, data })
+      : await prisma.aIAnalysisReport.create({ data })
 
     await context.updateProgress(2, 2, '报告生成完成')
 

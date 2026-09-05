@@ -60,6 +60,8 @@ backups/
 
 # database
 *.db
+*.db-wal
+*.db-shm
 *.db-journal
 *.db.backup*
 

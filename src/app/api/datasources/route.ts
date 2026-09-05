@@ -52,6 +52,8 @@ export async function GET(request: NextRequest) {
     })
 
     // 格式化响应
+    const priority: Record<string, number> = { tushare: 0, newsnow: 1, akshare: 2 }
+    dataSources.sort((a, b) => (priority[a.provider] ?? 99) - (priority[b.provider] ?? 99) || a.name.localeCompare(b.name, 'zh-CN'))
     const formatted = dataSources.map(ds => {
       // 获取第一个调度任务（如果存在）
       const schedulerJob = ds.schedulerJobs[0] || null
@@ -78,6 +80,8 @@ export async function GET(request: NextRequest) {
         lastFetchStatus: ds.lastFetchStatus,
         lastFetchStatusLabel: getFetchStatusLabel(ds.lastFetchStatus),
         lastFetchCount: lastLog?.fetchedCount || 0,
+        lastProcessedCount: lastLog?.processedCount || 0,
+        lastFailedCount: lastLog?.failedCount || 0,
         errorMessage: ds.errorMessage,
         createdAt: ds.createdAt.toISOString(),
         updatedAt: ds.updatedAt.toISOString(),

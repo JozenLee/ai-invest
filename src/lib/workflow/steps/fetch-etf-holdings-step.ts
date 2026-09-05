@@ -1,4 +1,3 @@
-import { marketDataProvider } from '@/lib/providers'
 import { prisma } from '@/lib/db'
 import type { StepDefinition } from '../types'
 
@@ -31,10 +30,10 @@ export const fetchETFHoldingsStep: StepDefinition = {
       const code = codes[i]
 
       try {
-        const localHoldings = await prisma.eTFHolding.findMany({ where: { etfCode: code }, orderBy: { weight: 'desc' } })
+        const localHoldings = await prisma.eTFHolding.findMany({ where: { etfCode: code }, orderBy: { weight: 'desc' }, take: 10 })
         const holdings = localHoldings.length > 0
           ? { success: true, data: localHoldings.map((row) => ({ stock_code: row.stockCode, stock_name: row.stockName, weight: row.weight, shares: row.shares ? Number(row.shares) : null, market_value: row.marketValue, source: 'local-database', trade_date: row.updateDate.toISOString().slice(0, 10) })) }
-          : await marketDataProvider.fetch(`/api/etf/${code}/holdings`, undefined, `etf-holdings:${code}`, 300000)
+          : { success: false, data: [] }
 
         const holdingsPayload = holdings as any
         const rows = Array.isArray(holdingsPayload) ? holdingsPayload : holdingsPayload?.data

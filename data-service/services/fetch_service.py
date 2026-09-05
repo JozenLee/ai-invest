@@ -60,6 +60,10 @@ class FetchService:
             # 3. 去重：过滤已存在的新闻（在AI分析前，减少AI处理负担）
             new_data = await self._filter_duplicates(raw_data)
             duplicate_count = fetched_count - len(new_data)
+            # 重试已经离开上游滚动窗口的未分类文章。
+            pending = db.execute('SELECT title,content,url,publishTime,source FROM NewsArticle WHERE sourceId=? AND aiProcessed=0 ORDER BY publishTime DESC LIMIT 20', (source_id,))
+            identities = {(row.get('title'), row.get('publishTime')) for row in new_data}
+            new_data.extend(row for row in pending if (row['title'], row['publishTime']) not in identities)
             logger.info(f"去重完成: source_id={source_id}, 原始={fetched_count}, 去重后={len(new_data)}, 重复={duplicate_count}")
 
             # 4. AI数据清洗（仅处理产业细分和影响力）
@@ -75,27 +79,31 @@ class FetchService:
             # 5. 持久化到本地数据库（简化版 - 不再需要去重检查）
             logger.info(f"准备持久化数据: source_id={source_id}, count={len(processed_data)}")
             stored_count = await self._store_to_database(processed_data, source_id)
+            storage_failed = max(0, len(processed_data) - stored_count)
+            ai_failed = failed_count
+            failed_count = max(failed_count, storage_failed)
             logger.info(f"持久化完成: source_id={source_id}, stored_count={stored_count}")
 
             # 6. 计算耗时
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
             # 7. 更新采集日志
-            self._update_fetch_log(
+            await self._update_fetch_log(
                 log_id=log_id,
-                status="success",
+                status="partial" if failed_count else "success",
                 fetched_count=fetched_count,
                 processed_count=processed_count,
                 failed_count=failed_count,
                 duration=duration_ms,
-                message=f"成功采集并处理 {stored_count} 条数据"
+                message=f"入库 {stored_count} 条；AI成功 {processed_count} 条，失败 {failed_count} 条；批处理统计 {json.dumps(getattr(processed_data, 'stats', {}), ensure_ascii=False)}"
             )
 
             # 8. 更新数据源状态
-            self._update_source_status(
+            await self._update_source_status(
                 source_id=source_id,
-                status="success",
-                last_fetch_at=datetime.now(timezone.utc)
+                status="partial" if failed_count else "success",
+                last_fetch_at=datetime.now(timezone.utc),
+                error_message=f'AI分类失败 {ai_failed} 条；入库失败 {storage_failed} 条，请查看更新记录，后续采集重试' if failed_count else ''
             )
 
             return {
@@ -114,7 +122,7 @@ class FetchService:
             # 更新失败日志
             if log_id:
                 duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                self._update_fetch_log(
+                await self._update_fetch_log(
                     log_id=log_id,
                     status="failed",
                     fetched_count=0,
@@ -126,7 +134,7 @@ class FetchService:
                 )
 
             # 更新数据源状态
-            self._update_source_status(
+            await self._update_source_status(
                 source_id=source_id,
                 status="failed",
                 last_fetch_at=datetime.now(timezone.utc),
@@ -183,10 +191,7 @@ class FetchService:
             from providers.tushare_provider import TushareProvider
             return TushareProvider()
         else:
-            # 默认使用 AKShare
-            logger.warning(f"未知的provider: {provider_name}，使用默认的akshare")
-            from providers.akshare_provider import AKShareProvider
-            return AKShareProvider()
+            raise ValueError(f"数据源驱动尚未接入: {provider_name}，请配置受支持的采集器")
 
     async def _fetch_data(self, provider, config: Dict[str, Any]) -> List[Dict]:
         """执行数据采集"""
@@ -223,7 +228,7 @@ class FetchService:
 
         except Exception as e:
             logger.error(f"数据采集失败: {e}")
-            return []
+            raise
 
     async def _filter_duplicates(self, raw_data: List[Dict]) -> List[Dict]:
         """
@@ -239,11 +244,28 @@ class FetchService:
             return []
 
         new_data = []
+        seen = set()
 
         for item in raw_data:
             url = item.get("url", "")
             title = item.get("title", "")
             publish_time = item.get("publishTime", "")
+
+            if not title.strip() or title.strip().lower() in ('nan', 'none', 'null') or not publish_time:
+                continue
+            try:
+                normalized_time = self._parse_publish_time(publish_time).isoformat()
+            except (ValueError, TypeError):
+                continue
+            identity = (title.strip(), normalized_time)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            existing = db.execute('SELECT id,aiProcessed FROM NewsArticle WHERE (url=? AND url<>\'\') OR (title=? AND publishTime=?) LIMIT 1', (url, title, normalized_time))
+            if existing:
+                if not existing[0]['aiProcessed']:
+                    new_data.append(item)
+                continue
 
             # 检查URL是否存在
             if url and db.check_article_exists(url):
@@ -297,7 +319,8 @@ class FetchService:
                         **item,
                         "segmentCodes": [],
                         "impact": 3,
-                        "aiProcessed": False
+                        "aiProcessed": False,
+                        "aiError": "AI分类已禁用，等待启用后重试"
                     }
                     processed_data.append(processed_item)
                 return processed_data
@@ -320,12 +343,15 @@ class FetchService:
                     await ai_analyzer.load_industry_segments(max_retries=3, retry_delay=2.0)
                     logger.info(f"临时实例加载完成: {len(ai_analyzer.industry_segments)} 个领域")
 
+            if not ai_analyzer.industry_segments:
+                raise ValueError('产业分类词典未加载，保留原文等待分类重试')
+
             # 转换为 RawArticle 对象
             raw_articles = []
             for item in raw_data:
                 try:
                     raw_article = RawArticle(
-                        id=hashlib.md5(item.get("url", item.get("title", "")).encode()).hexdigest(),
+                        id=hashlib.md5((item.get("url") or item.get("title", "")).encode()).hexdigest(),
                         title=item.get("title", ""),
                         content=item.get("content", ""),
                         source=item.get("source", "未知"),
@@ -371,17 +397,13 @@ class FetchService:
                     continue
 
             logger.info(f"AI分析完成: processed={len(processed_data)}")
-            return processed_data
+            from services.news_classification import ClassificationBatch
+            return ClassificationBatch(processed_data, getattr(analyzed_articles, 'stats', {}))
 
         except Exception as e:
             logger.error(f"AI批量分析失败: {e}")
             # 降级：返回未分析的数据
-            return [{**item, "segmentCodes": [], "impact": 3, "aiProcessed": False} for item in raw_data]
-
-        except Exception as e:
-            logger.error(f"AI批量分析失败，使用简单规则: {e}")
-            # 降级到简单规则处理
-            return self._simple_process(raw_data)
+            return [{**item, "segmentCodes": [], "impact": 3, "aiProcessed": False, "aiError": str(e)} for item in raw_data]
 
     def _simple_process(self, raw_data: List[Dict]) -> List[Dict]:
         """简单规则处理（AI不可用时的降级方案）"""
@@ -580,7 +602,7 @@ class FetchService:
                         "title": title[:500],  # 限制长度
                         "content": item.get("content", "")[:10000],
                         "source": item.get("source", "未知"),
-                        "url": url,
+                        "url": url or None,
                         "publishTime": publish_time.isoformat() if isinstance(publish_time, datetime) else publish_time,
                         "segmentCodes": segment_codes_value,  # 产业细分
                         "sentiment": item.get("sentiment"),  # 情绪分数
@@ -596,7 +618,13 @@ class FetchService:
                     logger.info(f"[存储] 准备插入: title={title[:30]}, segmentCodes={segment_codes_value}, sentiment={item.get('sentiment')}, impact={article_data['impact']}")
 
                     # 直接插入数据库（已在AI分析前去重，不需要再检查）
-                    result = db.insert_news_article(article_data)
+                    existing = db.execute('SELECT id FROM NewsArticle WHERE id=? OR (url=? AND url<>\'\') OR (title=? AND publishTime=?) LIMIT 1', (article_id, url, title[:500], article_data['publishTime']))
+                    if existing:
+                        result = db.update('UPDATE NewsArticle SET segmentCodes=?,sentiment=?,impact=?,aiProcessed=?,aiProcessedAt=?,aiError=?,sourceId=? WHERE id=?', (segment_codes_value, item.get('sentiment'), item.get('impact', 3), bool(item.get('aiProcessed')), item.get('aiProcessedAt'), item.get('aiError'), source_id, existing[0]['id']))
+                    else:
+                        result = db.insert_news_article(article_data)
+                        if result and item.get('aiError'):
+                            db.update('UPDATE NewsArticle SET aiError=? WHERE id=?', (item['aiError'], article_id))
                     if result:
                         stored_count += 1
                         if (idx + 1) % 10 == 0:  # 每10条记录一次日志
@@ -616,13 +644,18 @@ class FetchService:
     def _parse_publish_time(self, time_str: str) -> datetime:
         """解析发布时间"""
         if not time_str:
-            return datetime.now(timezone.utc)
+            raise ValueError('缺少资讯发布时间')
 
         try:
+            try:
+                parsed = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+                return (parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone(timedelta(hours=8)))).astimezone(timezone.utc)
+            except ValueError:
+                pass
             # 尝试标准格式
             for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d"]:
                 try:
-                    return datetime.strptime(time_str, fmt)
+                    return datetime.strptime(time_str, fmt).replace(tzinfo=timezone(timedelta(hours=8))).astimezone(timezone.utc)
                 except ValueError:
                     continue
 
@@ -643,11 +676,13 @@ class FetchService:
                 if match:
                     return now - timedelta(minutes=int(match.group(1)))
 
-            return now
+            if time_str.strip() == '刚刚':
+                return now
+            raise ValueError('无法识别资讯发布时间')
 
         except Exception as e:
             logger.warning(f"时间解析失败: {time_str}, error={e}")
-            return datetime.now(timezone.utc)
+            raise ValueError('无效资讯发布时间') from e
 
     async def _create_fetch_log(
         self,

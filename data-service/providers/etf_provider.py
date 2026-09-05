@@ -283,7 +283,7 @@ class ETFProvider:
         weight_column = next((columns[name] for name in ['占净值比例', '占净值比', '持仓占比', '占比', 'weight', 'stk_mkv_ratio'] if name in columns), None)
         quantity_column = next((columns[name] for name in ['持股数', '持股数量', 'quantity', 'qty'] if name in columns), None)
         market_value_column = next((columns[name] for name in ['持仓市值', '市值', 'market_value'] if name in columns), None)
-        period_column = next((columns[name] for name in ['季度', 'period', '报告期'] if name in columns), None)
+        period_column = next((columns[name] for name in ['end_date', 'report_period', '季度', 'period', '报告期'] if name in columns), None)
         if code_column is None:
             return []
         result = []
@@ -318,6 +318,7 @@ class ETFProvider:
                 'quantity': quantity,
                 'market_value': market_value,
                 'report_period': str(row.get(period_column) or '') if period_column is not None else '',
+                'ann_date': str(row.get('ann_date') or row.get('publish_date') or ''),
                 'source': source,
             })
         return result
@@ -363,8 +364,17 @@ class ETFProvider:
                         'fund_portfolio',
                         ts_code=f'{ticker}{suffix}',
                         period=period,
+                        fields='ts_code,ann_date,end_date,symbol,mkv,amount,stk_mkv_ratio,stk_float_ratio',
                         _timeout_seconds=request_timeout,
                     )
+                    # Some Promax deployments return multiple report periods
+                    # even when ``period`` is supplied. Mixing them makes the
+                    # summed weights exceed 100% and invalidates every holding
+                    # gate, so enforce the requested identity locally.
+                    if 'ts_code' in frame.columns:
+                        frame = frame[frame['ts_code'].astype(str).str.upper() == f'{ticker}{suffix}'.upper()]
+                    if 'end_date' in frame.columns:
+                        frame = frame[frame['end_date'].astype(str).str.replace('-', '', regex=False) == period]
                     result = self._normalize_frame(frame, 'tushare_fund_portfolio')
                     logger.info(
                         'ETF定期披露持仓响应: code=%s period=%s rows=%s duration_ms=%s',
