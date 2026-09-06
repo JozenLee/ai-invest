@@ -158,7 +158,7 @@ class TrendAnalysisServiceV3:
             import sqlite3
 
             # 获取数据库路径
-            db_path = os.getenv('DATABASE_PATH', '../prisma/dev.db')
+            db_path = self.db.db_path
             if not os.path.isabs(db_path):
                 # 相对于当前工作目录
                 db_path = os.path.join(os.getcwd(), '..', 'prisma', 'dev.db')
@@ -172,7 +172,7 @@ class TrendAnalysisServiceV3:
                        category, categoryId, sentiment, sentimentLabel, impact,
                        entities, sectors, keywords, segmentCodes, domainIds
                 FROM NewsArticle
-                WHERE segmentCodes IS NOT NULL AND segmentCodes != '[]'
+                WHERE aiProcessed=1 AND segmentCodes IS NOT NULL AND segmentCodes != '[]'
                 ORDER BY publishTime DESC
                 LIMIT ?
                 """,
@@ -204,6 +204,7 @@ class TrendAnalysisServiceV3:
                         'sectors': json.loads(row[13]) if row[13] else [],
                         'keywords': json.loads(row[14]) if row[14] else [],
                         'segmentCodes': segment_codes,
+                        'industrySegments': [segment for segments in self.segments_by_industry.values() for segment in segments if segment['segment_code'] in segment_codes],
                         'domainIds': domain_ids,
                     })
                 except Exception as e:

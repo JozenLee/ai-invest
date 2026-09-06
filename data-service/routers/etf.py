@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from services.data_service import data_service
 from providers.etf_provider import ETFProvider
+from db import db
 
 router = APIRouter()
 etf_provider = ETFProvider()
@@ -215,6 +216,14 @@ async def get_etf_detail(ticker: str):
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
 
+        local_rows = db.execute(
+            "SELECT ticker, name, date, open, high, low, close, volume, amount FROM ETFDaily WHERE ticker = ? AND date >= date('now', '-365 days') ORDER BY date ASC",
+            (ticker.lower().removeprefix('sh').removeprefix('sz'),),
+        )
+        if local_rows:
+            latest = local_rows[-1]
+            return {"success": True, "data": {"ticker": ticker, "name": latest.get("name") or ticker, "price": float(latest.get("close") or 0), "changePct": 0, "nav": 0, "premium": 0, "history": [{"date": str(row.get("date", "")), "open": float(row.get("open") or 0), "high": float(row.get("high") or 0), "low": float(row.get("low") or 0), "close": float(row.get("close") or 0), "volume": float(row.get("volume") or 0), "amount": float(row.get("amount") or 0)} for row in local_rows]}, "meta": {"source": "local-database", "freshness": "fresh"}}
+
         df = await data_service.get_etf_daily(ticker, start_date, end_date)
 
         if df.empty:
@@ -272,7 +281,12 @@ async def get_etf_holdings(ticker: str):
     返回统一的 ETF 底层股票及占比协议。
     """
     try:
-        holdings = await etf_provider.get_holdings(ticker)
+        holdings = db.execute(
+            "SELECT stockCode AS stock_code, stockName AS stock_name, weight, shares, marketValue AS market_value, updateDate AS trade_date FROM ETFHolding WHERE etfCode = ? ORDER BY weight DESC",
+            (ticker.lower().removeprefix('sh').removeprefix('sz'),),
+        )
+        if not holdings:
+            holdings = await etf_provider.get_holdings(ticker)
 
         # 即使返回空列表，也是成功的（表示数据源不可用，而非错误）
         return {

@@ -71,6 +71,7 @@ export function getStatusLabel(isActive: boolean): string {
  * 采集状态映射
  */
 const FETCH_STATUS_LABELS: Record<string, string> = {
+  partial: '已入库，部分AI分类待重试',
   success: '成功',
   failed: '失败',
   running: '运行中',

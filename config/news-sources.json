@@ -1,0 +1,257 @@
+[
+  {
+    "id": "tushare-major-0",
+    "name": "Tushare 新华网长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "新华网",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-1",
+    "name": "Tushare 凤凰财经长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "凤凰财经",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-2",
+    "name": "Tushare 同花顺长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "同花顺",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-3",
+    "name": "Tushare 新浪财经长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "新浪财经",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-4",
+    "name": "Tushare 华尔街见闻长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "华尔街见闻",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-5",
+    "name": "Tushare 中证网长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "中证网",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-6",
+    "name": "Tushare 财新网长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "财新网",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-7",
+    "name": "Tushare 第一财经长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "第一财经",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-major-8",
+    "name": "Tushare 财联社长文",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "major_news",
+      "keyword": "财联社",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "tushare-news",
+    "name": "Tushare 财联社资讯",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "news",
+      "keyword": "财联社",
+      "limit": 100
+    },
+    "updateFrequency": 15,
+    "enabled": true
+  },
+  {
+    "id": "tushare-news-10jqka",
+    "name": "Tushare 同花顺快讯",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "news",
+      "keyword": "10jqka",
+      "limit": 40
+    },
+    "updateFrequency": 30,
+    "enabled": true
+  },
+  {
+    "id": "tushare-news-eastmoney",
+    "name": "Tushare 东方财富快讯",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "news",
+      "keyword": "eastmoney",
+      "limit": 40
+    },
+    "updateFrequency": 30,
+    "enabled": true
+  },
+  {
+    "id": "tushare-news-wallstreetcn",
+    "name": "Tushare 华尔街见闻快讯",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "news",
+      "keyword": "wallstreetcn",
+      "limit": 40
+    },
+    "updateFrequency": 30,
+    "enabled": true
+  },
+  {
+    "id": "tushare-news-yicai",
+    "name": "Tushare 第一财经快讯",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "tushare",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "news",
+      "keyword": "yicai",
+      "limit": 40
+    },
+    "updateFrequency": 30,
+    "enabled": true
+  },
+  {
+    "id": "newsnow-thepaper",
+    "name": "澎湃财经-NewsNow",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "newsnow",
+    "category": "综合财经媒体",
+    "config": {
+      "api": "newsnow",
+      "keyword": "thepaper",
+      "limit": 30
+    },
+    "updateFrequency": 60,
+    "enabled": true
+  },
+  {
+    "id": "ds_akshare_ai",
+    "name": "AI资讯-AKShare",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "akshare",
+    "category": "AI行业资讯",
+    "config": {
+      "api": "stock_news_em",
+      "keyword": "AI",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  },
+  {
+    "id": "ds_akshare_chip",
+    "name": "芯片资讯-AKShare",
+    "type": "financial",
+    "driverType": "api",
+    "provider": "akshare",
+    "category": "半导体行业",
+    "config": {
+      "api": "stock_news_em",
+      "keyword": "芯片",
+      "limit": 30
+    },
+    "updateFrequency": 120,
+    "enabled": true
+  }
+]

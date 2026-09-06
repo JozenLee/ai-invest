@@ -224,7 +224,7 @@ export function assessReportQuality(
         : '链路' as const,
     }
   })
-  const marketScore = status.market?.status === 'failed' ? 0 : totalEtfs ? Math.round((valid.length / totalEtfs) * 70 + (market.indices.length > 0 ? 30 : 0)) : 0
+  const marketScore = status.market?.status === 'failed' ? 0 : totalEtfs ? Math.round((valid.length / totalEtfs) * 70 + (market.marketIndices.length > 0 ? 30 : 0)) : 0
   const newsScore = status.news?.status === 'failed' ? 0 : news.items.length ? Math.round(Math.min(1, news.items.length / 20) * 70 + (news.items.some((item) => item.segmentCodes.length > 0) ? 30 : 0)) : 0
   // 企业接口按影响力只返回最多 8 个重点样本，财报/公告/行情覆盖率不是全量覆盖率，不能作为执行门禁。
   // 仅使用接口是否失败以及重点企业样本是否成功返回来评分。
@@ -235,7 +235,7 @@ export function assessReportQuality(
 
   const issues: string[] = []
   const warnings: string[] = []
-  if (!market.etfs.length && !market.indices.length) issues.push('未获取到可用市场标的')
+  if (!market.etfs.length && !market.indices.length && !market.marketIndices.length) issues.push('未获取到可用市场标的')
   if (!news.items.length) warnings.push('近期资讯为空，资讯结论不可形成')
   if (news.items.length > 0 && !news.analysis) warnings.push('资讯样本已获取，但缺少聚合分析文本，市场情绪结论仅按结构化字段降级生成')
   const sectorFlow = market.sectorFlow
@@ -245,7 +245,7 @@ export function assessReportQuality(
   if (valid.length < Math.max(3, Math.floor(Math.max(totalEtfs, 1) * 0.5))) warnings.push('有效区间收益样本不足，市场强弱判断降级')
   if (!portfolio.holdings.length) warnings.push('未读取到持仓，无法形成组合调整建议')
   else if (!portfolioComplete) warnings.push(`持仓金额或权重数据不完整，无法计算精确调仓金额`)
-  const marketSymbols = new Set([...market.etfs, ...market.indices].map((row) => textValue(row.code || row.symbol)).filter(Boolean))
+  const marketSymbols = new Set([...market.etfs, ...market.indices, ...market.marketIndices].map((row) => textValue(row.code || row.symbol)).filter(Boolean))
   const mappedHoldings = portfolio.holdings.filter((holding) => (holding.ticker && marketSymbols.has(holding.ticker)) || holdingMatchesIndustry(holding, industryName))
   if (portfolio.holdings.length > 0 && mappedHoldings.length === 0) warnings.push('当前持仓未与本次产业 ETF/指数完成代码或知识图谱产业领域映射，无法输出持仓级调仓动作')
   for (const [name, module] of Object.entries(status)) {

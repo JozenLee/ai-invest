@@ -7,11 +7,12 @@ import {
   BarChart3,
   Newspaper,
   GitBranch,
-  Brain,
   Briefcase,
   TrendingUp,
   ChevronRight,
   Send,
+  Lightbulb,
+  Database,
 } from 'lucide-react'
 import {
   Sheet,
@@ -22,7 +23,7 @@ import {
 
 const navigation = [
   {
-    name: '市场数据',
+    name: '数据概览',
     href: '/market',
     icon: BarChart3,
   },
@@ -33,7 +34,6 @@ const navigation = [
     children: [
       { name: '资讯流', href: '/events/feed' },
       { name: '领域趋势', href: '/events/trends' },
-      { name: '数据源', href: '/events/sources' },
     ],
   },
   {
@@ -42,9 +42,14 @@ const navigation = [
     icon: GitBranch,
   },
   {
-    name: 'AI分析',
-    href: '/analysis',
-    icon: Brain,
+    name: '综合分析',
+    href: '/comprehensive-analysis',
+    icon: Lightbulb,
+  },
+  {
+    name: '数据订阅',
+    href: '/data-center/subscriptions',
+    icon: Database,
   },
   {
     name: '持仓总览',

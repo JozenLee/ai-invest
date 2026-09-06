@@ -58,6 +58,10 @@ def _calculate_sentiment(main_net: float, retail_net: float, northbound_net: flo
 async def get_market_capital_flow():
     """获取大盘资金流向"""
     try:
+        local_rows = db.execute("SELECT * FROM MarketCapitalFlow ORDER BY date DESC LIMIT 1")
+        if local_rows:
+            row = local_rows[0]
+            return {"success": True, "data": {"date": str(row.get("date")), "market": {"totalMainNet": float(row.get("totalMainNet") or 0), "retailNet": float(row.get("retailNet") or 0), "sentiment": float(row.get("sentiment") or 50), "turnoverRate": float(row.get("turnoverRate") or 0)}, "dataQuality": "local", "source": "local-database", "timestamp": datetime.now().isoformat()}, "meta": {"source": "local-database", "fetchedAt": str(row.get("date")), "freshness": "fresh"}}
         data = await data_service.get_market_capital_flow()
 
         if not data:
@@ -100,6 +104,12 @@ async def get_sector_capital_flow(
 ):
     """获取板块资金流向排名"""
     try:
+        if not refresh:
+            local_rows = db.execute("SELECT date, sector, mainForceNet, changePct FROM SectorCapitalFlow WHERE date >= date('now', '-7 days') ORDER BY date DESC, mainForceNet DESC")
+            if local_rows:
+                latest_date = str(local_rows[0].get("date"))
+                sectors = [{"sector": row.get("sector", ""), "mainForceNet": float(row.get("mainForceNet") or 0), "changePct": float(row.get("changePct") or 0), "trend": "inflow" if float(row.get("mainForceNet") or 0) > 0 else "outflow", "indicator": indicator} for row in local_rows]
+                return {"success": True, "data": sectors[:20], "source": "local-database", "meta": {"isRealtime": False, "dataDate": latest_date, "fetchedAt": latest_date, "freshness": "fresh" if latest_date == datetime.now().strftime("%Y-%m-%d") else "stale"}}
         data = await data_service.get_sector_capital_flow(indicator, force_refresh=refresh)
 
         if not data:
@@ -126,8 +136,26 @@ async def get_sector_capital_flow(
 
         # 按净流入排序，正序（最大流入在前）
         sectors.sort(key=lambda x: x["mainForceNet"], reverse=True)
-
-        return {"success": True, "data": sectors[:20]}
+        source = data_service.registry.get_last_source("sector_capital_flow")
+        dates = [str(item.get("日期", "")) for item in data if item.get("日期")]
+        raw_data_date = max(dates) if dates else ""
+        normalized_date = raw_data_date.replace("/", "-").replace("年", "-").replace("月", "-").replace("日", "")
+        if len(normalized_date) == 8 and normalized_date.isdigit():
+            normalized_date = f"{normalized_date[:4]}-{normalized_date[4:6]}-{normalized_date[6:]}"
+        data_date = normalized_date[:10]
+        market_status = get_market_status()
+        is_realtime = market_status["isRealtime"] and data_date.replace("-", "") == datetime.now().strftime("%Y%m%d")
+        return {
+            "success": True,
+            "data": sectors[:20],
+            "source": source,
+            "meta": {
+                **market_status,
+                "isRealtime": is_realtime,
+                "dataDate": data_date or market_status["lastTradingDate"],
+                "staleReason": None if is_realtime or not market_status["isRealtime"] else "stale_source_data",
+            },
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

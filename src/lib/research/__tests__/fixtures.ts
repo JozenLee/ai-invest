@@ -1,0 +1,11 @@
+import type { Bar, ResearchSnapshot } from '../contracts'
+import { defaultProfile } from '../profile'
+export function fixture():ResearchSnapshot {
+  const calendar=Array.from({length:260},(_,i)=>{const day=new Date(Date.parse('2026-01-01')+i*86400000);return {date:day.toISOString().slice(0,10),open:![0,6].includes(day.getUTCDay())}})
+  const days=calendar.filter(d=>d.open&&d.date<='2026-09-04').slice(-150)
+  const bars:Bar[]=days.map((d,i)=>({date:d.date,open:100+i,high:101+i,low:99+i,close:100+i,volume:1000000,amount:50000000}))
+  const profile=defaultProfile('ai','测试领域');profile.sectors=['半导体'];profile.rules.maxVolatilityPct=200
+  return {version:1,id:'snapshot-one',asOf:'2026-09-04T09:00:00.000Z',capturedAt:'2026-09-04T09:00:00.000Z',profile,calendar,evidence:[{id:'raw-one',source:'Tushare/fund_daily+fund_adj',dataDate:'2026-09-04',publishedAt:null,fetchedAt:'2026-09-04T08:00:00Z',hash:'test'},{id:'event-one',source:'公司公告',dataDate:'2026-09-03',publishedAt:'2026-09-03T08:00:00Z',fetchedAt:'2026-09-03T09:00:00Z',hash:'event'}],
+    etfs:[{ticker:'159995',name:'测试ETF',bars,evidenceIds:['raw-one'],factors:bars.map(b=>({date:b.date,factor:1})),adjustmentSource:'Tushare/fund_adj',indexCode:'980017.SZ',indexBars:bars,indexName:'测试指数',holdings:[{code:'600000',name:'测试企业',weight:60,period:'2026-06-30',publishedAt:'2026-08-20',source:'公司公告',evidenceId:'raw-one'}],product:{date:'2026-09-04',bookDate:'2026-09-04',nav:bars.at(-1)!.close,shares:100,previousShares:90,spreadBps:5,feePct:0.15,pe:20,pb:2,evidenceIds:['raw-one']}}],benchmarkBars:bars.map((b,i)=>({...b,open:100+i/2,high:101+i/2,low:99+i/2,close:100+i/2})),sectorFlows:days.slice(-5).map(d=>({date:d.date,sector:'半导体',net:10000000,netPct:1,evidenceId:'raw-one'})),
+    companies:[{code:'600000',name:'测试企业',segment:'芯片',pool:'holding',financialPeriods:2,announcementCount:1,profitGrowthPct:20,cashConversionPct:100,evidenceIds:['raw-one']}],events:[{id:'event-one',title:'新增订单',category:'demand',publishedAt:'2026-09-03T08:00:00Z',expiresAt:'2026-10-03T08:00:00Z',companies:['600000'],segments:['芯片'],evidenceIds:['event-one'],sources:['公司公告'],urls:[],excerpt:'新增订单',status:'evidence',priority:4,verification:'source-linked-not-independently-verified'}],projections:{}}
+}

@@ -2,6 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Newspaper, ExternalLink, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import { formatRelativeTime } from '@/lib/time-utils'
+import { IndustrySegmentTags } from '@/components/news/IndustrySegmentTags'
 
 interface NewsArticle {
   id: string
@@ -11,6 +12,7 @@ interface NewsArticle {
   url?: string
   sentiment?: number
   categoryName?: string
+  industrySegments?: Array<{ industry_code: string; industry_name: string; segment_code: string; segment_name: string }>
 }
 
 interface RelatedNewsSectionProps {
@@ -23,6 +25,7 @@ interface RelatedNewsSectionProps {
  */
 export function RelatedNewsSection({ news }: RelatedNewsSectionProps) {
   const getSentimentInfo = (sentiment?: number) => {
+    if (sentiment == null) return { icon: Minus, label: '未评分', color: 'text-muted-foreground' }
     if (!sentiment || Math.abs(sentiment) <= 0.2) {
       return { icon: Minus, label: '中性', color: 'text-gray-600' }
     }
@@ -99,6 +102,7 @@ export function RelatedNewsSection({ news }: RelatedNewsSectionProps) {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2 mt-2">
+                      <IndustrySegmentTags tags={article.industrySegments} />
                       <Badge variant="outline" className="text-xs">
                         {article.source}
                       </Badge>

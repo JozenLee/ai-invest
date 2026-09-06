@@ -1,3 +1,4 @@
+import newsSourceCatalog from '../config/news-sources.json'
 import { PrismaClient } from '@prisma/client'
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
 import path from 'path'
@@ -100,52 +101,7 @@ async function main() {
   // ==================== 创建默认数据源 ====================
   console.log('创建默认数据源...')
 
-  const dataSources = [
-    {
-      id: 'ds_akshare_cailian',
-      name: '财联社-AKShare',
-      type: 'financial',
-      driverType: 'api',
-      provider: 'akshare',
-      category: '综合财经媒体',
-      config: '{"api":"stock_news_em","keyword":"财联社","limit":50}',
-      updateFrequency: 60,
-      isActive: true,
-    },
-    {
-      id: 'ds_akshare_ai',
-      name: 'AI资讯-AKShare',
-      type: 'financial',
-      driverType: 'api',
-      provider: 'akshare',
-      category: 'AI行业资讯',
-      config: '{"api":"stock_news_em","keyword":"AI","limit":30}',
-      updateFrequency: 120,
-      isActive: true,
-    },
-    {
-      id: 'ds_akshare_chip',
-      name: '芯片资讯-AKShare',
-      type: 'financial',
-      driverType: 'api',
-      provider: 'akshare',
-      category: '半导体行业',
-      config: '{"api":"stock_news_em","keyword":"芯片","limit":30}',
-      updateFrequency: 120,
-      isActive: true,
-    },
-    {
-      id: 'ds_akshare_caixin',
-      name: '财新网-AKShare',
-      type: 'financial',
-      driverType: 'api',
-      provider: 'akshare',
-      category: '综合财经媒体',
-      config: '{"api":"stock_news_main_cx","limit":100}',
-      updateFrequency: 180,
-      isActive: true,
-    },
-  ]
+  const dataSources = newsSourceCatalog.map(({ enabled, config, ...source }) => ({ ...source, config: JSON.stringify(config), isActive: enabled }))
 
   for (const source of dataSources) {
     await prisma.dataSource.upsert({

@@ -1,0 +1,25 @@
+{
+  "historyPoints": 120,
+  "pollSeconds": 5,
+  "requestConcurrency": 6,
+  "scopeEnabled": {"market_index": true, "etf_index": true, "company_quote": true},
+  "policies": {
+    "research_calendar": {"scope":"market_index","label":"投研交易日历","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["07:00"],"weekdaysOnly":false},
+    "etf_research": {"scope":"etf_index","label":"ETF复权、指数映射与产品研究","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00","19:00"],"weekdaysOnly":true},
+    "market_main_flow": {"scope":"market_index","label":"大盘主力资金原始明细","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:00"],"weekdaysOnly":true},
+    "margin_balance": {"scope":"market_index","label":"交易所融资融券余额","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00"],"weekdaysOnly":true},
+    "sector_capital_flow": {"scope":"market_index","label":"板块资金原始行情","enabled":true,"mode":"interval","tradingIntervalSeconds":300,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},
+    "northbound_flow": {"scope":"market_index","label":"北向资金","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:00"],"weekdaysOnly":true},
+    "market_volume": {"scope":"market_index","label":"指数成交额原始历史","enabled":true,"mode":"interval","tradingIntervalSeconds":300,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},
+    "dragon_tiger": {"scope":"market_index","label":"龙虎榜","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:30"],"weekdaysOnly":true},
+    "index_realtime": {"scope": "market_index", "label": "最新行情", "enabled": true, "mode": "interval", "tradingIntervalSeconds": 60, "closedIntervalSeconds": 21600, "dailyTimes": [], "weekdaysOnly": false},
+    "index_daily": {"scope": "market_index", "label": "历史 K 线", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 43200, "closedIntervalSeconds": 43200, "dailyTimes": ["12:10", "16:30"], "weekdaysOnly": true},
+    "etf_realtime": {"scope": "etf_index", "label": "最新行情", "enabled": true, "mode": "interval", "tradingIntervalSeconds": 60, "closedIntervalSeconds": 21600, "dailyTimes": [], "weekdaysOnly": false},
+    "etf_daily": {"scope": "etf_index", "label": "历史 K 线", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 43200, "closedIntervalSeconds": 43200, "dailyTimes": ["12:10", "16:30"], "weekdaysOnly": true},
+    "etf_holdings": {"scope": "etf_index", "label": "持仓成分", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 86400, "closedIntervalSeconds": 86400, "dailyTimes": ["08:00"], "weekdaysOnly": true},
+    "constituent_stock_realtime": {"scope": "company_quote", "label": "最新行情", "enabled": true, "mode": "interval", "tradingIntervalSeconds": 60, "closedIntervalSeconds": 21600, "dailyTimes": [], "weekdaysOnly": false},
+    "constituent_stock_daily": {"scope": "company_quote", "label": "历史 K 线", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 43200, "closedIntervalSeconds": 43200, "dailyTimes": ["12:10", "16:30"], "weekdaysOnly": true},
+    "stock_financial": {"scope": "company_quote", "label": "财务报表", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 86400, "closedIntervalSeconds": 86400, "dailyTimes": ["07:30"], "weekdaysOnly": false},
+    "stock_announcement": {"scope": "company_quote", "label": "公司公告 / 新闻", "enabled": true, "mode": "daily", "tradingIntervalSeconds": 86400, "closedIntervalSeconds": 86400, "dailyTimes": ["08:30"], "weekdaysOnly": false}
+  }
+}

@@ -17,7 +17,7 @@
 - **数据服务**: FastAPI + AKShare (Python)
 
 ## 环境配置
-1. 复制环境变量模板：`cp .env.example .env`
+1. 使用项目根目录的 `.env` 作为唯一环境配置文件
 2. 编辑 `.env` 文件，填写 `ANTHROPIC_API_KEY` 等配置
 
 ## 常用命令
@@ -37,13 +37,14 @@ python main.py       # 启动数据服务 (端口8000)
 # 单元测试
 npm run test:unit
 
-# 验收测试
-bash scripts/acceptance-test.sh
+# API测试
+npm run test:api
 
-# E2E闭环验证（Preview）
-bash scripts/e2e-verify.sh      # 启动并验证前后端
-bash scripts/stop-e2e.sh         # 停止服务
-# 或使用skill: /e2e-verify
+# 服务控制（脱离当前终端运行）
+npm run services:start
+npm run services:stop
+npm run services:restart
+npm run services:status
 ```
 
 ## 项目结构
@@ -144,10 +145,10 @@ ai-invest/
 1. 单元测试 (npm run test:unit)
    ↓ 测试独立函数和组件逻辑
    
-2. 集成测试 (bash scripts/acceptance-test.sh)
+2. 集成测试 (npm run test:integration)
    ↓ 测试API接口和数据层
    
-3. E2E闭环验证 (bash scripts/e2e-verify.sh 或 /e2e-verify skill)
+3. E2E闭环验证 (npm run test:e2e)
    ↓ 在Preview中验证前后端完整流程
    
 4. 手动验收测试
@@ -163,12 +164,8 @@ ai-invest/
 
 **执行方式**：
 ```bash
-# 方式1: 使用脚本（自动化）
-bash scripts/e2e-verify.sh    # 启动服务并验证
-bash scripts/stop-e2e.sh       # 清理服务
-
-# 方式2: 使用skill（交互式）
-/e2e-verify                    # 在Claude Code中执行
+# 使用 Playwright 执行 E2E 测试
+npm run test:e2e
 ```
 
 **验证内容**：
@@ -181,8 +178,6 @@ bash scripts/stop-e2e.sh       # 清理服务
 
 **相关文件**：
 - `.claude/skills/e2e-verify.md` - Skill定义和流程文档
-- `scripts/e2e-verify.sh` - 自动化验证脚本
-- `scripts/stop-e2e.sh` - 服务清理脚本
 - `.claude/launch.json` - Preview服务配置
 
 ## 注意事项

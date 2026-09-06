@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { normalizeComprehensiveReportContent } from '@/lib/analysis/report-content'
+import { normalizeSocialReport, parseSocialReport } from '@/lib/analysis/social-report'
+import { reportAdviceConfidence } from '@/lib/analysis/report-insights'
+import { annotateHistoricalReports, selectHistoricalReports } from '@/lib/research/history-reports'
+import { getResearchProfile } from '@/lib/research/store'
+import { sessionBoundary } from '@/lib/research/time'
 
 const MAX_REPORTS = 100
 
@@ -26,6 +31,9 @@ function serializeReport(report: {
   createdAt: Date
 }) {
   const data = parseData(report.dataJson)
+  if(report.type==='comprehensive'&&data?.socialReport){
+    try{data.socialReport=normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)}catch{/* Keep the stored payload inspectable. */}
+  }
   return {
     id: report.id,
     type: report.type,
@@ -48,6 +56,26 @@ export async function GET(request: NextRequest) {
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(Math.floor(requestedLimit), 1), MAX_REPORTS)
       : 20
+
+    if(searchParams.get('view')==='summary'){
+      const contextIndustryId=searchParams.get('contextIndustryId')||undefined
+      const listIndustryId=searchParams.get('scope')==='all'?undefined:industryId
+      const reports=await prisma.aIAnalysisReport.findMany({where:{...(listIndustryId?{industryId:listIndustryId}:{}),...(type?{type}:{})},orderBy:{createdAt:'desc'},take:limit,select:{id:true,type:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
+      let includedIds=new Set<string>(),annotations=reports.map(()=>({sessionDate:null as string|null,includedInNextAnalysis:false,inclusionLabel:'不在当前回溯窗口'})),contextPolicy=null
+      if(contextIndustryId){
+        const [profile,calendarRow]=await Promise.all([getResearchProfile(contextIndustryId),prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'},select:{payload:true}})])
+        const payload=parseData(calendarRow?.payload||null),rows=Array.isArray(payload)?payload:Array.isArray(payload?.data)?payload.data:[]
+        const calendar=rows.map((row:Record<string,unknown>)=>({date:String(row.cal_date||row.date||''),open:Number(row.is_open??row.open)===1})).filter((row:{date:string})=>/^\d{4}-?\d{2}-?\d{2}$/.test(row.date)).map((row:{date:string;open:boolean})=>({...row,date:row.date.replace(/^(\d{4})(\d{2})(\d{2})$/,'$1-$2-$3')}))
+        const asOf=new Date().toISOString(),boundary=sessionBoundary(calendar,asOf)
+        const included=selectHistoricalReports({candidates:reports,profile,tradingSessions:calendar.filter((day:{open:boolean})=>day.open).map((day:{date:string})=>day.date),cutoff:boundary.expectedSession,asOf})
+        includedIds=new Set(included.map(item=>item.reportId));annotations=annotateHistoricalReports(reports,included,contextIndustryId);contextPolicy=profile.historyReports||{enabled:true,lookbackTradingDays:10,mode:'latest-per-trading-day'}
+      }
+      return NextResponse.json({success:true,contextPolicy,reports:reports.map((report,index)=>{
+        const data=parseData(report.dataJson),decisions=Array.isArray(data?.researchEvaluation?.decisions)?data.researchEvaluation.decisions:[]
+        const stateCounts:Record<string,number>=decisions.reduce((counts:Record<string,number>,item:{state?:string})=>{const key=item.state||'unknown';counts[key]=(counts[key]||0)+1;return counts},{})
+        return {id:report.id,type:report.type,industryId:report.industryId,industryName:report.industryName,title:report.title,summary:report.summary,createdAt:report.createdAt.toISOString(),metadata:data?.metadata||null,quality:data?.reportQuality||null,recommendation:{confidencePct:reportAdviceConfidence(data?.researchEvaluation,data?.dataQuality),stateCounts},...annotations[index],includedInNextAnalysis:includedIds.has(report.id)}
+      })})
+    }
 
     const reports = await prisma.aIAnalysisReport.findMany({
       where: {

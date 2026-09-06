@@ -10,7 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 
@@ -35,7 +36,12 @@ class OpenBBProvider:
 
     @property
     def available(self) -> bool:
-        return self._obb is not None
+        if not self.enabled:
+            return False
+        if self._obb is not None:
+            return True
+        import importlib.util
+        return importlib.util.find_spec('yfinance') is not None
 
     @staticmethod
     def _records(result: Any) -> List[Dict[str, Any]]:
@@ -54,6 +60,8 @@ class OpenBBProvider:
     async def get_stock_info(self, symbol: str, market: str) -> Optional[Dict[str, Any]]:
         if not self.available or market not in {"us", "hk"}:
             return None
+        if self._obb is None:
+            return await self._yfinance_info(symbol)
 
         def load() -> Optional[Dict[str, Any]]:
             result = self._obb.equity.profile(symbol=symbol, provider="yfinance")
@@ -75,6 +83,8 @@ class OpenBBProvider:
     ) -> Optional[List[Dict[str, Any]]]:
         if not self.available or market not in {"us", "hk"}:
             return None
+        if self._obb is None:
+            return await self._yfinance_history(symbol, start_date, end_date)
 
         def load() -> List[Dict[str, Any]]:
             result = self._obb.equity.price.historical(
@@ -92,6 +102,27 @@ class OpenBBProvider:
             self.logger.warning("OpenBB历史行情失败，尝试直接 yfinance: %s", error)
             return await self._yfinance_history(symbol, start_date, end_date)
 
+    async def get_quote(self, symbol: str, market: str):
+        if not self.available:
+            return None
+        def load():
+            # get_info exposes the exchange's quote timestamp; do not label a
+            # delayed or previous-close quote with the request time.
+            import yfinance as yf
+            row = yf.Ticker(symbol).get_info()
+            timestamp = row.get('regularMarketTime')
+            price = row.get('regularMarketPrice')
+            if not timestamp or not price:
+                return None
+            date = datetime.fromtimestamp(timestamp, timezone.utc).astimezone(ZoneInfo('Asia/Hong_Kong' if market == 'hk' else 'America/New_York')).strftime('%Y-%m-%d')
+            previous = row.get('regularMarketPreviousClose')
+            return {'date': date, 'close': price, 'open': row.get('regularMarketOpen'), 'high': row.get('regularMarketDayHigh'), 'low': row.get('regularMarketDayLow'), 'volume': row.get('regularMarketVolume'), 'previousClose': previous, 'changePct': (price / previous - 1) * 100 if previous else None, 'currency': row.get('currency'), 'source': 'yfinance_quote'}
+        try:
+            return await asyncio.to_thread(load)
+        except Exception as error:
+            self.logger.info('国际最新行情暂不可用 %s: %s', symbol, type(error).__name__)
+            return None
+
     async def get_financial_report(
         self,
         symbol: str,
@@ -100,9 +131,12 @@ class OpenBBProvider:
     ) -> Optional[List[Dict[str, Any]]]:
         if not self.available or market not in {"us", "hk"}:
             return None
+        if self._obb is None:
+            return await self._yfinance_income(symbol, report_type)
 
         def load() -> List[Dict[str, Any]]:
-            result = self._obb.equity.fundamental.income(
+            method = {'income': self._obb.equity.fundamental.income, 'balance': self._obb.equity.fundamental.balance, 'cashflow': self._obb.equity.fundamental.cash} .get(report_type, self._obb.equity.fundamental.income)
+            result = method(
                 symbol=symbol,
                 provider="yfinance",
             )
@@ -113,7 +147,7 @@ class OpenBBProvider:
             return records or None
         except Exception as error:
             self.logger.warning("OpenBB财报失败，尝试直接 yfinance: %s", error)
-            return await self._yfinance_income(symbol)
+            return await self._yfinance_income(symbol, report_type)
 
     async def get_announcements(
         self,
@@ -124,6 +158,8 @@ class OpenBBProvider:
     ) -> Optional[List[Dict[str, Any]]]:
         if not self.available or market not in {"us", "hk"}:
             return None
+        if self._obb is None:
+            return await self._yfinance_news(symbol, start_date, end_date)
 
         def load() -> List[Dict[str, Any]]:
             result = self._obb.news.company(
@@ -144,6 +180,8 @@ class OpenBBProvider:
                     'date': str(row.get('published') or row.get('date') or row.get('created') or ''),
                     'url': str(row.get('url') or row.get('link') or ''),
                     'source': 'openbb_yfinance_news',
+                    'content': row.get('summary') or row.get('text') or row.get('content'),
+                    'event_type': '公司新闻（非交易所公告）',
                 })
             return normalized
 
@@ -190,6 +228,8 @@ class OpenBBProvider:
                         'date': date,
                         'url': str(url or ''),
                         'source': 'yfinance_news',
+                        'content': content.get('summary') or content.get('description'),
+                        'event_type': '公司新闻（非交易所公告）',
                     })
                 return normalized
 
@@ -234,12 +274,13 @@ class OpenBBProvider:
             self.logger.warning("直接 yfinance历史行情失败: %s", error)
             return None
 
-    async def _yfinance_income(self, symbol: str) -> Optional[List[Dict[str, Any]]]:
+    async def _yfinance_income(self, symbol: str, report_type: str = 'income') -> Optional[List[Dict[str, Any]]]:
         try:
             import yfinance as yf
 
             def load() -> List[Dict[str, Any]]:
-                frame = yf.Ticker(symbol).income_stmt
+                ticker = yf.Ticker(symbol)
+                frame = {'income': lambda: ticker.quarterly_income_stmt, 'balance': lambda: ticker.quarterly_balance_sheet, 'cashflow': lambda: ticker.quarterly_cashflow}.get(report_type, lambda: ticker.quarterly_income_stmt)()
                 if frame is None or frame.empty:
                     return []
                 records: List[Dict[str, Any]] = []
@@ -247,7 +288,10 @@ class OpenBBProvider:
                     row = frame[period].to_dict()
                     records.append(
                         {
+                            **row,
                             "period": str(period),
+                            'source': 'yfinance',
+                            'reportType': report_type,
                             "revenue": row.get("Total Revenue") or row.get("Operating Revenue"),
                             "net_income": row.get("Net Income") or row.get("Net Income Common Stockholders"),
                         }

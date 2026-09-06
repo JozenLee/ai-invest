@@ -22,6 +22,12 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body className="min-h-full" suppressHydrationWarning>
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "if (window.location.hostname === '127.0.0.1') window.location.replace(window.location.href.replace('://127.0.0.1', '://localhost'))",
+          }}
+        />
         <QueryProvider>
           <ThemeProvider
             attribute="class"

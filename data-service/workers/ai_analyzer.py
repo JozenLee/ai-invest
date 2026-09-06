@@ -29,6 +29,7 @@ class AIAnalyzer:
             anthropic_api_key: Claude API密钥
         """
         self.concurrency = concurrency
+        self.logger = logger
 
         # 获取API密钥和配置
         api_key = anthropic_api_key or os.getenv('ANTHROPIC_API_KEY')
@@ -175,26 +176,32 @@ class AIAnalyzer:
 
         if not self.claude_client:
             logger.warning("Claude API未配置，返回未分析的文章")
-            return [AnalyzedArticle(**article.dict(), aiProcessed=False) for article in articles]
+            return [AnalyzedArticle(**article.dict(), aiProcessed=False, aiError='AI分类服务未配置') for article in articles]
+
+        if not getattr(self, 'industry_segments', None):
+            await self.load_industry_segments()
+        if not self.industry_segments:
+            return [AnalyzedArticle(**article.model_dump(), aiProcessed=False, aiError='产业分类词典未加载，等待重试') for article in articles]
+
+        if getattr(self, 'industry_segments', None):
+            from services.news_classification import classify_batch
+            return await classify_batch(self, articles)
 
         logger.info(f"开始批量分析 {len(articles)} 条新闻")
 
         semaphore = asyncio.Semaphore(self.concurrency)
 
-        tasks = [
-            self._analyze_with_semaphore(article, semaphore)
-            for article in articles
-        ]
-
-        try:
-            # 整批超时90秒
-            results = await asyncio.wait_for(
-                asyncio.gather(*tasks, return_exceptions=True),
-                timeout=90.0
-            )
-        except asyncio.TimeoutError:
-            logger.error("批量分析超时（90秒）")
-            results = []
+        tasks = [asyncio.create_task(self._analyze_with_semaphore(article, semaphore)) for article in articles]
+        _, pending = await asyncio.wait(tasks, timeout=float(os.getenv('AI_NEWS_BATCH_TIMEOUT_SECONDS', '90')))
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        results = []
+        for article, task in zip(articles, tasks):
+            if task.cancelled() or task.exception():
+                results.append(AnalyzedArticle(**article.dict(), aiProcessed=False, aiError='AI分类超时或失败，保留原文等待重试'))
+            else:
+                results.append(task.result())
 
         # 分离成功/失败
         succeeded = [r for r in results if isinstance(r, AnalyzedArticle)]
@@ -257,7 +264,7 @@ class AIAnalyzer:
 
         except asyncio.TimeoutError:
             logger.warning(f"AI分析超时: {article.title[:50]}")
-            return AnalyzedArticle(**article.dict(), aiProcessed=False)
+            return AnalyzedArticle(**article.dict(), aiProcessed=False, aiError='AI分类超时')
         except Exception as e:
             logger.error(f"AI分析失败: {e}, 文章: {article.title[:50]}")
             return AnalyzedArticle(

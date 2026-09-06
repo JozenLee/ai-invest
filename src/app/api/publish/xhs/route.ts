@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { publishXiaohongshuNote } from '@/lib/services/xiaohongshu-mcp.service'
+import { checkXiaohongshuLogin, publishXiaohongshuNote } from '@/lib/services/xiaohongshu-mcp.service'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -32,6 +32,11 @@ async function writeImageDataUrl(value: string) {
 
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
+  const reportId = typeof body.reportId === 'string' ? body.reportId : ''
+  const sourceReport = reportId ? await prisma.aIAnalysisReport.findUnique({ where: { id: reportId } }) : null
+  let reportData: any = null
+  try { reportData = JSON.parse(sourceReport?.dataJson || '{}') } catch { /* Invalid legacy report. */ }
+  if (sourceReport?.type !== 'comprehensive' || !reportData?.socialReport || !reportData?.metadata?.runId) return NextResponse.json({ success: false, error: '请选择综合分析流程生成的社媒版报告' }, { status: 400 })
   const accountId = typeof body.accountId === 'string' ? body.accountId.trim() : ''
   const title = typeof body.title === 'string' ? body.title.trim() : ''
   const content = typeof body.content === 'string' ? body.content.trim() : ''
@@ -51,6 +56,10 @@ export async function POST(request: NextRequest) {
 
   const temporaryFiles: string[] = []
   try {
+    const loginPayload = await checkXiaohongshuLogin()
+    const login = loginPayload.data || loginPayload
+    const identity = login.user_id || login.username
+    if (!(login.is_logged_in ?? login.logged_in ?? login.isLoggedIn ?? login.loggedIn) || !identity || ![account.accountId, account.displayName].includes(identity)) throw new Error('当前MCP登录账号与所选发布账号不匹配，请重新确认登录')
     const images = []
     for (const imageDataUrl of imageDataUrls) {
       const image = await writeImageDataUrl(imageDataUrl)

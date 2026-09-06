@@ -212,12 +212,14 @@ async def analyze_industry_companies(
     source: str = Query(default="graph", description="企业候选来源：graph / etf_holdings"),
     etf_codes: str = Query(default="", description="ETF持仓来源使用的ETF代码，逗号分隔"),
     generate_ai_report: bool = Query(default=True, description="是否生成企业AI趋势报告"),
+    top_companies: str = Query(default="", description="前端筛选的top企业符号列表，逗号分隔（用于跳过后端AI筛选）"),
 ):
     """
     分析产业领域的企业发展趋势
 
     - **industry_id**: 产业ID
     - **period_days**: 分析周期（天），默认90天
+    - **top_companies**: 前端筛选的企业列表，如果提供则跳过后端AI筛选
     """
     try:
         etf_holdings = {}
@@ -227,12 +229,22 @@ async def analyze_industry_companies(
                 return JSONResponse(status_code=400, content={"success": False, "error": "ETF持仓来源需要提供etf_codes"})
             etf_holdings, holdings_diagnostics = await get_etf_holdings_for_analysis(codes)
 
+        # 解析前端传来的top_companies参数
+        frontend_top_companies = None
+        if top_companies:
+            frontend_top_companies = [symbol.strip() for symbol in top_companies.split(",") if symbol.strip()]
+            logger.info(
+                "收到前端筛选的企业列表: industry_id=%s, count=%d, symbols=%s",
+                industry_id, len(frontend_top_companies), frontend_top_companies[:5]
+            )
+
         result = await company_analyzer.analyze_industry_companies(
             industry_id=industry_id,
             analysis_period_days=period_days,
             source=source,
             etf_holdings=etf_holdings,
             generate_ai_report=generate_ai_report,
+            frontend_top_companies=frontend_top_companies,  # 传递给分析器
         )
         if source in {"etf", "etf_holdings", "ETF持仓"}:
             result["etf_holdings_diagnostics"] = holdings_diagnostics

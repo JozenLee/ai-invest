@@ -43,6 +43,7 @@ interface NewsArticle {
   url?: string
   publishTime: string
   category: string
+  aiProcessed?: boolean
   categoryId?: string
   categoryName?: string
   domainId?: string
@@ -758,6 +759,7 @@ export default function EventsFeedPage() {
                       {article.industrySegments && article.industrySegments.length > 0 && (
                         <IndustrySegmentTags tags={article.industrySegments} maxDisplay={3} />
                       )}
+                      {!article.industrySegments?.length && <Badge variant="outline">{article.aiProcessed ? '未命中已配置产业' : '待分类'}</Badge>}
 
                       {/* 发布时间 - 单独一行 */}
                       <div className="text-xs text-muted-foreground">

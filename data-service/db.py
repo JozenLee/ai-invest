@@ -37,8 +37,11 @@ class Database:
         Returns:
             sqlite3.Connection: 数据库连接对象
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row  # 使用字典式访问
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def execute(self, query: str, params: tuple = ()):
@@ -265,7 +268,7 @@ class Database:
                 article_data.get('content'),
                 article_data.get('summary'),
                 article_data.get('source'),
-                article_data.get('url'),
+                article_data.get('url') or None,
                 article_data.get('publishTime'),
                 category_code,
                 category_id,
@@ -327,7 +330,7 @@ class Database:
 
     def insert_datasource_log(self, log_data: dict) -> bool:
         """插入数据源采集日志"""
-        from datetime import datetime
+        from datetime import datetime, timezone
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -347,7 +350,7 @@ class Database:
                 log_data.get('failedCount', 0),
                 log_data.get('duration'),
                 log_data.get('errorDetail'),
-                datetime.now().isoformat()
+                datetime.now(timezone.utc).isoformat()
             ))
             conn.commit()
             return True

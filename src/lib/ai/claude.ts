@@ -47,6 +47,27 @@ export class ClaudeClient {
   private model: string
   private maxTokens: number
 
+  readonly messages = {
+    create: async (params: {
+      prompt?: string
+      model?: string
+      system?: string
+      max_tokens?: number
+      temperature?: number
+      messages?: Array<{ role: string; content: string }>
+      timeoutMs?: number
+    }) => {
+      const prompt = params.prompt || params.messages?.map((message) => message.content).join('\n') || ''
+      const text = await this.complete({
+        prompt,
+        system: params.system,
+        maxTokens: params.max_tokens,
+        timeoutMs: params.timeoutMs,
+      })
+      return { content: [{ type: 'text' as const, text }] }
+    }
+  }
+
   constructor(config?: ClaudeConfig) {
     this.model = config?.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514'
     this.maxTokens = config?.maxTokens || 4096
@@ -148,6 +169,7 @@ export class ClaudeClient {
     prompt: string
     system?: string
     maxTokens?: number
+    timeoutMs?: number
   }): Promise<string> {
     if (!this.client) {
       throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
@@ -163,7 +185,7 @@ export class ClaudeClient {
         }
       ],
       system: params.system,
-    })
+    }, { signal: AbortSignal.timeout(Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS || 360000)))) })
 
     const content = message.content[0]
     if (content.type === 'text') {

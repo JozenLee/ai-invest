@@ -60,10 +60,25 @@ export function buildAIAnalysisEndpoint(
   industryId: string,
   industryName: string,
   periodDays = 90,
+  options?: { generateAiReport?: boolean; topCompanies?: string[] }
 ) {
   const params = new URLSearchParams({ period_days: String(periodDays) })
   if (analysisModule.id !== 'company') params.set('industry_name', industryName)
   if (analysisModule.id === 'news') params.set('limit', '12')
+
+  // 企业分析模块：支持两阶段调用
+  if (analysisModule.id === 'company') {
+    // 第一阶段：获取数据时禁用AI报告（避免后端AI筛选阻塞）
+    if (options?.generateAiReport === false) {
+      params.set('generate_ai_report', 'false')
+    }
+    // 第二阶段：传入前端筛选的top企业，生成AI报告
+    if (options?.topCompanies && options.topCompanies.length > 0) {
+      params.set('generate_ai_report', 'true')
+      params.set('top_companies', options.topCompanies.join(','))
+    }
+  }
+
   return `/api/analysis/industry/${encodeURIComponent(industryId)}/${analysisModule.analysisPath}?${params.toString()}`
 }
 

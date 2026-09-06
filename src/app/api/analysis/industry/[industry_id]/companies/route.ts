@@ -20,9 +20,23 @@ export async function GET(
     const source = searchParams.get('source') || 'graph'
     const etfCodes = searchParams.get('etf_codes') || ''
     const generateAiReport = searchParams.get('generate_ai_report') || 'true'
+    const topCompanies = searchParams.get('top_companies') || '' // 前端筛选的top企业列表
+
+    // 构建查询参数
+    const queryParams = new URLSearchParams({
+      period_days: periodDays,
+      source: source,
+      etf_codes: etfCodes,
+      generate_ai_report: generateAiReport,
+    })
+
+    // 如果提供了top_companies，传递给后端（用于AI报告生成）
+    if (topCompanies) {
+      queryParams.set('top_companies', topCompanies)
+    }
 
     const response = await fetch(
-      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/companies?period_days=${periodDays}&source=${encodeURIComponent(source)}&etf_codes=${encodeURIComponent(etfCodes)}&generate_ai_report=${encodeURIComponent(generateAiReport)}`,
+      `${DATA_SERVICE_URL}/api/industry-analysis/${industry_id}/companies?${queryParams.toString()}`,
       {
         headers: {
           'Content-Type': 'application/json',

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 
 from services.data_service import data_service
+from utils.trading_hours import get_market_status
 
 router = APIRouter()
 
@@ -124,12 +125,21 @@ async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
         # 并行获取数据
         sector_data_today = await data_service.get_sector_capital_flow("今日", force_refresh=refresh)
         sector_source = data_service.registry.get_last_source("sector_capital_flow")
-        northbound_data = await data_service.get_northbound_flow()
+        try:
+            northbound_data = await data_service.get_northbound_flow(force_refresh=refresh)
+        except Exception:
+            northbound_data = {}
         northbound_source = data_service.registry.get_last_source("northbound_flow")
-        volume_amplification = await data_service.get_market_volume_amplification(20)
+        try:
+            volume_amplification = await data_service.get_market_volume_amplification(20, force_refresh=refresh)
+        except Exception:
+            volume_amplification = {}
         volume_source = data_service.registry.get_last_source("market_volume_amplification")
 
-        lhb_data = await data_service.get_lhb_data()
+        try:
+            lhb_data = await data_service.get_lhb_data(force_refresh=refresh)
+        except Exception:
+            lhb_data = []
         lhb_source = data_service.registry.get_last_source("lhb_data")
 
         sources = {
@@ -138,10 +148,6 @@ async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
             "volume": volume_source,
             "dragonTiger": lhb_source,
         }
-        non_tushare = {name: source for name, source in sources.items() if source != "Tushare"}
-        if non_tushare:
-            raise RuntimeError(f"资金流向数据未全部命中 Tushare: {non_tushare}")
-
         # 转换为统一格式
         sectors_formatted = []
         for item in sector_data_today:
@@ -201,10 +207,16 @@ async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
         top_inflow = [item for item in sectors_formatted if item["netFlow"] > 0][:10]
         top_outflow = [item for item in sorted(sectors_formatted, key=lambda x: x["netFlow"]) if item["netFlow"] < 0][:10]
 
-        sector_data_quality = "close"
-        has_close_data = (bool(northbound_data.get("stale")) if has_northbound else False) or sector_data_quality == "close"
-        data_quality = "close" if has_close_data else "realtime"
         sector_date = str(sector_data_today[0].get("日期", "")) if sector_data_today else ""
+        market_status = get_market_status()
+        normalized_sector_date = sector_date.replace("-", "")[:8]
+        today = datetime.now().strftime("%Y%m%d")
+        sector_realtime = bool(
+            market_status["isRealtime"] and normalized_sector_date == today and sector_source != "缓存"
+        )
+        sector_data_quality = "realtime" if sector_realtime else "close"
+        has_close_data = (bool(northbound_data.get("stale")) if has_northbound else False) or not sector_realtime
+        data_quality = "close" if has_close_data else "realtime"
         volume_date = str(volume_amplification.get("date", ""))
         data_dates = [date for date in (sector_date, northbound_data.get("date", ""), volume_date) if date]
         data_date = max(data_dates) if data_dates else datetime.now().strftime("%Y-%m-%d")
@@ -218,7 +230,7 @@ async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
                 "institutionalBehavior": institutional_behavior,
                 "topInflowSectors": top_inflow,
                 "topOutflowSectors": top_outflow,
-                "source": "Tushare",
+                "source": sector_source,
                 "sourceDetails": {
                     "sectorFlow": sector_source,
                     "northbound": northbound_source,
@@ -229,7 +241,7 @@ async def get_enhanced_capital_flow(refresh: bool = Query(default=False)):
                 "dataQuality": data_quality,
                 "sectorDataQuality": sector_data_quality,
                 "sectorDataDate": sector_date,
-                "sectorRealtime": False,
+                "sectorRealtime": sector_realtime,
                 "dataSources": sources,
                 "timestamp": datetime.now().isoformat()
             }

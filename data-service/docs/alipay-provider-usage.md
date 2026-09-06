@@ -466,4 +466,3 @@ A: 步骤：
 - [支付宝开放平台](https://open.alipay.com/)
 - [生活号API文档](https://opendocs.alipay.com/open/054kxb)
 - [RSA签名指南](https://opendocs.alipay.com/open/291/106074)
-- [Provider实现报告](./alipay-provider-implementation.md)

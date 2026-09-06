@@ -1,0 +1,17 @@
+import type { SocialReport } from '@/lib/analysis/social-report'
+import { renderReportPoster } from '@/lib/analysis/report-poster'
+import { AlertTriangle, BarChart3, CheckCircle2, Image as ImageIcon } from 'lucide-react'
+import { chineseNarrative, chineseSource } from '@/lib/analysis/chinese-labels'
+
+export function SocialReportView({ report, date, industry }: { report: SocialReport; date: string; industry: string }) {
+  const parsed = new Date(date)
+  const displayDate = Number.isFinite(parsed.getTime()) ? parsed.toISOString().slice(0,10) : '日期未标注'
+  const svg = renderReportPoster(report, { industry, date: displayDate })
+  return <article className="space-y-6" aria-label={report.title}>
+    {!!report.metrics?.length&&<div className="grid gap-3 sm:grid-cols-3">{report.metrics.map((metric,index)=><div key={`${metric.label}-${index}`} className="rounded-2xl border bg-card p-4 shadow-sm"><div className="flex items-center gap-2 text-xs text-muted-foreground"><BarChart3 className="size-4 text-primary"/>{chineseNarrative(metric.label)}</div><p className="mt-3 font-mono text-2xl font-semibold tracking-tight">{metric.value}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{metric.date} · {chineseSource(metric.source)}</p></div>)}</div>}
+    <section className="rounded-2xl border bg-card p-5 shadow-sm sm:p-6"><div className="flex items-center gap-2"><CheckCircle2 className="size-5 text-emerald-600"/><h2 className="text-lg font-semibold">核心判断</h2></div><ol className="mt-4 grid gap-3 md:grid-cols-3">{report.takeaways.map((takeaway,index)=><li key={`${takeaway}-${index}`} className="rounded-xl bg-muted/45 p-4 text-sm leading-6"><span className="mb-2 block font-mono text-xs text-primary">{String(index+1).padStart(2,'0')}</span>{chineseNarrative(takeaway)}</li>)}</ol></section>
+    <div className="grid gap-4 md:grid-cols-2">{report.sections.map((section,index)=><section id={`report-section-${index}`} key={`${section.title}-${index}`} className="rounded-2xl border bg-card p-5 shadow-sm"><div className="mb-3 flex items-center gap-2"><span className="h-5 w-1 rounded-full bg-primary"/><h2 className="font-semibold">{chineseNarrative(section.title)}</h2></div><p className="text-sm leading-7 text-muted-foreground">{chineseNarrative(section.body)}</p></section>)}</div>
+    <section className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-5 sm:p-6"><div className="flex items-center gap-2 text-amber-800 dark:text-amber-300"><AlertTriangle className="size-5"/><h2 className="font-semibold">风险与证据边界</h2></div><ul className="mt-4 space-y-2 text-sm leading-6">{report.risks.map((risk,index)=><li key={`${risk}-${index}`} className="flex gap-2"><span aria-hidden>•</span><span>{chineseNarrative(risk)}</span></li>)}</ul></section>
+    <details className="rounded-2xl border bg-card print:hidden"><summary className="flex min-h-12 cursor-pointer list-none items-center gap-2 px-5 py-3 text-sm font-medium focus-visible:outline-2"><ImageIcon className="size-4 text-primary"/>查看发布版长图</summary><div className="border-t bg-muted/20 p-3 sm:p-5">{/* eslint-disable-next-line @next/next/no-img-element */}<img loading="lazy" width="1080" height="1440" src={'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)} alt={chineseNarrative(report.title + '：' + report.subtitle)} className="mx-auto block h-auto w-full max-w-4xl rounded-xl border" /></div></details>
+  </article>
+}

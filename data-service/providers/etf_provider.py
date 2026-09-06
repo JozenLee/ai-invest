@@ -81,6 +81,9 @@ class ETFProvider:
             round((asyncio.get_running_loop().time() - tushare_started_at) * 1000),
         )
         if tushare_result:
+            if len(tushare_result) < 10:
+                fallback = await asyncio.to_thread(self._get_eastmoney_holdings_direct, ticker)
+                tushare_result = self._merge_holdings(tushare_result, fallback)
             logger.info(
                 "ETF持仓请求结束: code=%s status=success source=tushare rows=%s duration_ms=%s",
                 ticker,
@@ -176,6 +179,22 @@ class ETFProvider:
         return []
 
     @staticmethod
+    def _merge_holdings(primary: List[Dict], fallback: List[Dict]) -> List[Dict]:
+        """合并不同报告期/来源的持仓，按代码去重并保留权重较高的一条。"""
+        merged: Dict[str, Dict] = {}
+        for row in [*(primary or []), *(fallback or [])]:
+            raw_code = str(row.get('stock_code') or row.get('stockCode') or '').strip()
+            code = raw_code.split('.')[0].removeprefix('sh').removeprefix('sz')
+            if not code:
+                continue
+            row = {**row, 'stock_code': code}
+            current = merged.get(code)
+            weight = float(row.get('weight') or 0)
+            if current is None or weight > float(current.get('weight') or 0):
+                merged[code] = row
+        return sorted(merged.values(), key=lambda row: float(row.get('weight') or 0), reverse=True)
+
+    @staticmethod
     def _get_eastmoney_holdings_direct(ticker: str) -> List[Dict]:
         """直连天天基金公开持仓页面，避免 AKShare 上游代理/解析问题。"""
         try:
@@ -264,7 +283,7 @@ class ETFProvider:
         weight_column = next((columns[name] for name in ['占净值比例', '占净值比', '持仓占比', '占比', 'weight', 'stk_mkv_ratio'] if name in columns), None)
         quantity_column = next((columns[name] for name in ['持股数', '持股数量', 'quantity', 'qty'] if name in columns), None)
         market_value_column = next((columns[name] for name in ['持仓市值', '市值', 'market_value'] if name in columns), None)
-        period_column = next((columns[name] for name in ['季度', 'period', '报告期'] if name in columns), None)
+        period_column = next((columns[name] for name in ['end_date', 'report_period', '季度', 'period', '报告期'] if name in columns), None)
         if code_column is None:
             return []
         result = []
@@ -299,6 +318,7 @@ class ETFProvider:
                 'quantity': quantity,
                 'market_value': market_value,
                 'report_period': str(row.get(period_column) or '') if period_column is not None else '',
+                'ann_date': str(row.get('ann_date') or row.get('publish_date') or ''),
                 'source': source,
             })
         return result
@@ -332,6 +352,7 @@ class ETFProvider:
             periods = self._recent_report_periods(
                 count=max(1, int(os.getenv("ETF_HOLDINGS_REPORT_PERIODS", "2")))
             )
+            combined: List[Dict] = []
             for period in periods:
                 started_at = asyncio.get_running_loop().time()
                 try:
@@ -343,8 +364,17 @@ class ETFProvider:
                         'fund_portfolio',
                         ts_code=f'{ticker}{suffix}',
                         period=period,
+                        fields='ts_code,ann_date,end_date,symbol,mkv,amount,stk_mkv_ratio,stk_float_ratio',
                         _timeout_seconds=request_timeout,
                     )
+                    # Some Promax deployments return multiple report periods
+                    # even when ``period`` is supplied. Mixing them makes the
+                    # summed weights exceed 100% and invalidates every holding
+                    # gate, so enforce the requested identity locally.
+                    if 'ts_code' in frame.columns:
+                        frame = frame[frame['ts_code'].astype(str).str.upper() == f'{ticker}{suffix}'.upper()]
+                    if 'end_date' in frame.columns:
+                        frame = frame[frame['end_date'].astype(str).str.replace('-', '', regex=False) == period]
                     result = self._normalize_frame(frame, 'tushare_fund_portfolio')
                     logger.info(
                         'ETF定期披露持仓响应: code=%s period=%s rows=%s duration_ms=%s',
@@ -356,7 +386,9 @@ class ETFProvider:
                     if result:
                         for item in result:
                             item['report_period'] = item.get('report_period') or period
-                        return result
+                        combined = self._merge_holdings(combined, result)
+                        if len(combined) >= 10:
+                            return combined
                 except Exception as error:
                     logger.warning(
                         'ETF定期披露持仓异常: code=%s period=%s duration_ms=%s error=%s',
@@ -365,7 +397,7 @@ class ETFProvider:
                         round((asyncio.get_running_loop().time() - started_at) * 1000),
                         error,
                     )
-            return []
+            return combined
         except Exception as error:
             logger.warning('ETF %s Tushare持仓调用异常: %s', ticker, error)
             return []

@@ -23,6 +23,7 @@ async function mcpRequest(path: string, init: RequestInit = {}) {
   if (!response.ok) {
     throw new Error(payload.error || payload.message || `小红书 MCP 请求失败（${response.status}）`)
   }
+  if (payload.success === false) throw new Error(payload.error || payload.message || '小红书 MCP 返回发布/请求失败')
   return payload
 }
 
@@ -53,7 +54,7 @@ export function publishXiaohongshuNote(input: XiaohongshuPublishInput) {
       images: input.images,
       tags: input.tags || [],
       schedule_at: input.scheduleAt || '',
-      visibility: input.visibility || '公开可见',
+      visibility: input.visibility || '仅自己可见',
       is_original: input.isOriginal ?? true,
     }),
   })

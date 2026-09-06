@@ -8,13 +8,17 @@ export async function syncPortfolioFromEmail(portfolioId: string) {
   const holdings = parsed.holdings
   const existingHoldings = await prisma.holding.findMany({ where: { portfolioId } })
   const industryMatches = await matchHoldingsToGraphIndustries(holdings)
+  if (!holdings.length || holdings.some(row => !Number.isFinite(row.quantity) || row.quantity < 0 || !Number.isFinite(row.unitNav) || row.unitNav <= 0)) throw new Error('持仓凭证校验失败，未修改现有持仓')
+  const categories = new Map(await Promise.all(holdings.map(async row => [row.ticker, await fetchFundCategory(row.ticker)] as const)))
 
   await prisma.$transaction(async tx => {
+    const previous = await tx.portfolio.findUnique({ where: { id: portfolioId } })
+    await tx.rawPayload.create({ data: { datasetKey: 'portfolio_email_backup', targetCode: portfolioId, payload: JSON.stringify({ portfolio: previous, holdings: existingHoldings }), contentHash: 'before-email-sync' } })
     await tx.holding.deleteMany({
       where: { portfolioId, ticker: { notIn: holdings.map(holding => holding.ticker) } },
     })
     for (const holding of holdings) {
-      const category = await fetchFundCategory(holding.ticker)
+      const category = categories.get(holding.ticker)
       const existing = existingHoldings.find((item) => item.ticker === holding.ticker)
       const industryMatch = industryMatches[holding.ticker]
       const industryData = existing?.industryDomainSource === 'manual'
@@ -29,7 +33,7 @@ export async function syncPortfolioFromEmail(portfolioId: string) {
           : {}
       await tx.holding.upsert({
         where: { portfolioId_ticker: { portfolioId, ticker: holding.ticker } },
-        create: { portfolioId, market: 'A', ...holding, ...industryData },
+        create: { portfolioId, market: 'A', ...holding, ...(category ? { category } : {}), ...industryData },
         update: {
           name: holding.name,
           ...(category ? { category } : {}),
@@ -47,6 +51,7 @@ export async function syncPortfolioFromEmail(portfolioId: string) {
         lastSyncEmail: process.env.PORTFOLIO_IMAP_USER ?? 'jozenlee@163.com',
       },
     })
+    await tx.rawPayload.create({ data: { datasetKey: 'portfolio_email', targetCode: portfolioId, payload: JSON.stringify({ holdingsDate: parsed.holdingsDate, balanceDate: parsed.balanceDate, holdingCount: holdings.length }), contentHash: 'email-snapshot' } })
   })
 
   return {

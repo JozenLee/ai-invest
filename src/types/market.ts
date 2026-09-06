@@ -348,6 +348,7 @@ export interface MarketContextValue {
 export type UnifiedSectorFlow = SectorFlow
 
 export const SOURCE_MAP: Record<string, SourceDisplay> = {
+  'subscription-database': { text: '订阅数据库', icon: 'database', variant: 'secondary' },
   'akshare_realtime': { text: 'AKShare实时', icon: 'database', variant: 'default' },
   'akshare': { text: 'AKShare', icon: 'database', variant: 'default' },
   'Tushare': { text: 'Tushare', icon: 'cloud', variant: 'default' },

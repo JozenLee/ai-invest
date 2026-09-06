@@ -271,6 +271,5 @@ python3 providers/douyin_provider.py
 
 ## 更多信息
 
-- [实现总结](./DOUYIN_PROVIDER_IMPLEMENTATION.md)
 - [Core 基础设施文档](../core/README.md)
 - [Provider 基类说明](./base_influencer_provider.py)

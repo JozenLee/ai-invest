@@ -38,6 +38,7 @@ import {
   Settings2,
   PieChart,
   ArrowUpDown,
+  ShieldCheck,
 } from 'lucide-react'
 
 interface Holding {
@@ -52,6 +53,14 @@ interface Holding {
   industryDomainConfidence?: number | null
   quantity: number
   unitNav: number
+  fundType?: string | null
+  targetEtfCode?: string | null
+  targetIndexCode?: string | null
+  mappingSource?: string | null
+  mappingConfidence?: number | null
+  purchaseDate?: string | null
+  costNav?: number | null
+  redemptionFeePct?: number | null
   updatedAt: string
 }
 
@@ -75,6 +84,9 @@ interface SyncSchedule {
   lastError: string | null
 }
 
+interface RiskBudget { riskProfile: string; investHorizon: string; minCashRatio: number; maxIndustryRatio: number; maxFundRatio: number; maxSingleAdjustmentRatio: number; stagedAdjustment: boolean }
+const defaultRiskBudget: RiskBudget = { riskProfile: 'moderate', investHorizon: 'medium', minCashRatio: .1, maxIndustryRatio: .2, maxFundRatio: .15, maxSingleAdjustmentRatio: .05, stagedAdjustment: true }
+
 export default function PortfolioOverviewPage() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
   const [holdings, setHoldings] = useState<Holding[]>([])
@@ -84,6 +96,9 @@ export default function PortfolioOverviewPage() {
   const [syncMessage, setSyncMessage] = useState<string | null>(null)
   const [schedule, setSchedule] = useState<SyncSchedule | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [riskOpen, setRiskOpen] = useState(false)
+  const [riskBudget, setRiskBudget] = useState<RiskBudget>(defaultRiskBudget)
+  const [isSavingRisk, setIsSavingRisk] = useState(false)
   const [scheduleEnabled, setScheduleEnabled] = useState(true)
   const [scheduleTimes, setScheduleTimes] = useState(['00:00', '12:00'])
   const [isSavingSchedule, setIsSavingSchedule] = useState(false)
@@ -102,6 +117,12 @@ export default function PortfolioOverviewPage() {
   const [formQuantity, setFormQuantity] = useState('')
   const [formUnitNav, setFormUnitNav] = useState('')
   const [formIndustryDomain, setFormIndustryDomain] = useState('')
+  const [formFundType, setFormFundType] = useState('')
+  const [formTargetEtf, setFormTargetEtf] = useState('')
+  const [formTargetIndex, setFormTargetIndex] = useState('')
+  const [formPurchaseDate, setFormPurchaseDate] = useState('')
+  const [formCostNav, setFormCostNav] = useState('')
+  const [formRedemptionFee, setFormRedemptionFee] = useState('')
 
   const fetchPortfolio = useCallback(async () => {
     setIsLoading(true)
@@ -120,6 +141,9 @@ export default function PortfolioOverviewPage() {
           setScheduleEnabled(scheduleData.data.enabled)
           setScheduleTimes(scheduleData.data.syncTimes)
         }
+        const riskRes = await fetch(`/api/portfolio/${defaultPortfolio.id}/risk-budget`)
+        const riskData = await riskRes.json()
+        if (riskData.success) setRiskBudget(riskData.data)
       } else {
         setPortfolio(null)
         setHoldings([])
@@ -154,16 +178,26 @@ export default function PortfolioOverviewPage() {
     }
   }
 
-  const syncPortfolio = async () => {
+  const saveRiskBudget = async () => {
     if (!portfolio) return
+    setIsSavingRisk(true); setError(null)
+    try {
+      const res = await fetch(`/api/portfolio/${portfolio.id}/risk-budget`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(riskBudget) })
+      const data = await res.json()
+      if (!res.ok || !data.success) throw new Error(data.error ?? '保存风险预算失败')
+      setRiskBudget(data.data); setRiskOpen(false); setSyncMessage('风险预算已保存，将用于下一次私有综合分析')
+    } catch (err) { setError(err instanceof Error ? err.message : '保存风险预算失败') } finally { setIsSavingRisk(false) }
+  }
+
+  const syncPortfolio = async () => {
     setIsSyncing(true)
     setSyncMessage(null)
     setError(null)
     try {
-      const res = await fetch(`/api/portfolio/${portfolio.id}/sync`, { method: 'POST' })
+      const res = await fetch('/api/portfolio/import-email', { method: 'POST' })
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data.error ?? '邮箱同步失败')
-      setSyncMessage(`已同步 ${data.data.holdings.length} 只基金和余额`)
+      setSyncMessage(`已同步 ${data.count} 只基金和余额`)
       await fetchPortfolio()
     } catch (err) {
       setError(err instanceof Error ? err.message : '邮箱同步失败')
@@ -198,6 +232,7 @@ export default function PortfolioOverviewPage() {
     setFormQuantity('')
     setFormUnitNav('')
     setFormIndustryDomain('')
+    setFormFundType(''); setFormTargetEtf(''); setFormTargetIndex(''); setFormPurchaseDate(''); setFormCostNav(''); setFormRedemptionFee('')
   }
 
   const handleAdd = async () => {
@@ -212,6 +247,7 @@ export default function PortfolioOverviewPage() {
           quantity: parseFloat(formQuantity),
           unitNav: parseFloat(formUnitNav),
           ...(formIndustryDomain.trim() ? { industryDomain: formIndustryDomain.trim() } : {}),
+          fundType: formFundType, targetEtfCode: formTargetEtf, targetIndexCode: formTargetIndex, purchaseDate: formPurchaseDate, costNav: formCostNav, redemptionFeePct: formRedemptionFee,
         }),
       })
       const data = await res.json()
@@ -230,6 +266,12 @@ export default function PortfolioOverviewPage() {
     setFormQuantity(String(h.quantity))
     setFormUnitNav(String(h.unitNav))
     setFormIndustryDomain(h.industryDomain ?? '')
+    setFormFundType(h.fundType ?? '')
+    setFormTargetEtf(h.targetEtfCode ?? '')
+    setFormTargetIndex(h.targetIndexCode ?? '')
+    setFormPurchaseDate(h.purchaseDate?.slice(0, 10) ?? '')
+    setFormCostNav(h.costNav == null ? '' : String(h.costNav))
+    setFormRedemptionFee(h.redemptionFeePct == null ? '' : String(h.redemptionFeePct))
     setEditOpen(true)
   }
 
@@ -244,6 +286,7 @@ export default function PortfolioOverviewPage() {
           quantity: parseFloat(formQuantity),
           unitNav: parseFloat(formUnitNav),
           industryDomain: formIndustryDomain.trim(),
+          fundType: formFundType, targetEtfCode: formTargetEtf, targetIndexCode: formTargetIndex, purchaseDate: formPurchaseDate, costNav: formCostNav, redemptionFeePct: formRedemptionFee,
         }),
       })
       const data = await res.json()
@@ -284,6 +327,8 @@ export default function PortfolioOverviewPage() {
   const formatMoney = (n: number) =>
     n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
+  const productMappingFields = (prefix: string) => <details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">底层产品映射与交易成本</summary><p className="mt-2 text-xs leading-5 text-muted-foreground">ETF联接基金建议填写目标ETF或跟踪指数；赎回费请按当前持有期限填写。</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="grid gap-1"><Label htmlFor={`${prefix}-fund-type`}>基金类型</Label><Select value={formFundType || 'unknown'} onValueChange={(value) => setFormFundType(value === 'unknown' || !value ? '' : value)}><SelectTrigger id={`${prefix}-fund-type`}><span>{formFundType === 'feeder' ? 'ETF联接' : formFundType === 'etf' ? '场内ETF' : formFundType === 'index-enhanced' ? '指数增强' : formFundType === 'active' ? '主动基金' : formFundType === 'qdii' ? 'QDII' : '待识别'}</span></SelectTrigger><SelectContent><SelectItem value="unknown">待识别</SelectItem><SelectItem value="feeder">ETF联接</SelectItem><SelectItem value="etf">场内ETF</SelectItem><SelectItem value="index-enhanced">指数增强</SelectItem><SelectItem value="active">主动基金</SelectItem><SelectItem value="qdii">QDII</SelectItem></SelectContent></Select></div><div className="grid gap-1"><Label htmlFor={`${prefix}-target-etf`}>目标ETF代码</Label><Input id={`${prefix}-target-etf`} placeholder="如 159995" value={formTargetEtf} onChange={(event) => setFormTargetEtf(event.target.value)}/></div><div className="grid gap-1"><Label htmlFor={`${prefix}-target-index`}>跟踪指数代码</Label><Input id={`${prefix}-target-index`} placeholder="如 980017.SZ" value={formTargetIndex} onChange={(event) => setFormTargetIndex(event.target.value)}/></div><div className="grid gap-1"><Label htmlFor={`${prefix}-purchase-date`}>开始持有日期</Label><Input id={`${prefix}-purchase-date`} type="date" value={formPurchaseDate} onChange={(event) => setFormPurchaseDate(event.target.value)}/></div><div className="grid gap-1"><Label htmlFor={`${prefix}-cost-nav`}>成本净值</Label><Input id={`${prefix}-cost-nav`} type="number" min="0" step="0.0001" value={formCostNav} onChange={(event) => setFormCostNav(event.target.value)}/></div><div className="grid gap-1"><Label htmlFor={`${prefix}-redemption-fee`}>当前赎回费率（%）</Label><Input id={`${prefix}-redemption-fee`} type="number" min="0" step="0.01" value={formRedemptionFee} onChange={(event) => setFormRedemptionFee(event.target.value)}/></div></div></details>
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -322,7 +367,7 @@ export default function PortfolioOverviewPage() {
               <Settings2 className="mr-2 h-4 w-4" />
               同步计划
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>持仓自动同步计划</DialogTitle>
               </DialogHeader>
@@ -352,7 +397,21 @@ export default function PortfolioOverviewPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" size="sm" onClick={syncPortfolio} disabled={isSyncing || !portfolio}>
+          <Dialog open={riskOpen} onOpenChange={setRiskOpen}>
+            <DialogTrigger render={<Button variant="outline" size="sm" />}><ShieldCheck className="mr-2 h-4 w-4"/>风险预算</DialogTrigger>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
+              <DialogHeader><DialogTitle>个人组合风险预算</DialogTitle></DialogHeader>
+              <p className="text-sm leading-6 text-muted-foreground">目标仓位由这些硬约束计算。修改只影响下一次私有综合分析，不会自动交易。</p>
+              <div className="grid gap-4 py-2 sm:grid-cols-2">
+                <div className="grid gap-2"><Label>风险偏好</Label><Select value={riskBudget.riskProfile} onValueChange={(value) => setRiskBudget(current => ({ ...current, riskProfile: value ?? 'moderate' }))}><SelectTrigger><span>{riskBudget.riskProfile === 'conservative' ? '保守' : riskBudget.riskProfile === 'aggressive' ? '积极' : '稳健'}</span></SelectTrigger><SelectContent><SelectItem value="conservative">保守</SelectItem><SelectItem value="moderate">稳健</SelectItem><SelectItem value="aggressive">积极</SelectItem></SelectContent></Select></div>
+                <div className="grid gap-2"><Label>投资期限</Label><Select value={riskBudget.investHorizon} onValueChange={(value) => setRiskBudget(current => ({ ...current, investHorizon: value ?? 'medium' }))}><SelectTrigger><span>{riskBudget.investHorizon === 'short' ? '短期' : riskBudget.investHorizon === 'long' ? '长期' : '中期'}</span></SelectTrigger><SelectContent><SelectItem value="short">短期</SelectItem><SelectItem value="medium">中期</SelectItem><SelectItem value="long">长期</SelectItem></SelectContent></Select></div>
+                {[['minCashRatio','最低现金比例'],['maxIndustryRatio','单领域仓位上限'],['maxFundRatio','单基金仓位上限'],['maxSingleAdjustmentRatio','单次最大调整']].map(([key,label])=><div key={key} className="grid gap-2"><Label htmlFor={`risk-${key}`}>{label}</Label><div className="relative"><Input id={`risk-${key}`} type="number" min="0" max="100" step="1" className="pr-8" value={Number((riskBudget[key as keyof RiskBudget] as number) * 100).toFixed(0)} onChange={(event) => setRiskBudget(current => ({ ...current, [key]: Math.max(0, Math.min(100, Number(event.target.value))) / 100 }))}/><span className="absolute right-3 top-2.5 text-sm text-muted-foreground">%</span></div></div>)}
+              </div>
+              <label className="flex min-h-14 items-center justify-between gap-4 rounded-xl border p-4"><span><span className="block text-sm font-medium">分批调整</span><span className="mt-1 block text-xs text-muted-foreground">单次变化超过2个百分点时拆分为2—3批</span></span><input type="checkbox" checked={riskBudget.stagedAdjustment} onChange={(event) => setRiskBudget(current => ({ ...current, stagedAdjustment: event.target.checked }))} className="size-5 accent-primary"/></label>
+              <DialogFooter><DialogClose render={<Button variant="outline" size="sm" />}>取消</DialogClose><Button size="sm" onClick={saveRiskBudget} disabled={isSavingRisk}>{isSavingRisk ? '保存中...' : '保存预算'}</Button></DialogFooter>
+            </DialogContent>
+          </Dialog>
+          <Button variant="outline" size="sm" onClick={syncPortfolio} disabled={isSyncing}>
             <Mail className={`mr-2 h-4 w-4 ${isSyncing ? 'animate-pulse' : ''}`} />
             {isSyncing ? '同步中...' : '从邮箱同步'}
           </Button>
@@ -365,7 +424,7 @@ export default function PortfolioOverviewPage() {
               <Plus className="mr-2 h-4 w-4" />
               添加持仓
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
               <DialogHeader>
                 <DialogTitle>添加持仓</DialogTitle>
               </DialogHeader>
@@ -378,6 +437,7 @@ export default function PortfolioOverviewPage() {
                     onChange={(e) => setFormTicker(e.target.value)}
                   />
                 </div>
+                {productMappingFields('add')}
                 <div className="grid gap-1">
                   <Label>ETF名称</Label>
                   <Input
@@ -550,6 +610,8 @@ export default function PortfolioOverviewPage() {
                           </Badge>
                           {h.industryDomainSource === 'ai' && <span className="text-[10px] text-muted-foreground">AI</span>}
                         </div>
+                        {(h.targetEtfCode || h.targetIndexCode) && <p className="mt-1 font-mono text-[10px] text-muted-foreground">{h.targetEtfCode || '—'} · {h.targetIndexCode || '指数待补'}</p>}
+                        {!h.targetEtfCode && !h.targetIndexCode && <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">{/ETF.*联接/i.test(h.name) ? '底层ETF待核验' : '穿透映射待补'}</p>}
                       </TableCell>
                       <TableCell className="text-right">{h.quantity.toLocaleString()}</TableCell>
                       <TableCell className="text-right">{h.unitNav.toFixed(4)}</TableCell>
@@ -562,6 +624,7 @@ export default function PortfolioOverviewPage() {
                           <Button
                             variant="ghost"
                             size="icon-xs"
+                            aria-label={`编辑 ${h.name}`}
                             onClick={() => openEdit(h)}
                           >
                             <Pencil className="h-3 w-3" />
@@ -569,6 +632,7 @@ export default function PortfolioOverviewPage() {
                           <Button
                             variant="ghost"
                             size="icon-xs"
+                            aria-label={`删除 ${h.name}`}
                             onClick={() => openDelete(h)}
                           >
                             <Trash2 className="h-3 w-3" />
@@ -599,7 +663,7 @@ export default function PortfolioOverviewPage() {
 
       {/* Edit Dialog */}
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>编辑持仓 - {selectedHolding?.name}</DialogTitle>
           </DialogHeader>
@@ -632,6 +696,7 @@ export default function PortfolioOverviewPage() {
               />
               <p className="text-xs text-muted-foreground">同步或新增时会由 AI 自动匹配；手动填写后将优先保留。</p>
             </div>
+            {productMappingFields('edit')}
           </div>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" size="sm" />}>
@@ -646,7 +711,7 @@ export default function PortfolioOverviewPage() {
 
       {/* Delete Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>确认删除</DialogTitle>
           </DialogHeader>

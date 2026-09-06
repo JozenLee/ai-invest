@@ -1,6 +1,8 @@
 import pandas as pd
 import pytest
+from unittest.mock import MagicMock
 
+from providers import stock_provider as stock_provider_module
 from providers.etf_provider import ETFProvider
 from providers.stock_provider import StockProvider
 
@@ -10,6 +12,44 @@ def provider(monkeypatch):
     monkeypatch.setenv("TUSHARE_API_URL", "https://promax.example/tushare/pro")
     monkeypatch.setenv("TUSHARE_API_KEY", "test-key")
     return StockProvider()
+
+
+@pytest.mark.asyncio
+async def test_stock_names_cover_cn_and_hk_symbols(provider, monkeypatch):
+    monkeypatch.setattr(provider, '_get_direct_stock_names', lambda symbols: {})
+    fake_akshare = type('FakeAkshare', (), {
+        'stock_zh_a_spot_em': staticmethod(lambda: pd.DataFrame([
+            {'代码': '000001', '名称': '平安银行'},
+        ])),
+        'stock_hk_spot_em': staticmethod(lambda: pd.DataFrame([
+            {'代码': '00700', '名称': '腾讯控股'},
+            {'代码': '09988', '名称': '阿里巴巴-W'},
+        ])),
+    })
+    monkeypatch.setattr(stock_provider_module, 'ak', fake_akshare)
+
+    names = await provider.get_stock_names(['000001', '00700.HK', '9988.hk'])
+
+    assert names == {
+        '000001': '平安银行',
+        '700.hk': '腾讯控股',
+        '9988.hk': '阿里巴巴-W',
+    }
+
+
+@pytest.mark.asyncio
+async def test_direct_names_work_without_akshare_and_preserve_market(provider, monkeypatch):
+    session = MagicMock()
+    session.__enter__.return_value = session
+    session.get.return_value.content = 'v_sz002049="51~紫光国微~002049~62.76";v_hk00700="100~腾讯控股~00700~433";'.encode('gb18030')
+    monkeypatch.setattr(stock_provider_module.requests, 'Session', lambda: session)
+    monkeypatch.setattr(stock_provider_module, 'ak', None)
+
+    assert await provider.get_stock_names(['002049.SZ', '00700.HK']) == {
+        '002049': '紫光国微', '700.hk': '腾讯控股',
+    }
+    assert session.trust_env is False
+    assert set(session.get.call_args.kwargs['params']['q'].split(',')) == {'sz002049', 'hk00700'}
 
 
 @pytest.mark.asyncio
@@ -41,8 +81,8 @@ async def test_financial_reports_use_tushare_statements(provider, monkeypatch):
 
     assert [call[0] for call in calls] == [
         "fina_indicator", "income",
-        "fina_indicator", "balancesheet",
-        "fina_indicator", "cashflow",
+        "balancesheet",
+        "cashflow",
     ]
     assert income[0]["营业收入"] == 100
     assert income[0]["净利润"] == 20

@@ -7,7 +7,7 @@
  * - 错误处理：异常情况处理
  */
 
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:3000';
 const MAX_FETCH_TIME = 30000; // 采集可能需要较长时间

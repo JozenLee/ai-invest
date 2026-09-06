@@ -1,5 +1,5 @@
-#!/bin/bash
-# 一键启动所有服务
+#!/usr/bin/env bash
+exec "$(cd "$(dirname "$0")" && pwd)/services.sh" start all
 
 set -e
 

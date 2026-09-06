@@ -79,12 +79,12 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
     ),
     # 资金流向
     "market_capital_flow": CategoryConfig(
-        sources=["tushare"],
+        sources=["tushare", "sina"],
         cache_ttl=600,
         fallback_to_file=False,
     ),
     "sector_capital_flow": CategoryConfig(
-        sources=["tushare"],
+        sources=["tushare", "akshare"],
         cache_ttl=30,
         fallback_to_file=False,
     ),
@@ -296,8 +296,8 @@ class ProviderRegistry:
         if cache_key and not force_refresh:
             cached = self.cache.get_memory(cache_key)
             if cached is not None and self._is_valid_category_result(category, cached):
-                # 内存缓存保留首次获取时的真实来源；只有没有来源记录时才标记为缓存。
-                self._last_sources.setdefault(category, "缓存")
+                # 缓存命中不是一次新的数据源请求，不能沿用上次来源并被误报为实时。
+                self._last_sources[category] = "缓存"
                 return cached
 
         last_error = None
@@ -376,7 +376,27 @@ class ProviderRegistry:
 
     @staticmethod
     def _is_valid_category_result(category: str, result: Any) -> bool:
-        """对北向资金占位零值做类别级校验。"""
+        """校验缓存/数据源结果，避免盘中返回上一交易日快照。"""
+        from utils.trading_hours import is_trading_hours
+
+        if is_trading_hours() and category == "index_spot" and isinstance(result, pd.DataFrame):
+            if "数据日期" in result.columns:
+                today = datetime.now().strftime("%Y-%m-%d")
+                dates = result["数据日期"].dropna().astype(str).str.replace("/", "-").str[:10]
+                if not any(date == today for date in dates):
+                    return False
+
+        if is_trading_hours() and category == "sector_capital_flow" and isinstance(result, list):
+            today = datetime.now().strftime("%Y%m%d")
+            dates = []
+            for item in result:
+                value = str(item.get("日期", "")).replace("-", "")[:8] if isinstance(item, dict) else ""
+                if value:
+                    dates.append(value)
+            if dates and max(dates) != today:
+                return False
+
+        # 对北向资金占位零值做类别级校验。
         if category in {"northbound_flow", "northbound_history"} and isinstance(result, dict):
             value = result.get("value")
             return value is not None and value != 0

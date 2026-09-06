@@ -81,8 +81,11 @@ class IndustryCompanyAnalyzer:
         # 报告最多使用 8 家重点企业；限制下游抓取规模可避免 Promax 单并发网关
         # 在 15 家企业 × 4 类接口的请求洪峰下持续返回 503，最终拖到外层超时。
         self.selection_limit = max(4, int(os.getenv("COMPANY_ANALYSIS_SELECTION_LIMIT", "8")))
-        self.data_timeout_seconds = max(10, int(os.getenv("COMPANY_ANALYSIS_DATA_TIMEOUT_SECONDS", "90")))
-        self.provider_timeout_seconds = max(1, int(os.getenv("COMPANY_ANALYSIS_PROVIDER_TIMEOUT_SECONDS", "20")))
+        # 数据抓取总超时：从90秒提升到600秒（10分钟），覆盖大量企业的并发抓取场景
+        # 实测57家企业需要约300秒，留出足够buffer应对网络波动
+        self.data_timeout_seconds = max(10, int(os.getenv("COMPANY_ANALYSIS_DATA_TIMEOUT_SECONDS", "600")))
+        # 单个provider调用超时：从20秒提升到45秒，减少因网络延迟导致的空数据返回
+        self.provider_timeout_seconds = max(1, int(os.getenv("COMPANY_ANALYSIS_PROVIDER_TIMEOUT_SECONDS", "45")))
         self.provider_retries = max(0, int(os.getenv("COMPANY_ANALYSIS_PROVIDER_RETRIES", "1")))
         self.cache_ttl_seconds = max(0, int(os.getenv("COMPANY_ANALYSIS_CACHE_TTL_SECONDS", "900")))
         # 外层超时用于保护整条分析链路；客户端超时用于尽快释放无响应的代理请求。
@@ -118,6 +121,19 @@ class IndustryCompanyAnalyzer:
             if chatgpt_key and chatgpt_base:
                 self.chatgpt = ChatGPTTextClient(chatgpt_key, chatgpt_base, chatgpt_model, self.ai_request_timeout_seconds)
 
+    def _clear_stale_cache(self):
+        """清理过期的缓存数据，防止内存累积"""
+        now = datetime.now().timestamp()
+        stale_keys = [
+            key for key, cached in self._provider_cache.items()
+            if (now - cached.get("timestamp", 0)) >= self.cache_ttl_seconds
+        ]
+        for key in stale_keys:
+            del self._provider_cache[key]
+
+        if stale_keys:
+            logger.info("清理过期缓存: %d 条", len(stale_keys))
+
     async def analyze_industry_companies(
         self,
         industry_id: str,
@@ -125,8 +141,12 @@ class IndustryCompanyAnalyzer:
         source: str = 'graph',
         etf_holdings: Optional[Dict[str, List[Dict[str, Any]]]] = None,
         generate_ai_report: bool = True,
+        frontend_top_companies: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """按不同候选来源分析企业，后续行情/财报/公告/报告流程保持一致。"""
+        # 清理旧缓存，防止数据累积
+        self._clear_stale_cache()
+
         try:
             graph = None
             graph_error: Optional[Exception] = None
@@ -163,8 +183,7 @@ class IndustryCompanyAnalyzer:
 
             industry_name = (graph.get("industry") or {}).get("name", industry_id)
 
-            # 修复：先获取全部企业数据，再筛选AI报告输入
-            # 这样前端可以展示全部企业，并按综合评分排序Top 10
+            # 获取全部企业数据，两种模式使用相同的筛选逻辑
             company_data = await self._fetch_company_data(companies, analysis_period_days)
             analyzed_companies = self._analyze_companies(company_data)
             # 计算综合评分和ETF引用数量，用于前端排序和展示
@@ -176,12 +195,6 @@ class IndustryCompanyAnalyzer:
             coverage["selection_pool_count"] = len(companies)
             coverage["data_fetch_selected_count"] = len(companies)
 
-            # AI 模式下，从全部已分析企业中筛选代表性企业用于AI报告生成
-            # 数据模式保留来源中的全部企业输入，不做筛选
-            selected_for_ai = (
-                await self._select_companies_with_ai(industry_name, analyzed_companies, normalized_source)
-                if generate_ai_report else analyzed_companies
-            )
             graph_summary = self._build_graph_summary(graph, nodes, len(companies))
 
             if coverage["companies_with_any_data"] == 0:
@@ -192,8 +205,8 @@ class IndustryCompanyAnalyzer:
                     {"industry_id": industry_id, "coverage": coverage},
                 )
 
-            # AI 模式使用财报或公告证据准入；数据模式不以证据条件过滤企业。
-            candidates = self._build_evidence_candidates(selected_for_ai if generate_ai_report else analyzed_companies)
+            # 两种模式使用相同的证据筛选逻辑：保留具备财报或公告证据的企业
+            candidates = self._build_evidence_candidates(analyzed_companies)
             coverage["report_candidate_count"] = len(candidates)
             coverage["report_evidence_both_count"] = sum(
                 1 for item in candidates
@@ -227,9 +240,24 @@ class IndustryCompanyAnalyzer:
             # "688126.SH"一类证券代码直接作为企业名输出到报告页面。
             named_companies = [item for item in analyzed_companies if not self._is_security_code_name(item)]
             named_candidates = [item for item in candidates if not self._is_security_code_name(item)]
-            # AI报告：使用筛选后的企业作为输入；前端展示：返回全部企业供前端排序
-            top_companies = named_candidates[:8] if generate_ai_report else named_companies
-            coverage["report_selected_count"] = len(top_companies)
+            # 使用前端传递的top_companies参数，如果未提供则使用named_candidates的前10家
+            if frontend_top_companies:
+                # 前端已经筛选了top10，使用前端提供的企业列表
+                frontend_symbols = set(frontend_top_companies)
+                top_companies = [c for c in named_candidates if c.get('symbol') in frontend_symbols]
+                # 保持前端传入的顺序
+                symbol_to_company = {c.get('symbol'): c for c in top_companies}
+                top_companies = [symbol_to_company[sym] for sym in frontend_top_companies if sym in symbol_to_company]
+                logger.info(
+                    "使用前端筛选的企业列表: requested=%d, matched=%d, symbols=%s",
+                    len(frontend_top_companies), len(top_companies), [c.get('symbol') for c in top_companies]
+                )
+            else:
+                # 前端未提供，使用所有具备证据的企业（前10家）
+                top_companies = named_candidates[:10]
+
+            ai_report_companies = top_companies if generate_ai_report else []
+            coverage["report_selected_count"] = len(ai_report_companies) if generate_ai_report else len(top_companies)
             self.last_report_warning = None
             if not generate_ai_report:
                 trend_report = ""
@@ -239,8 +267,8 @@ class IndustryCompanyAnalyzer:
                         industry_name=industry_name,
                         industry_id=industry_id,
                         nodes=nodes,
-                        analyzed_companies=top_companies,
-                        top_companies=top_companies,
+                        analyzed_companies=ai_report_companies,
+                        top_companies=ai_report_companies,
                         coverage=coverage,
                     )
                 except AnalysisStageError as error:
@@ -392,10 +420,17 @@ class IndustryCompanyAnalyzer:
 
     @classmethod
     def _collect_etf_companies(cls, etf_holdings: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """从多个 ETF 持仓提取企业并去重，同时保留每只 ETF 的暴露占比。"""
+        """从多个 ETF 持仓提取企业并去重，同时保留每只 ETF 的暴露占比。
+
+        每个ETF只取权重前10的持仓，避免企业数量过多。
+        """
         companies: Dict[str, Dict[str, Any]] = {}
+        top_n_per_etf = int(os.getenv("ETF_HOLDINGS_TOP_N_PER_ETF", "10"))
+
         for etf_code, rows in etf_holdings.items():
-            for row in rows or []:
+            # 只取每个ETF的前N个持仓
+            top_holdings = (rows or [])[:top_n_per_etf]
+            for row in top_holdings:
                 symbol = str(row.get('stock_code') or row.get('code') or row.get('ticker') or '').strip()
                 name = str(row.get('stock_name') or row.get('name') or symbol or '未命名企业').strip()
                 if not symbol and not name:
@@ -2027,29 +2062,60 @@ class IndustryCompanyAnalyzer:
             )
 
         try:
-            system_prompt = "你是严谨的产业研究员。你的任务是把企业级证据综合为领域级判断，而不是复述企业卡片。优先保证事实可核对、影响链条清楚、数据限制透明；不要为了完整而猜测，不要输出空泛的行业套话。"
-            user_prompt = f"""你是资深产业研究员，请仅基于 AI 已选中的企业数据，生成《{industry_name} 重点企业分析报告》。
+            system_prompt = "你是严谨的产业研究员。你的任务是把企业级证据综合为领域级判断，而不是复述企业卡片。优先保证事实可核对、影响链条清楚、数据限制透明；不要为了完整而猜测，不要输出空泛的行业套话。输出纯Markdown格式，不要使用额外的格式标记。"
+            user_prompt = f"""你是资深产业研究员，请仅基于核心企业数据，生成《{industry_name} 企业发展趋势分析报告》。
 
 {context}
 
-报告只允许基于所选企业证据，形成对"{industry_name}领域方向"的综合判断。禁止逐家罗列企业卡片，也不要把企业名称、评分、营收增速和公告标题简单堆叠。必须回答：企业经营与竞争变化如何传导到领域方向，哪些关键公告/财报改变或验证了领域判断，证据之间是否存在分化。
+分析目标：
+- 从企业经营数据中提炼领域级趋势，不是罗列企业卡片
+- 识别不同产业链环节的差异化表现（供给端、需求端、基础设施）
+- 基于有效财报和公告数据形成判断，忽略无效或缺失的数据
+- 给出明确的投资建议，不是模糊的"关注"或"观察"
 
-可靠性规则（必须遵守）：
-1. 只能使用输入中的企业、日期、指标和公告标题；缺失值统一写"暂无"，禁止补造。
-2. 重点企业名单已由 AI 基于企业影响力、财报时效性和证据可用性筛选。只引用最能改变领域判断的代表性企业，不逐家重复企业卡片；需要覆盖至少一个需求端、供给端或基础设施端的对比证据。
-3. 财报增长必须标注口径；利润增速不能直接等同于盈利质量提升，需提示现金流验证限制。
-4. 只把正式公告或输入中明确标注的公告样本作为公告判断依据；公告主题必须解释其对需求、供给、竞争或资本开支的可能影响，并标注"已验证/待验证"。
-5. 每个结论必须完成"事实证据 → 领域影响 → 投资含义"的推导；如果证据不足，明确写"暂不判断"，不能用评分替代分析。
-6. 趋势分析中要同时写出支持方向的证据、反向或分化证据，以及下一步验证重点。投资建议必须给出明确操作：增加、持有、降低风险或暂不新增，并说明适用条件。
+核心规则：
+1. **只使用输入中的有效数据**：只引用有财报期、营收数据或公告日期的企业；缺失值不参与判断
+2. **聚焦差异化分析**：对比不同环节、不同规模企业的财报和公告表现，识别领域内的结构性变化
+3. **验证数据质量**：标注增长口径（同比/环比/无法确认），提示现金流与利润的匹配度
+4. **公告必须有实质内容**：只引用能说明订单、产能、合作、风险的公告，不引用"重要公告X条"等统计数字
+5. **结论必须可执行**：每个建议必须说明"在什么条件下执行什么动作"，不能只写"关注"
 
-报告使用 Markdown，必须包含且只允许包含以下三个部分：
+输出纯Markdown格式，包含以下三个部分：
+
 # {industry_name} 企业发展趋势分析
+
 ## 一、趋势判断
-以领域为单位总结 2-4 条趋势。每条包含：经营/竞争事实、关键财报或公告证据、对领域方向的影响、证据分化或待验证点。不要逐家企业复述。
+
+总结2-4条领域级趋势，每条需要：
+- **经营/竞争事实**：哪些环节的哪类企业出现什么变化（用1-2家代表企业说明，不要逐家罗列）
+- **核心证据**：具体的财报数据（营收增长%、利润增长%、现金流状况）或公告主题（订单/产能/合作）
+- **领域影响**：这个变化对整个领域供需、竞争格局或资本开支的影响
+- **证据分化**：是否有反向证据或待验证点
+
+示例格式：
+- **供给端产能扩张加速**：设备商A营收增长35%、B增长28%（均为同比），订单类公告集中在Q2，说明下游扩产需求强劲。但需验证利润增长是否与营收匹配（A利润仅增15%，B数据缺失），以及现金流能否支撑持续扩张。
+
 ## 二、关注重点
-列出 3-6 个最重要的验证事项，按"需要验证什么—为什么影响领域方向—验证后如何改变判断"表达，不要复制风险清单。
+
+列出3-6个最重要的验证事项，格式：
+- **验证什么**：具体的数据指标或事件（如"芯片厂Q3财报现金流"、"服务器厂新订单公告"）
+- **为什么重要**：该数据如何验证或反驳趋势判断
+- **如何改变判断**：验证通过vs验证失败，分别对应什么投资决策
+
 ## 三、投资建议结论
-基于趋势分析给出明确的领域级投资操作建议。必须说明：建议动作、适用标的/环节、支持理由、反向风险、执行触发条件和失效条件。禁止只写"关注、观察、等待"等无条件结论。
+
+给出明确的领域级操作建议，必须包含：
+- **建议动作**：允许小幅增加 / 维持仓位 / 降低风险 / 暂不新增（四选一）
+- **适用标的**：哪些产业链环节或企业类型
+- **支持理由**：基于趋势判断的2-3条核心依据（用数据说话）
+- **反向风险**：什么情况下建议失效（具体的数据阈值或事件）
+- **执行条件**：什么信号出现时执行（如"Q3财报确认现金流改善"）
+
+禁止：
+- 不要逐家企业罗列卡片式信息
+- 不要引用"综合评分XX分"等评分数据
+- 不要使用"关注"、"观察"、"等待"等模糊词汇作为最终建议
+- 不要补造输入中没有的企业名称、财报数据或公告内容
 """
 
             def generate() -> Any:
@@ -2092,6 +2158,11 @@ class IndustryCompanyAnalyzer:
             if message is None and last_error:
                 raise last_error
             content = message if isinstance(message, str) else (message.content[0].text if message.content else "")
+
+            # 清理AI输出中的格式标记（如```markdown等）
+            if content:
+                content = self._clean_ai_report(content)
+
             if content and self._is_valid_trend_report(content):
                 return content
             if content:
@@ -2124,6 +2195,22 @@ class IndustryCompanyAnalyzer:
                 message,
                 {"coverage": coverage, "exception_type": type(error).__name__},
             ) from error
+
+    @staticmethod
+    def _clean_ai_report(content: str) -> str:
+        """清理AI报告中的格式标记和代码块包装"""
+        if not content:
+            return content
+
+        # 移除Markdown代码块标记
+        cleaned = re.sub(r'^```markdown\s*\n', '', content, flags=re.MULTILINE)
+        cleaned = re.sub(r'^```\s*\n', '', cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r'\n```\s*$', '', cleaned)
+
+        # 移除多余的空行（超过2个连续换行）
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+
+        return cleaned.strip()
 
     @staticmethod
     def _is_timeout_error(error: Exception) -> bool:
@@ -2182,40 +2269,122 @@ class IndustryCompanyAnalyzer:
         top_companies: List[Dict[str, Any]],
         coverage: Dict[str, Any],
     ) -> str:
-        """只构造 AI 选中企业的证据上下文，避免把行业覆盖率和行情噪音带入企业报告。"""
+        """构造AI分析上下文，聚焦有效的财报、公告和行情数据，过滤无效数据。"""
         lines = [
             f"产业名称: {industry_name}",
-            f"AI选中企业数: {len(top_companies)}",
+            f"核心企业数: {len(top_companies)}家",
+            f"数据覆盖: 财报{coverage.get('financial_coverage', 0)}家，公告{coverage.get('announcement_coverage', 0)}家，行情{coverage.get('quote_coverage', 0)}家",
             "",
-            "=== AI选中企业证据 ===",
+            "=== 核心企业数据 ===",
         ]
+
         for index, company in enumerate(top_companies, 1):
             financial = company.get("financial_metrics") or {}
+            price_metrics = company.get("price_metrics") or {}
+            announcement_signal = company.get("announcement_signal") or {}
+
+            # 过滤：只保留有财报或公告数据的企业
+            has_financial = financial.get('latest_period') and financial.get('revenue') is not None
+            has_announcement = announcement_signal.get('latest_date') or company.get('announcement_count', 0) > 0
+            has_price = price_metrics.get('price_change_pct') is not None
+
+            if not (has_financial or has_announcement):
+                continue
+
+            # 产业链环节
             refs = "、".join(
                 ref.get("segment_name") or ""
-                for ref in company.get("node_refs", [])[:4]
+                for ref in company.get("node_refs", [])[:2]
                 if ref.get("segment_name")
             ) or "未标注"
-            signal = company.get("investment_signal") or {}
-            official = company.get("latest_announcement_samples") or company.get("announcement_samples") or []
-            announcement_signal = company.get("announcement_signal") or {}
-            lines.extend([
-                f"{index}. {company.get('name')} ({company.get('symbol') or '无证券代码'})",
-                f"   - 所属环节: {refs}",
-                f"   - AI筛选排名: {company.get('ai_selection_rank') or index}",
-                f"   - AI筛选理由: {company.get('ai_selection_reason') or '暂无'}",
-                f"   - 最新财报期: {financial.get('latest_period') or '暂无'}；对比期: {financial.get('comparison_period') or '暂无'}",
-                f"   - 营收: {financial.get('revenue') if financial.get('revenue') is not None else '暂无'}；净利润: {financial.get('net_profit') if financial.get('net_profit') is not None else '暂无'}",
-                f"   - 营收增长: {financial.get('revenue_growth') if financial.get('revenue_growth') is not None else '暂无'}%；净利润增长: {financial.get('profit_growth') if financial.get('profit_growth') is not None else '暂无'}%；口径: {financial.get('growth_basis') or '无法确认'}",
-                f"   - 经营现金流: {financial.get('operating_cash_flow') if financial.get('operating_cash_flow') is not None else '暂无'}",
-                f"   - 财报原始样本: {(company.get('financial_samples') or [])[:3] or '暂无'}",
-                f"   - 正式公告/公告样本: {official[:6] or '暂无'}",
-                f"   - 公告结构化信号: 方向={announcement_signal.get('direction') or '暂无'}；重要公告数={company.get('important_announcements') or 0}；信号分={announcement_signal.get('score') if announcement_signal.get('score') is not None else '暂无'}",
-                f"   - 当前结构化判断: {signal.get('stance') or '暂不判断'}",
-                f"   - 判断依据: {'；'.join(signal.get('reasons') or []) or '暂无'}",
-                "",
-            ])
+
+            lines.append(f"{index}. {company.get('name')} ({company.get('symbol') or '无代码'})")
+            lines.append(f"   产业链位置: {refs}")
+
+            # 财报数据 - 只输出有效数据
+            if has_financial:
+                revenue = financial.get('revenue')
+                net_profit = financial.get('net_profit')
+                revenue_growth = financial.get('revenue_growth')
+                profit_growth = financial.get('profit_growth')
+                cash_flow = financial.get('operating_cash_flow')
+                growth_basis = financial.get('growth_basis', '无法确认')
+
+                financial_parts = []
+                if revenue is not None:
+                    financial_parts.append(f"营收{self._format_amount(revenue)}")
+                if net_profit is not None:
+                    financial_parts.append(f"净利润{self._format_amount(net_profit)}")
+                if revenue_growth is not None:
+                    financial_parts.append(f"营收增长{revenue_growth:.1f}%")
+                if profit_growth is not None:
+                    financial_parts.append(f"利润增长{profit_growth:.1f}%")
+
+                if financial_parts:
+                    lines.append(f"   财报({financial.get('latest_period', '期间未知')}): {', '.join(financial_parts)}")
+                    if growth_basis != '无法确认':
+                        lines.append(f"   增长口径: {growth_basis}")
+                    if cash_flow is not None:
+                        lines.append(f"   经营现金流: {self._format_amount(cash_flow)}")
+
+            # 公告数据 - 只输出重要公告
+            if has_announcement:
+                latest_announcements = company.get('latest_announcement_samples', [])[:3]
+                important_count = company.get('important_announcements', 0)
+                direction = announcement_signal.get('direction', '中性')
+
+                if latest_announcements:
+                    lines.append(f"   最新公告({len(latest_announcements)}条，重要{important_count}条，方向{direction}):")
+                    for ann in latest_announcements:
+                        date = ann.get('date', '日期未知')
+                        title = ann.get('title', '标题缺失')
+                        # 截断过长标题
+                        if len(title) > 50:
+                            title = title[:47] + "..."
+                        lines.append(f"     - {date}: {title}")
+
+            # 行情数据 - 只在有效时输出
+            if has_price:
+                price_change = price_metrics.get('price_change_pct')
+                latest_change = price_metrics.get('latest_change_pct')
+                volatility = price_metrics.get('volatility')
+
+                price_parts = []
+                if price_change is not None:
+                    price_parts.append(f"区间涨跌{price_change:+.1f}%")
+                if latest_change is not None:
+                    price_parts.append(f"最新涨跌{latest_change:+.1f}%")
+                if volatility is not None and volatility < 100:
+                    price_parts.append(f"波动率{volatility:.1f}%")
+
+                if price_parts:
+                    lines.append(f"   行情: {', '.join(price_parts)}")
+
+            lines.append("")
+
+        # 添加数据质量说明
+        lines.append("=== 数据质量说明 ===")
+        lines.append(f"分析期间: {coverage.get('analysis_started_at', '未知')} 至 {coverage.get('analyzed_at', '未知')}")
+        lines.append(f"财报覆盖率: {coverage.get('financial_coverage_pct', 0):.1f}%")
+        lines.append(f"公告覆盖率: {coverage.get('announcement_coverage_pct', 0):.1f}%")
+
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_amount(value: Any) -> str:
+        """格式化金额为易读格式（亿元）"""
+        if value is None:
+            return "暂无"
+        try:
+            amount = float(value)
+            if abs(amount) >= 1_000_000_000:
+                return f"{amount / 1_000_000_000:.1f}亿"
+            elif abs(amount) >= 100_000_000:
+                return f"{amount / 100_000_000:.1f}亿"
+            else:
+                return f"{amount / 10000:.0f}万"
+        except (TypeError, ValueError):
+            return "暂无"
 
     @staticmethod
     def _financial_evidence_text(financial: Dict[str, Any]) -> str:

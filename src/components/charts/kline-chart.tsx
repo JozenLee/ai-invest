@@ -3,6 +3,7 @@
 import { useMemo } from 'react';
 import type { EChartsOption } from 'echarts';
 import { ChartWrapper } from './chart-wrapper';
+import { calculateMA as calculateIndicatorMA } from '@/lib/indicators/trend';
 
 export interface KlineDataPoint {
   /** Date string, e.g. '2024-01-15' */
@@ -34,6 +35,9 @@ export interface KlineChartProps {
   maPeriods?: number[];
   /** Additional CSS class */
   className?: string;
+  /** Most recent quote, shown as a price line even before the daily candle closes. */
+  latestPrice?: number;
+  latestChangePct?: number;
 }
 
 /**
@@ -45,11 +49,7 @@ function calculateMA(data: number[], period: number): (number | null)[] {
     if (i < period - 1) {
       result.push(null);
     } else {
-      let sum = 0;
-      for (let j = 0; j < period; j++) {
-        sum += data[i - j];
-      }
-      result.push(parseFloat((sum / period).toFixed(2)));
+      result.push(calculateIndicatorMA(data.slice(0, i + 1), [period])[`ma${period}`]);
     }
   }
   return result;
@@ -67,6 +67,8 @@ export function KlineChart({
   showMA = true,
   maPeriods = [5, 10, 20],
   className,
+  latestPrice,
+  latestChangePct,
 }: KlineChartProps) {
   const option = useMemo<EChartsOption>(() => {
     const dates = data.map((d) => d.date);
@@ -85,6 +87,7 @@ export function KlineChart({
           type: 'line',
           data: maData,
           smooth: true,
+          showSymbol: false,
           lineStyle: { width: 1 },
           itemStyle: { color: maColors[idx % maColors.length] },
           xAxisIndex: 0,
@@ -154,8 +157,6 @@ export function KlineChart({
       {
         type: 'inside',
         xAxisIndex: showVolume ? [0, 1] : [0],
-        start: data.length > 60 ? Math.max(0, 100 - (60 / data.length) * 100) : 0,
-        end: 100,
       },
       {
         type: 'slider',
@@ -181,6 +182,9 @@ export function KlineChart({
           borderColor: '#ef5350',
           borderColor0: '#26a69a',
         },
+        markLine: latestPrice
+          ? { symbol: 'none', lineStyle: { color: latestChangePct != null && latestChangePct < 0 ? '#26a69a' : '#ef5350', type: 'dashed' }, label: { formatter: `最新 ${latestPrice.toFixed(3)}`, position: 'insideEndTop' }, data: [{ yAxis: latestPrice }] }
+          : undefined,
       },
       ...maSeries,
     ];
@@ -219,16 +223,19 @@ export function KlineChart({
       legend: {
         data: showMA ? maPeriods.map((p) => `MA${p}`) : [],
         top: title ? '5%' : 0,
-        right: '10%',
+        left: '10%',
         textStyle: { fontSize: 12 },
       },
+      graphic: latestPrice
+        ? [{ type: 'text', right: '8%', top: title ? 34 : 8, style: { text: `最新 ${latestPrice.toFixed(3)}${latestChangePct == null ? '' : `  ${latestChangePct > 0 ? '+' : ''}${latestChangePct.toFixed(2)}%`}`, font: '600 12px sans-serif', fill: latestChangePct != null && latestChangePct < 0 ? '#26a69a' : '#ef5350' } }]
+        : undefined,
       grid: grids,
       xAxis: xAxes,
       yAxis: yAxes,
       dataZoom,
       series,
     } as EChartsOption;
-  }, [data, title, showVolume, showMA, maPeriods]);
+  }, [data, title, showVolume, showMA, maPeriods, latestPrice, latestChangePct]);
 
-  return <ChartWrapper option={option} height={height} className={className} />;
+  return <ChartWrapper option={option} height={height} className={className} notMerge={false} lazyUpdate />;
 }
