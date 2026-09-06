@@ -23,6 +23,7 @@ export async function POST(request: NextRequest) {
 
     await getResearchProfile(industryId)
     const lineage = await reviewBaseline(industryId, body.parentRunId)
+    const verificationMode = body.verificationMode === 'graph-e2e' ? 'graph-e2e' : null
     const runId = await comprehensiveAnalysisWorkflow.createRun({
       industryId,
       ...lineage,
@@ -31,6 +32,8 @@ export async function POST(request: NextRequest) {
       publicOnly: body.publicOnly !== false || body.portfolioAiConsent !== new URL(process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').origin,
       companySource: companySource === 'graph' ? 'graph' : 'etf',
       portfolioAiConsent: body.portfolioAiConsent === new URL(process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').origin ? body.portfolioAiConsent : null,
+      verificationMode,
+      refreshResearchData: verificationMode ? false : true,
       createdBy: 'user', // TODO: 从session获取用户信息
       timestamp: new Date().toISOString()
     })

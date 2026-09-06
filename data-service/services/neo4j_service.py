@@ -249,7 +249,7 @@ class Neo4jService:
             MATCH (a {{id: $from_id}}), (b {{id: $to_id}})
             MERGE (a)-[r:{rel_type}]->(b)
             SET {set_clause}
-            RETURN id(r) as rel_id
+            RETURN elementId(r) as rel_id
             """
 
             result = await s.run(query, **params)

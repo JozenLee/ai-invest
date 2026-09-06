@@ -18,8 +18,8 @@ import { buildFrozenGraphContext, graphCompanyCandidates, type RawGraphGroup } f
 export const encode = (value: unknown) => JSON.stringify(value, (_key,v)=>typeof v==='bigint'?Number(v):v)
 export const digest = (value: unknown) => createHash('sha256').update(encode(value)).digest('hex')
 type WireRow = Record<string, string | number | boolean | null>
-type SubscriptionProfile = {industryId?:string;industryName?:string}
-type GraphGroup = RawGraphGroup & {etfs?:Array<{code?:string}>}
+type SubscriptionProfile = {industryId?:string;industryName?:string;industryIds?:string[];industryNames?:string[]}
+type GraphGroup = RawGraphGroup & {etfs?:Array<{code?:string}>;analysisEtfs?:Array<{code?:string}>}
 type Bundle = {source?:string;data?:Record<string,WireRow[]>}
 function parse<T = unknown>(value: string | null | undefined): T | null { try {return JSON.parse(value||'null') as T} catch {return null} }
 const number = (value: unknown) => value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null
@@ -47,7 +47,9 @@ export async function getResearchProfile(industryId: string, name?: string): Pro
   if(row) return validateProfile(parse(row.payload),industryId)
   if(!name){
     const subscriptions=await prisma.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},select:{profile:true}})
-    name=subscriptions.map(r=>parse<SubscriptionProfile>(r.profile)).find(p=>p?.industryId===industryId)?.industryName
+    const matched=subscriptions.map(r=>parse<SubscriptionProfile>(r.profile)).find(p=>p?.industryId===industryId||p?.industryIds?.includes(industryId))
+    const matchedIndex=matched?.industryIds?.indexOf(industryId)??-1
+    name=(matchedIndex>=0?matched?.industryNames?.[matchedIndex]:undefined)||matched?.industryName
   }
   if(!name) throw new Error('该领域没有已订阅ETF')
   return defaultProfile(industryId,name)
@@ -67,7 +69,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const graphRow=await tx.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}})
     const group=(parse<GraphGroup[]>(graphRow?.payload)||[]).find(g=>g.id===industryId)
     const graphCompanies=graphCompanyCandidates(group).slice(0,100)
-    const selected=subscriptions.filter(s=>parse<SubscriptionProfile>(s.profile)?.industryId===industryId || group?.etfs?.some(e=>symbol(e.code)===s.instrument.code))
+    const selected=subscriptions.filter(s=>group ? (group.analysisEtfs||group.etfs)?.some(e=>symbol(e.code)===s.instrument.code) : (()=>{const profile=parse<SubscriptionProfile>(s.profile);return profile?.industryId===industryId||profile?.industryIds?.includes(industryId)})())
     if(!selected.length) throw new Error('该领域没有已订阅ETF，请先同步领域映射')
     const configRow=await tx.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}})
     const profile=configRow?validateProfile(parse(configRow.payload),industryId):defaultProfile(industryId,group?.name||parse<SubscriptionProfile>(selected[0].profile)?.industryName||industryId)

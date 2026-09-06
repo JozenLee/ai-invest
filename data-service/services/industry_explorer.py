@@ -3,6 +3,11 @@ import os
 import yaml
 import json
 import asyncio
+import html
+import re
+from urllib.parse import quote
+import xml.etree.ElementTree as ET
+import aiohttp
 from typing import Dict, List, Optional, Tuple
 from anthropic import AsyncAnthropic
 from tavily import TavilyClient
@@ -58,6 +63,9 @@ class IndustryExplorerService:
         # 4. 解析YAML响应
         structure = self._parse_structure_response(response, industry_name)
         structure.evidence = evidence
+        allowed_urls = {item.url for item in evidence}
+        for relationship in structure.relationships:
+            relationship.evidence_urls = [url for url in relationship.evidence_urls if url in allowed_urls]
 
         return structure
 
@@ -262,7 +270,33 @@ relationships:
 
         except Exception as e:
             print(f"搜索失败: {e}")
-            return "", []
+            fallback = await self._google_news_search(query, 5)
+            context_parts = [f"来源：{item['title']}\n链接：{item['url']}\n内容：{item['content']}" for item in fallback]
+            evidence = [EvidenceRef(title=item["title"], url=item["url"], excerpt=item["content"], source_type="google_news_rss") for item in fallback]
+            return "\n\n".join(context_parts), evidence
+
+    async def _google_news_search(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
+        """Keyless read-only fallback used when the primary search quota is exhausted."""
+        url = f"https://news.google.com/rss/search?q={quote(query)}&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+        headers = {"User-Agent": "ai-invest-research/1.0"}
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as response:
+                    response.raise_for_status()
+                    xml_text = await response.text()
+            root = ET.fromstring(xml_text)
+            results = []
+            for item in root.findall("./channel/item")[:max_results]:
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                description = re.sub(r"<[^>]+>", " ", html.unescape(item.findtext("description") or ""))
+                description = re.sub(r"\s+", " ", description).strip()[:500]
+                if title and link:
+                    results.append({"title": title, "url": link, "content": description or title})
+            return results
+        except Exception as error:
+            print(f"Google News RSS回退失败: {error}")
+            return []
 
     def _build_structure_prompt(
         self,
@@ -366,7 +400,7 @@ relationships:
         }
         return mapping.get(industry_name, f"industry_{abs(hash(industry_name)) % 100000000}")
 
-    async def _call_claude_for_structure(self, prompt: str, timeout: int = 90) -> str:
+    async def _call_claude_for_structure(self, prompt: str, timeout: Optional[int] = None) -> str:
         """调用Claude API进行结构分析
 
         Args:
@@ -379,11 +413,12 @@ relationships:
         Raises:
             asyncio.TimeoutError: 当API调用超时
         """
+        timeout = timeout or max(90, int(os.getenv("GRAPH_AI_TIMEOUT_SECONDS", "240")))
         try:
             message = await asyncio.wait_for(
                 self.anthropic.messages.create(
                     model=self.model,
-                    max_tokens=4096,
+                    max_tokens=max(4096, int(os.getenv("GRAPH_STRUCTURE_MAX_TOKENS", "8192"))),
                     temperature=0.3,  # 较低温度保证稳定性
                     messages=[{
                         "role": "user",
@@ -393,7 +428,12 @@ relationships:
                 timeout=timeout
             )
 
-            response_text = message.content[0].text
+            response_text = "".join(
+                block.text for block in message.content
+                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+            ).strip()
+            if not response_text:
+                raise ValueError("AI响应不包含文本内容")
 
             # 提取YAML（去除可能的markdown标记）
             if "```yaml" in response_text:
@@ -485,15 +525,33 @@ relationships:
         """
         details = {}
 
-        # 为每个segment并行填充
+        # 为每个segment限流并行填充；模型网关在高并发时会出现部分超时。
+        concurrency = max(1, int(os.getenv("GRAPH_COMPANY_CONCURRENCY", "8")))
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fill_with_retry(stage_name: str, segment: SegmentInfo):
+            async with semaphore:
+                last_error = None
+                for attempt in range(3):
+                    try:
+                        detail = await self._fill_segment(
+                            industry_name=structure.industry.name,
+                            stage_name=stage_name,
+                            segment=segment,
+                        )
+                        if not detail.companies:
+                            raise ValueError("企业候选为空")
+                        return detail
+                    except Exception as error:
+                        last_error = error
+                        if attempt < 2:
+                            await asyncio.sleep(2)
+                raise last_error
+
         tasks = []
         for stage in structure.structure:
             for segment in stage.segments:
-                task = self._fill_segment(
-                    industry_name=structure.industry.name,
-                    stage_name=stage.stage,
-                    segment=segment
-                )
+                task = fill_with_retry(stage.stage, segment)
                 tasks.append((segment.code, task))
 
         # 并行执行
@@ -1044,6 +1102,7 @@ relationships:
 
         # 5. 解析响应
         detail = self._parse_company_response(response, segment.code)
+        self._retain_search_evidence(detail, search_context)
 
         return detail
 
@@ -1072,8 +1131,19 @@ relationships:
 
         # 4. 解析响应
         detail = self._parse_company_response(response, segment.code)
+        self._retain_search_evidence(detail, search_context)
 
         return detail
+
+    @staticmethod
+    def _retain_search_evidence(detail: SegmentDetail, search_context: str) -> None:
+        """Reject model-supplied URLs that were not present in the search evidence."""
+        import re
+        allowed_urls = set(re.findall(r"链接：(https?://\S+)", search_context))
+        for company in detail.companies:
+            company.evidence_urls = [url for url in company.evidence_urls if url in allowed_urls]
+        for relationship in detail.relationships:
+            relationship.evidence_urls = [url for url in relationship.evidence_urls if url in allowed_urls]
 
     async def _search_segment_companies(self, query: str) -> str:
         """搜索环节企业信息"""
@@ -1095,7 +1165,11 @@ relationships:
             return "\n\n".join(context_parts)
         except Exception as e:
             print(f"搜索企业失败: {e}")
-            return ""
+            fallback = await self._google_news_search(query, 5)
+            return "\n\n".join(
+                f"{item['title']}\n链接：{item['url']}\n{item['content']}"
+                for item in fallback
+            )
 
     def _build_company_prompt(
         self,
@@ -1222,7 +1296,7 @@ relationships:
 """
         return prompt
 
-    async def _call_claude_for_companies(self, prompt: str, timeout: int = 90) -> str:
+    async def _call_claude_for_companies(self, prompt: str, timeout: Optional[int] = None) -> str:
         """调用Claude API提取企业信息
 
         Args:
@@ -1235,11 +1309,12 @@ relationships:
         Raises:
             asyncio.TimeoutError: 当API调用超时
         """
+        timeout = timeout or max(90, int(os.getenv("GRAPH_AI_TIMEOUT_SECONDS", "240")))
         try:
             message = await asyncio.wait_for(
                 self.anthropic.messages.create(
                     model=self.model,
-                    max_tokens=4096,
+                    max_tokens=max(4096, int(os.getenv("GRAPH_COMPANY_MAX_TOKENS", "6144"))),
                     temperature=0.3,
                     messages=[{
                         "role": "user",
@@ -1249,7 +1324,12 @@ relationships:
                 timeout=timeout
             )
 
-            response_text = message.content[0].text
+            response_text = "".join(
+                block.text for block in message.content
+                if getattr(block, "type", None) == "text" and getattr(block, "text", None)
+            ).strip()
+            if not response_text:
+                raise ValueError("AI响应不包含文本内容")
 
             # 提取JSON
             if "```json" in response_text:
@@ -1270,13 +1350,24 @@ relationships:
         try:
             data = json.loads(json_text)
 
-            # 补充segment_code
-            for company in data.get("companies", []):
-                company["segment_code"] = segment_code
-
-            # 使用Pydantic验证
-            companies = [CompanyInfo(**c) for c in data.get("companies", [])]
-            relationships = [RelationshipInfo(**r) for r in data.get("relationships", [])]
+            companies = []
+            for raw_company in data.get("companies", []):
+                try:
+                    company = dict(raw_company)
+                    company["segment_code"] = segment_code
+                    companies.append(CompanyInfo(**company))
+                except Exception as company_error:
+                    print(f"跳过无效企业: {company_error}")
+            relationships = []
+            for raw_relationship in data.get("relationships", []):
+                try:
+                    relationship = dict(raw_relationship)
+                    if "type" not in relationship:
+                        # Free-form relationship text cannot safely become a graph edge.
+                        continue
+                    relationships.append(RelationshipInfo(**relationship))
+                except Exception as relationship_error:
+                    print(f"跳过无效企业关系: {relationship_error}")
 
             return SegmentDetail(
                 companies=companies,

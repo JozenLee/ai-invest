@@ -69,7 +69,9 @@ const tasks: Record<string, string> = {
 export function researchEvidence(context: StepContext, stage: string) {
   const get = (key: string) => context.artifacts.get(key)
   const graph=get('graph-context')||get('research-snapshot')?.graphContext
-  const graphBoundary=graph?compactEvidence({revisionId:graph.revisionId,version:graph.version,contentHash:graph.contentHash,sourceFetchedAt:graph.sourceFetchedAt,industry:graph.industry,coverage:graph.coverage,evidenceUrls:graph.evidenceUrls}):undefined
+  const graphBoundary=graph?compactEvidence({revisionId:graph.revisionId,version:graph.version,contentHash:graph.contentHash,sourceFetchedAt:graph.sourceFetchedAt,industry:graph.industry,coverage:graph.coverage,industryEvidenceCount:graph.evidenceUrls?.length||0}):undefined
+  const graphStructure=graph?.stages?.map((stage:Artifact)=>({code:stage.code,name:stage.name,segments:stage.segments?.map((segment:Artifact)=>({code:segment.code,name:segment.name,companyCount:segment.companies?.length||0,etfCodes:segment.etfs?.map((etf:Artifact)=>etf.code)||[]}))}))
+  const graphRelations=graph?.relations?.map((relation:Artifact)=>({sourceCode:relation.sourceCode,sourceName:relation.sourceName,targetCode:relation.targetCode,targetName:relation.targetName,type:relation.type,direction:relation.direction,weight:relation.weight,confidence:relation.confidence,lag:relation.lag,description:relation.description,evidenceCount:relation.sourceUrls?.length||0}))
   const decisions=get('research-evaluation')?.decisions||[]
   const unknownSummary=[...new Map<string,{label:string;tickers:string[]}>(decisions.flatMap((d:Artifact)=>(d.conditions||[]).filter((c:Artifact)=>c.status==='unknown').map((c:Artifact)=>[c.key,{label:c.label,tickers:decisions.filter((item:Artifact)=>item.conditions?.some((condition:Artifact)=>condition.key===c.key&&condition.status==='unknown')).map((item:Artifact)=>item.ticker)}]))).values()].map(item=>({...item,affectedETFCount:item.tickers.length}))
   const modules=Object.fromEntries(Object.entries(get('data-quality')?.modules||{}).map(([key,value]:[string,Artifact])=>[key,{status:statusText[value?.status]||value?.status,detail:value?.detail}]))
@@ -87,7 +89,7 @@ export function researchEvidence(context: StepContext, stage: string) {
     return compactEvidence({ ...base, etfs: marketSignals(get('etf-market-data') || []), market: { overview: snapshot.overview, capitalFlow,
       sources: Object.entries(rawFlowEvidence || {}).map(([key,value]: [string,Artifact])=>({key,source:value?.source,date:value?.dataDate,stale:value?.stale})) }, referenceIndicators: get('market-reference-indicators') })
   }
-  if (stage === 'company-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graph?.stages,relations:graph?.relations}, sampleScope: 'ETF持仓暴露、研究配置与已审核图谱企业取并集，保留多期财报与重要公告；非全产业代表样本。', companies: companyEvidence(get('company-market-data') || []).map(row => ({
+  if (stage === 'company-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graphStructure,relations:graphRelations}, sampleScope: 'ETF持仓暴露、研究配置与已审核图谱企业取并集，保留多期财报与重要公告；非全产业代表样本。', companies: companyEvidence(get('company-market-data') || []).map(row => ({
     stockCode: row.stockCode, stockName: row.stockName,
     financials: row.financials.map(report => {
       // Join cash flow and income only for the same period and explicitly known currency.
@@ -101,8 +103,8 @@ export function researchEvidence(context: StepContext, stage: string) {
     }),
     announcements: (row.announcements || []).slice(0,4).map((a: Artifact)=>({id:a.id,evidenceIds:a.evidenceIds,status:a.status,title:a.title,date:a.publishDate,source:a.source,url:a.url,excerpt:String(a.summary || '').slice(0,800)}))
   })) })
-  if (stage === 'news-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,relations:graph?.relations,eventMappings:graph?.eventMappings}, events: get('research-evaluation')?decisionEvents(get('research-evaluation'),24):(get('news-events') || []).filter((event:Artifact)=>event.status==='evidence'&&event.category!=='administrative'&&event.priority>=4).slice(0,24), legacyNews: get('news-events') ? undefined : newsSignals(get('news-articles') || []) })
-  if (stage === 'industry-overview') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graph?.stages,relations:graph?.relations,eventMappings:graph?.eventMappings}, market: get('market-analysis'), companies: get('company-analysis'), news: get('news-analysis') })
+  if (stage === 'news-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,relations:graphRelations,eventMappings:graph?.eventMappings}, events: get('research-evaluation')?decisionEvents(get('research-evaluation'),24):(get('news-events') || []).filter((event:Artifact)=>event.status==='evidence'&&event.category!=='administrative'&&event.priority>=4).slice(0,24), legacyNews: get('news-events') ? undefined : newsSignals(get('news-articles') || []) })
+  if (stage === 'industry-overview') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graphStructure,relations:graphRelations,eventMappings:graph?.eventMappings}, market: get('market-analysis'), companies: get('company-analysis'), news: get('news-analysis') })
   if (stage === 'social-report') return compactEvidence({industry:base.industry,asOf:base.asOf,boundary:base.boundary,market:get('market-analysis'),companies:get('company-analysis'),news:get('news-analysis'),overview:get('industry-overview'),investment:get('investment-advice')})
   const bindings = get('etf-bindings') || []
   const holdings = get('etf-holdings') || []

@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "research:review": "tsx scripts/run-research-schedule.ts",
+    "graph:regenerate": "cd data-service && python3 scripts/regenerate_industry_graphs.py --publish",
+    "graph:match": "tsx scripts/match-industry-graphs.ts",
+    "graph:verify-e2e": "tsx scripts/verify-graph-report-e2e.ts",
     "test:research": "vitest run src/lib/research/__tests__",
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",

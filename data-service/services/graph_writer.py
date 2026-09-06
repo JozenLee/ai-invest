@@ -44,6 +44,23 @@ def _record_revision(
         logger.warning("图谱版本审计表不可用，请执行数据库迁移: %s", error)
 
 
+def _record_legacy_baseline(industry_id: str, industry: Any, snapshot: dict) -> str:
+    revision_id = f"legacy-{industry_id}"
+    encoded = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, default=str)
+    content_hash = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    db.insert(
+        """INSERT OR IGNORE INTO graph_revisions
+           (id, industryId, industryCode, industryName, version,
+            parentRevisionId, contentHash, snapshotJson, evidenceJson,
+            status, createdAt)
+           VALUES (?, ?, ?, ?, 0, NULL, ?, ?, '[]', 'legacy', ?)""",
+        (revision_id, industry_id, str(industry.get("code") or ""),
+         str(industry.get("name") or industry_id), content_hash, encoded,
+         datetime.now(timezone.utc).isoformat()),
+    )
+    return revision_id
+
+
 async def write_graph_to_neo4j(
     result: ExplorationResult,
     neo4j_service: Neo4jService,
@@ -57,6 +74,10 @@ async def write_graph_to_neo4j(
     previous = await neo4j_service.get_industry_basic(industry_id)
     version = int((previous or {}).get("version") or 0) + 1
     parent_revision_id = (previous or {}).get("revision_id")
+    if previous and not parent_revision_id and version == 1:
+        legacy_snapshot = await neo4j_service.get_industry_full_graph(industry_id)
+        if legacy_snapshot:
+            parent_revision_id = _record_legacy_baseline(industry_id, previous, legacy_snapshot)
     revision_id = str(uuid.uuid4())
     snapshot, content_hash = _canonical_snapshot(result)
     source_urls = list(dict.fromkeys(item.url for item in result.structure.evidence if item.url))

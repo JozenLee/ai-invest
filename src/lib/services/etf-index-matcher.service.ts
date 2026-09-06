@@ -412,15 +412,20 @@ class ETFIndexMatcherService {
 
       console.log(`找到 ${segments.length} 个节点待匹配`)
 
-      // 批量匹配（串行处理，避免API限流）
-      const results: NodeMatchResult[] = []
-      for (const segment of segments) {
-        const result = await this.matchNodeByName(segment.id, segment.name, options)
-        results.push(result)
-
-        // 添加延迟，避免API限流
-        await new Promise(resolve => setTimeout(resolve, 1000))
+      // Bounded parallel matching avoids one slow model call serially blocking
+      // every segment while retaining an explicit rate-limit ceiling.
+      const results: NodeMatchResult[] = new Array(segments.length)
+      const concurrency = Math.min(5, Math.max(1, Number(process.env.GRAPH_MATCH_CONCURRENCY || 3)))
+      let cursor = 0
+      const worker = async () => {
+        while (cursor < segments.length) {
+          const index = cursor++
+          const segment = segments[index]
+          results[index] = await this.matchNodeByName(segment.id, segment.name, options)
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
       }
+      await Promise.all(Array.from({ length: Math.min(concurrency, segments.length) }, () => worker()))
 
       const matched = results.filter(r => r.success).length
       const failed = results.filter(r => !r.success).length

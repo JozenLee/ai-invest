@@ -19,7 +19,7 @@ export const companyAnalysisStep: StepDefinition = {
 
     const response = await runAnalysisPrompt(context, {
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 2000,
+      max_tokens: 3500,
       system: RESEARCH_SYSTEM,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3

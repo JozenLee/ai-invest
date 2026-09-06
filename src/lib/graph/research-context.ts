@@ -32,6 +32,16 @@ export type RawGraphGroup = UnknownRow & {
   etfs?: UnknownRow[]
 }
 
+export function graphContextIssues(context?: FrozenGraphContext | null): string[] {
+  if (!context) return ['缺少冻结的产业图谱上下文']
+  const issues: string[] = []
+  if (!context.revisionId || context.version < 1 || !context.contentHash) issues.push('产业图谱尚未发布为可追溯版本')
+  if (context.coverage.stages < 3 || context.coverage.segments < 6) issues.push('产业图谱结构覆盖不足')
+  if (context.coverage.relations < 2) issues.push('产业图谱缺少可用传导关系')
+  if (context.coverage.relations && context.coverage.relationEvidencePct < 50) issues.push('产业图谱关系证据覆盖低于50%')
+  return issues
+}
+
 const value = (row: UnknownRow, camel: string, snake: string) => row?.[camel] ?? row?.[snake]
 const list = (input: unknown): UnknownRow[] => Array.isArray(input) ? input.filter((item): item is UnknownRow => !!item && typeof item === 'object') : []
 const strings = (input: unknown) => Array.isArray(input) ? input.filter((item): item is string => typeof item === 'string' && !!item.trim()) : []

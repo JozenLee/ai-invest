@@ -99,7 +99,7 @@ export const generateReportStep: StepDefinition = {
     }) : null
 
     // 生成报告标题
-    const title = `${industryInfo?.name || '行业'} - ${context.input.rulesOnly?'规则复核':'综合投资分析'}报告`
+    const title = `${context.input.verificationMode==='graph-e2e'?'【图谱链路验证】':''}${industryInfo?.name || '行业'} - ${context.input.rulesOnly?'规则复核':'综合投资分析'}报告`
 
     // 构建Markdown格式报告
     const generatedDraft = context.artifacts.get('social-report') as SocialReport | null | undefined
@@ -123,8 +123,8 @@ export const generateReportStep: StepDefinition = {
         type: 'comprehensive',
         industryId: industryInfo.id,
         industryName: industryInfo.name,
-        title: social?.title || title,
-        summary: `${decisionTiming.executionReady ? '盘中执行时效已通过。' : `仅供投资参考：${decisionTiming.reasons[0] || '未通过盘中执行时效'}。`} ${context.input.rulesOnly
+        title: context.input.verificationMode==='graph-e2e' ? title : social?.title || title,
+        summary: `${context.input.verificationMode==='graph-e2e'?'仅用于验证知识图谱到综合报告的传递，不构成最新市场分析或交易依据。 ':''}${decisionTiming.executionReady ? '盘中执行时效已通过。' : `仅供投资参考：${decisionTiming.reasons[0] || '未通过盘中执行时效'}。`} ${context.input.rulesOnly
           ? `${reviewDelta?.summary || '本地规则复核已完成。'}${lineage.narrative ? ` 正文继承自${lineage.narrative.createdAt.toISOString()}的完整分析，本轮未重新调用AI。` : ''}`
           : social?.subtitle || '完整研究与ETF操作建议已生成；一页发布版暂不可用。'}`,
         content: reportContent,
@@ -158,7 +158,8 @@ export const generateReportStep: StepDefinition = {
             parentRunId: context.input.parentRunId || null,
             kind: context.input.parentRunId ? 'review' : 'analysis',
             generatedAt,
-            graphRevisionId: graphContext?.revisionId || null
+            graphRevisionId: graphContext?.revisionId || null,
+            verificationMode: context.input.verificationMode || null
           }
         })
       }

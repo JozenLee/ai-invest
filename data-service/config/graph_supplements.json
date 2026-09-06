@@ -1,0 +1,30 @@
+{
+  "ai_hardware": {
+    "data_center_infrastructure_integration": [
+      {
+        "name": "润泽科技",
+        "name_en": "Range Technology",
+        "ticker": "300442",
+        "exchange": "SZ",
+        "country": "CN",
+        "market_position": "leader",
+        "key_products": ["算力中心基础设施", "数据中心运营"],
+        "description": "中国信通院算力中心服务商分析相关报道将润泽科技列为领航者，可作为数据中心基础设施集成环节的可核验A股样本。",
+        "evidence_urls": ["https://news.google.com/rss/articles/CBMi1gFBVV95cUxPYUdDMnptVktxczlUZHBaWlJZaldNbVJ0UWpaMG9DRV9JUXA3Tm1xUWJnT0ZmcGpYVXJ2Tm9MUFc3Z1JpZE0zRWlSMnVTSmdUdXNjZWgwclJCLVFCV1c2TkNNMWI5M29ZTVcxRTVNSG53SFpTMUgydFg3U2MxTjFxV00tb1ZVQVBOYjc2WnB5VnpScHFtVmJxMDV1WjRIWHZnSjFKT3dlZ0dxdXNXTHlDUWVfTkFpS01KMEdrWnZ1TF9BWmdjVHNwMXkwNEhHb05RUlQ5VXZn?oc=5"]
+      }
+    ],
+    "enterprise_industry_ai_users": [
+      {
+        "name": "海康威视",
+        "name_en": "Hikvision",
+        "ticker": "002415",
+        "exchange": "SZ",
+        "country": "CN",
+        "market_position": "leader",
+        "key_products": ["智能物联", "场景数字化", "工业智能应用"],
+        "description": "公开报道显示海康威视已推进智能物联战略转型与场景数字化，可作为企业及行业AI应用环节的可核验A股样本。",
+        "evidence_urls": ["https://news.google.com/rss/articles/CBMilAFBVV95cUxQNE5XajlsR3R6bE5oMGVUWTZKd2RQZnBYMWktbFRiUnU2RU1RWS1MVVZTbUJQYW9GbG40UXJ6eVJmdV9YVGtMZEJac3BWdW44czZibVVSOHNDbklWWjVaRjd0dGVqTlFDNnJzNFNLM2l0SzNvX1RhRU44dnctN25iVF9qc1BNel8xa1gzRllwVVptUGFH?oc=5"]
+      }
+    ]
+  }
+}

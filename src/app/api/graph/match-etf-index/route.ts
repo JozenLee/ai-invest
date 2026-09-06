@@ -12,9 +12,9 @@ export async function POST(request: NextRequest) {
     const { scope, targetId, options } = body
 
     // 参数验证
-    if (!scope || !['node', 'industry', 'global'].includes(scope)) {
+    if (!scope || !['node', 'segment', 'industry', 'global'].includes(scope)) {
       return NextResponse.json(
-        { success: false, error: '无效的scope参数，必须是 node/industry/global' },
+        { success: false, error: '无效的scope参数，必须是 node/segment/industry/global' },
         { status: 400 }
       )
     }
@@ -24,6 +24,9 @@ export async function POST(request: NextRequest) {
         { success: false, error: `${scope} 模式需要提供 targetId` },
         { status: 400 }
       )
+    }
+    if (scope === 'segment' && (!targetId || typeof body.targetName !== 'string' || !body.targetName.trim())) {
+      return NextResponse.json({ success: false, error: 'segment 模式需要 targetId 和 targetName' }, { status: 400 })
     }
 
     // 执行匹配
@@ -41,6 +44,11 @@ export async function POST(request: NextRequest) {
             details: [nodeResult],
           },
         }
+        break
+
+      case 'segment':
+        const segmentResult = await etfIndexMatcher.matchNodeByName(targetId, body.targetName.trim(), options)
+        result = { success: segmentResult.success, data: segmentResult }
         break
 
       case 'industry':

@@ -1,6 +1,6 @@
 import {describe,expect,it,vi} from 'vitest'
 const state=vi.hoisted(()=>({subscriptions:[] as Array<{instrument:{type:string;code:string};profile:string;datasets:Array<{id:string;datasetKey:string;enabled:boolean;status:string;lastSuccessAt:Date|null;lastError?:string|null}>}>}))
-vi.mock('@/lib/db',()=>({prisma:{dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)}}}))
+vi.mock('@/lib/db',()=>({prisma:{dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},rawPayload:{findFirst:vi.fn(async()=>null)}}}))
 vi.mock('@/lib/subscription-dispatch',()=>({notifySubscriptionWorker:vi.fn()}))
 import {ensureResearchInputsFresh,researchDatasetWarnings,shouldRefreshResearchDataset} from '../preflight'
 

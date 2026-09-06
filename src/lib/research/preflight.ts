@@ -31,11 +31,17 @@ const maxAgeFor=(datasetKey:string,decisionWindow:boolean)=>decisionWindow
 
 export async function ensureResearchInputsFresh(industryId:string, options: { refresh?: boolean; decisionWindow?: boolean } = {}){
   const now=new Date()
-  const subscriptions=await prisma.dataSubscription.findMany({where:{enabled:true},include:{instrument:true,datasets:true}})
-  const selected=subscriptions.filter(subscription=>subscription.instrument.type==='INDEX'||subscription.instrument.type==='ETF'&&String(subscription.profile||'').includes(industryId))
+  const [subscriptions,graphRow]=await Promise.all([
+    prisma.dataSubscription.findMany({where:{enabled:true},include:{instrument:true,datasets:true}}),
+    prisma.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}}),
+  ])
+  const normalize=(value:unknown)=>String(value||'').toLowerCase().replace(/^(sh|sz)/,'').replace(/\.(sh|sz)$/,'')
+  let graphCodes=new Set<string>()
+  try{const groups=JSON.parse(graphRow?.payload||'[]');const group=groups.find((item:{id?:string})=>item.id===industryId);graphCodes=new Set((group?.analysisEtfs||group?.etfs||[]).map((item:{code?:string;ticker?:string})=>normalize(item.code||item.ticker)).filter(Boolean))}catch{/* Fall back to subscription profiles below. */}
+  const selected=subscriptions.filter(subscription=>subscription.instrument.type==='INDEX'||subscription.instrument.type==='ETF'&&(graphCodes.size?graphCodes.has(normalize(subscription.instrument.code)):String(subscription.profile||'').includes(industryId)))
   if (options.refresh === false) {
     const warnings = researchDatasetWarnings(selected.flatMap(subscription => subscription.datasets))
-    return { status: 'warning', queued: 0, completed: 0, partial: 0, failed: 0, warnings: [...new Set(['快速规则复核未触发外部同步，使用当前本地订阅快照', ...warnings])].slice(0, 8) }
+    return { status: 'warning', queued: 0, completed: 0, partial: 0, failed: 0, warnings: [...new Set(['本轮未触发外部同步，使用当前本地订阅快照', ...warnings])].slice(0, 8) }
   }
   const decisionWindow=options.decisionWindow===true
   const eligibleKeys=new Set([...RESEARCH_KEYS,...(decisionWindow?[...DECISION_WINDOW_KEYS]:[])])

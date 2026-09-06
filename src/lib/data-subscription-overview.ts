@@ -59,11 +59,14 @@ async function getGraphSnapshot(force = false) {
       if (!graphResponse.ok) return { ...industry, etfs: [] as GraphEtf[] }
       const graph = await graphResponse.json() as { lanes?: Record<string, { segments?: Array<{ code?: string; matched_etfs?: GraphEtf[]; matchedEtfs?: GraphEtf[]; matched_indices?: Array<Record<string, unknown>>; matchedIndices?: Array<Record<string, unknown>> }> }> }
       const etfs = Object.values(graph.lanes || {}).flatMap((lane) => (lane.segments || []).flatMap((segment) => segment.matched_etfs || segment.matchedEtfs || []))
-      const unique = new Map<string, GraphEtf>()
+      const unique = new Map<string, GraphEtf & { matchCount: number }>()
       for (const etf of etfs) {
         const code = normalizeCode(etf.code || etf.ticker)
-        if (code && !unique.has(code)) unique.set(code, { ...etf, code, name: etf.name || etf.etfName || code })
+        if (!code) continue
+        const current = unique.get(code)
+        unique.set(code, { ...(current && Number(current.relevance || 0) > Number(etf.relevance || 0) ? current : etf), code, name: etf.name || etf.etfName || current?.name || code, matchCount: (current?.matchCount || 0) + 1 })
       }
+      const representativeEtfs = [...unique.values()].sort((a, b) => b.matchCount - a.matchCount || Number(b.relevance || 0) - Number(a.relevance || 0) || a.code!.localeCompare(b.code!)).slice(0, Math.max(1, Number(process.env.GRAPH_ETF_LIMIT_PER_INDUSTRY || 8)))
       let companies: Array<Record<string, unknown>> = []
       let stages: Array<Record<string, unknown>> = []
       let relations: Array<Record<string, unknown>> = []
@@ -92,6 +95,7 @@ async function getGraphSnapshot(force = false) {
         ...industry,
         ...graphIndustry,
         etfs: [...unique.values()],
+        analysisEtfs: representativeEtfs,
         companies,
         stages,
         relations,
