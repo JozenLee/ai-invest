@@ -70,6 +70,7 @@ interface ExecutionData {
 const STEP_LABELS: Record<string, { title: string; detail: string }> = {
   'fetch-portfolio': { title: '读取邮箱持仓', detail: '基于最新本地邮箱快照计算组合风险与产业暴露' },
   'portfolio-analysis': { title: '私有持仓分析', detail: '仅供本人查看，不进入社媒报告' },
+  'portfolio-decision': { title: '组合投资建议', detail: '持仓穿透、风险预算、费用与建议置信度' },
   'social-report': { title: '社媒报告编辑', detail: '将公开研究证据转成普通读者易读的报告' },
   'assess-data-quality': { title: '订阅数据质量门禁', detail: '逐数据项、ETF与模块校验；不足时只作缺口研究，禁止新增风险' },
   'fetch-etfs': {
@@ -456,7 +457,7 @@ export function ComprehensiveAnalysisFlow() {
                 <div className="space-y-2">
                   <p className="text-sm font-medium">企业研究范围</p>
                   <p className="rounded-md border bg-muted/30 px-3 py-2 text-sm">ETF持仓暴露 + 领域配置中的领先企业</p>
-                  <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><input type="checkbox" checked={portfolioConsent || Boolean(aiDestination && execution?.metadata?.portfolioAiConsent === aiDestination)} disabled={isBusy} onChange={event => setPortfolioConsent(event.target.checked)} className="mt-1" /><span>同意将持仓名称、代码和权重发送至 {aiDestination || '加载AI目的地中…'} 进行私有分析。不发送账户金额、邮箱或份额。未同意时跳过私有分析，公开研究仍可完成。</span></label>
+                  <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><input type="checkbox" checked={portfolioConsent || Boolean(aiDestination && execution?.metadata?.portfolioAiConsent === aiDestination)} disabled={isBusy} onChange={event => setPortfolioConsent(event.target.checked)} className="mt-1" /><span>可选：同意将持仓名称、代码和权重发送至 {aiDestination || '加载AI目的地中…'} 生成私有文字解读。不发送账户金额、邮箱或份额。无论是否授权，目标仓位、费用和门禁都只在本地确定性计算，且不进入发布版。</span></label>
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">企业池按领域配置分别保留；领先企业不要求属于ETF持仓。新轮次统一冻结证据，历史轮次保持原样。</p>

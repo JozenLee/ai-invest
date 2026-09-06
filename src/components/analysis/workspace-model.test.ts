@@ -3,7 +3,7 @@ import {PHASES,artifact,phaseState,runProgress,type AnalysisRun,type RunStep} fr
 const step=(name:string,status:string):RunStep=>({id:name,stepName:name,stepIndex:0,status,artifacts:[]})
 describe('unified workspace presentation',()=>{
   it('assigns every workflow step to exactly one phase',()=>{
-    const names=PHASES.flatMap(p=>[...p.steps]);expect(names).toHaveLength(20);expect(new Set(names).size).toBe(20)
+    const names=PHASES.flatMap(p=>[...p.steps]);expect(names).toHaveLength(21);expect(new Set(names).size).toBe(21)
     expect(PHASES[1].steps).toContain('etf-actions')
   })
   it('distinguishes execution completion from skipped AI and failed work',()=>{

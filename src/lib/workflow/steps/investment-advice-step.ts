@@ -2,6 +2,7 @@ import { runAnalysisPrompt } from '../analysis-prompt'
 import { researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
 import { saveValidatedResearchOutput, valuationNarrative } from '../research-output'
+import { reportAdviceConfidence } from '@/lib/analysis/report-insights'
 
 /**
  * 步骤12: 投资建议
@@ -29,6 +30,16 @@ export const investmentAdviceStep: StepDefinition = {
 
     const validated=await saveValidatedResearchOutput(context,'investment-advice',result)
     const adviceData=JSON.parse(validated)
+    const evaluation=context.artifacts.get('research-evaluation')
+    const decisions=evaluation?.decisions||[]
+    const riskOff=decisions.filter((item:{state?:string})=>item.state==='risk-off').length
+    const eligible=decisions.filter((item:{state?:string})=>item.state==='eligible').length
+    adviceData.confidencePct=reportAdviceConfidence(evaluation,context.artifacts.get('data-quality'))
+    adviceData.recommendation=riskOff>=Math.ceil(Math.max(1,decisions.length)/2)
+      ? {unheld:'观望',held:'减仓',reason:'多数跟踪产品处于风险收缩状态。'}
+      : eligible>0
+        ? {unheld:'分批建仓',held:'持有',reason:`${eligible}只产品满足本轮建仓条件。`}
+        : {unheld:'观望',held:'持有',reason:'关键条件尚未形成一致方向。'}
     adviceData.strategicView={...(adviceData.strategicView||{}),valuation:valuationNarrative(context.artifacts.get('research-evaluation')?.products||[])}
     const enriched=JSON.stringify(adviceData)
     await context.saveArtifact('investment-advice',enriched,'DATA')
@@ -40,7 +51,7 @@ export const investmentAdviceStep: StepDefinition = {
         { score: typeof adviceData.score === 'number' && Number.isFinite(adviceData.score) ? adviceData.score : null, rating: adviceData.rating || '证据不足，未评级' },
         'DATA'
       )
-    } catch (e) {
+    } catch {
       console.warn('Failed to parse investment advice for scoring')
     }
 

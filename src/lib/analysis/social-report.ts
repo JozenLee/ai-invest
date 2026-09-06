@@ -1,3 +1,5 @@
+import type { Evaluation } from '@/lib/research/contracts'
+
 export const REPORT_SECTIONS = ['产业驱动', '盈利质量', '市场与估值', 'ETF映射', '情景与反证', '跟踪清单'] as const
 export type ReportMetric = { label: string; value: string; source: string; date: string }
 export type SocialReport = { version?: 2; metrics?: ReportMetric[]; title: string; subtitle: string; takeaways: string[]; sections: Array<{ title: string; body: string }>; risks: string[] }
@@ -74,4 +76,27 @@ export function compactSocialReport(text: string): SocialReport {
 export function socialMarkdown(report: SocialReport) {
   const metrics = report.metrics?.length ? '\n\n## 关键指标\n\n' + report.metrics.map(m => `- ${m.label}：${m.value}（${m.date}，${m.source}）`).join('\n') : ''
   return `# ${report.title}\n\n${report.subtitle}${metrics}\n\n## 一分钟看懂\n\n${report.takeaways.map(row => '- ' + row).join('\n')}\n\n${report.sections.map(row => '## ' + row.title + '\n\n' + row.body).join('\n\n')}\n\n## 风险与边界\n\n${report.risks.map(row => '- ' + row).join('\n')}\n\n仅供研究交流，不构成投资建议。`
+}
+
+function record(value:unknown):Record<string,unknown>{
+  if(value&&typeof value==='object'&&!Array.isArray(value))return value as Record<string,unknown>
+  try{const parsed=JSON.parse(String(value||'{}'));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}
+}
+
+/** Repairs presentation metadata in archived reports without mutating their frozen evidence. */
+export function normalizeSocialReport(report:SocialReport,evaluation?:Evaluation,companyValue?:unknown):SocialReport{
+  const products=evaluation?.products||[]
+  const valuedIndices=new Set(products.filter(item=>(typeof item.pe==='number'&&Number.isFinite(item.pe))||(typeof item.pb==='number'&&Number.isFinite(item.pb))).map(item=>item.indexCode).filter(Boolean))
+  const historicalIndices=new Set(products.filter(item=>(item.valuationSampleCount||0)>=500&&((typeof item.pePercentile5y==='number'&&Number.isFinite(item.pePercentile5y))||(typeof item.pbPercentile5y==='number'&&Number.isFinite(item.pbPercentile5y)))).map(item=>item.indexCode).filter(Boolean))
+  const takeaways=report.takeaways.map(row=>/^估值：\d+只产品有底层数据/.test(row)?`估值：${valuedIndices.size}个指数有当期值，${historicalIndices.size}个具备历史分位。`:row)
+  const company=record(companyValue),evidence:Array<unknown>=Array.isArray(company.evidence)?company.evidence:[]
+  const sections=report.sections.map(section=>{
+    if(!section.body.startsWith('【来源待核验】'))return section
+    const name=section.body.slice('【来源待核验】'.length).split('：')[0]
+    const match=evidence.find(item=>item&&typeof item==='object'&&String((item as Record<string,unknown>).claim||'').includes(name))
+    if(!match||typeof match!=='object')return section
+    const citation=match as Record<string,unknown>
+    return {...section,body:section.body.replace('【来源待核验】',`${citation.date||'日期待核验'}｜${citation.source||'来源待核验'}：`)}
+  })
+  return {...report,takeaways,sections}
 }

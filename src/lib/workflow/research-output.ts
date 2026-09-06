@@ -35,13 +35,19 @@ export function validateResearchOutput(raw:string,key:string){
   return {text:JSON.stringify(sanitized),issues}
 }
 
-export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:number|null;pb?:number|null;valuationDate?:string|null;valuationSource?:string|null}>){
+export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:number|null;pb?:number|null;valuationDate?:string|null;valuationSource?:string|null;pePercentile5y?:number|null;pbPercentile5y?:number|null;valuationSampleCount?:number}>){
   const indices=[...new Map(products.filter(item=>Number.isFinite(item.pe)||Number.isFinite(item.pb)).map(item=>[item.indexCode||String(products.indexOf(item)),item])).values()]
   if(!indices.length)return '无可核验指数估值，不判断贵贱。'
   const pes=indices.flatMap(item=>Number.isFinite(item.pe)?[item.pe!]:[]),pbs=indices.flatMap(item=>Number.isFinite(item.pb)?[item.pb!]:[])
   const dates=[...new Set(indices.map(item=>item.valuationDate).filter(Boolean))],sources=[...new Set(indices.map(item=>item.valuationSource).filter(Boolean))]
   const range=(values:number[])=>values.length?`${Math.min(...values).toFixed(2)}—${Math.max(...values).toFixed(2)}`:'缺失'
-  return `${indices.length}个跟踪指数具备成分穿透估值：PE ${range(pes)}，PB ${range(pbs)}；日期${dates.join('、')||'未标注'}，来源${sources.join(' / ')||'未标注'}。历史分位样本不足时不作高低判断。`
+  const historical=indices.filter(item=>(item.valuationSampleCount||0)>=500&&(Number.isFinite(item.pePercentile5y)||Number.isFinite(item.pbPercentile5y)))
+  const pePercentiles=historical.flatMap(item=>Number.isFinite(item.pePercentile5y)?[item.pePercentile5y!]:[])
+  const pbPercentiles=historical.flatMap(item=>Number.isFinite(item.pbPercentile5y)?[item.pbPercentile5y!]:[])
+  const percentile=historical.length
+    ? `其中${historical.length}个指数具备不少于500个样本的五年分位：PE分位 ${range(pePercentiles)}%，PB分位 ${range(pbPercentiles)}%；分位仅描述历史相对位置，不直接等同高估或低估。`
+    : '历史分位样本不足，不判断贵贱或安全边际。'
+  return `${indices.length}个跟踪指数具备成分穿透估值：PE ${range(pes)}，PB ${range(pbs)}；日期${dates.join('、')||'未标注'}，来源${sources.join(' / ')||'未标注'}。${percentile}`
 }
 
 export async function saveValidatedResearchOutput(context:StepContext,key:string,raw:string){

@@ -15,7 +15,7 @@ type Artifact = { artifactKey: string; artifactType: string; data: unknown; size
 type Step = { stepName: string; status: string; completedAt: string | null; artifacts: Artifact[] }
 
 const titles: Record<string, string> = {
-  'fetch-portfolio': '邮箱持仓与组合风险', 'portfolio-analysis': '私有持仓分析', 'assess-data-quality': '数据质量校验', 'social-report': '社媒报告编辑',
+  'fetch-portfolio': '邮箱持仓与组合风险', 'portfolio-decision': '本地组合投资建议', 'portfolio-analysis': '私有持仓分析', 'assess-data-quality': '数据质量校验', 'social-report': '社媒报告编辑',
   'fetch-etfs': '定位产业关联指数基金', 'fetch-etf-data': '获取指数基金行情及关键指标', 'fetch-etf-holdings': '解析指数基金成分股持仓',
   'fetch-companies': '提取产业链企业节点', 'fetch-company-data': '采集企业行情数据', 'fetch-news': '采集产业资讯并汇总情绪',
   'fetch-market-snapshot': '分析市场指数与板块资金', 'calculate-market-trends': '计算指数基金与企业趋势指标',
@@ -31,7 +31,7 @@ const labels: Record<string, string> = {
   'market-trends': '市场趋势', 'industry-info': '产业信息', 'etf-codes': '指数基金代码','data-quality':'数据质量','etf-data-gaps':'行情缺口',
   'etf-holdings':'指数基金持仓','holdings-summary':'持仓摘要','news-articles':'资讯样本','news-events':'归并事件','news-evidence-gaps':'资讯证据缺口',
   'news-trends':'资讯趋势','news-sentiment':'资讯倾向','market-reference-data':'市场参考数据','market-reference-indicators':'市场参考指标',
-  'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-analysis':'私有持仓分析',
+  'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-decision-support':'组合投资建议','portfolio-decision-validation':'历史回放统计','portfolio-analysis':'私有持仓分析','historical-report-context':'纳入分析的历史报告','historical-report-policy':'历史报告回溯规则',
   code: '代码', ticker: '代码', name: '名称', description: '描述', weight: '权重',
   bind_type: '绑定类型', bindType: '绑定类型', etf_code: '指数基金代码', etf_name: '指数基金名称',
   change_pct: '涨跌幅', change: '涨跌幅', price: '价格', date: '日期', time: '时间',

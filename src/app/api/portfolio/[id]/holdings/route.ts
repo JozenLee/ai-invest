@@ -7,6 +7,20 @@ interface RouteContext {
   params: Promise<{ id: string }>
 }
 
+const optionalNumber = (value: unknown) => value === '' || value == null ? null : typeof value === 'number' && Number.isFinite(value) ? value : Number.isFinite(Number(value)) ? Number(value) : null
+const productFields = (body: Record<string, unknown>) => {
+  const data: Record<string, unknown> = {}
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(body, key)
+  if (has('fundType')) data.fundType = typeof body.fundType === 'string' && body.fundType ? body.fundType : null
+  if (has('targetEtfCode')) data.targetEtfCode = typeof body.targetEtfCode === 'string' && body.targetEtfCode.trim() ? body.targetEtfCode.trim() : null
+  if (has('targetIndexCode')) data.targetIndexCode = typeof body.targetIndexCode === 'string' && body.targetIndexCode.trim() ? body.targetIndexCode.trim() : null
+  if (has('targetEtfCode') || has('targetIndexCode')) { data.mappingSource = body.targetEtfCode || body.targetIndexCode ? 'manual' : null; data.mappingConfidence = body.targetEtfCode || body.targetIndexCode ? 1 : null }
+  if (has('purchaseDate')) data.purchaseDate = typeof body.purchaseDate === 'string' && body.purchaseDate ? new Date(body.purchaseDate) : null
+  if (has('costNav')) data.costNav = optionalNumber(body.costNav)
+  if (has('redemptionFeePct')) data.redemptionFeePct = optionalNumber(body.redemptionFeePct)
+  return data
+}
+
 // GET /api/portfolio/[id]/holdings - 获取组合持仓
 export async function GET(_request: NextRequest, context: RouteContext) {
   try {
@@ -88,6 +102,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ...(category ? { category } : {}),
           quantity,
           unitNav,
+          ...productFields(body),
           ...(existing.industryDomainSource === 'manual' && !manualIndustry ? {} : automaticIndustry ? { ...automaticIndustry } : {}),
         },
       })
@@ -102,6 +117,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
           ...(automaticIndustry ? { ...automaticIndustry } : {}),
           quantity,
           unitNav,
+          ...productFields(body),
         },
       })
     }
@@ -162,6 +178,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         ...industryUpdate,
         ...(quantity != null && { quantity }),
         ...(unitNav != null && { unitNav }),
+        ...productFields(body),
       },
     })
 

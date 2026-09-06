@@ -27,10 +27,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       orderBy: { fetchedAt: 'asc' }, take: 600, select: { payload: true },
     })
     const evaluations = legacy.flatMap(row => { const value = parse<Evaluation>(row.payload); return value ? [value] : [] })
-    const sessions = new Set(evaluations.map(item => item.expectedSession || item.asOf.slice(0, 10)))
+    const usableEvaluations=evaluations.filter(item=>item.calendarVerified&&/^\d{4}-\d{2}-\d{2}$/.test(item.expectedSession||''))
+    const sessionList=[...new Set(usableEvaluations.map(item=>item.expectedSession!))].sort()
+    const sessions = new Set(sessionList)
     return NextResponse.json({
-      status: 'watch-only', tradeApproved: false, snapshotCount: evaluations.length, sessionCount: sessions.size,
-      spanDays: evaluations.length > 1 ? Math.floor((Date.parse(evaluations.at(-1)!.asOf) - Date.parse(evaluations[0].asOf)) / 86400000) : 0,
+      status: 'watch-only', tradeApproved: false, snapshotCount: evaluations.length, usableSnapshotCount:usableEvaluations.length, sessionCount: sessions.size,
+      spanDays: sessionList.length > 1 ? Math.floor((Date.parse(sessionList.at(-1)!) - Date.parse(sessionList[0])) / 86400000) : 0,
       totalTrades: 0, meanExcessReturnPct: null, hitRatePct: null, maxDrawdownPct: null, costs: { commissionBps: 3, slippageBps: 5 }, replayStatus: 'legacy-insufficient',
       requirements: [
         { key: 'sessions', label: '独立交易日快照不少于480个', met: false, current: sessions.size, target: 480 },

@@ -7,10 +7,12 @@ import { matchesNewsIndustry } from '@/lib/news-taxonomy'
 import type { Bar, Evidence, ETFInput, EventInput, Evaluation, Profile, ResearchSnapshot, SourceRecord } from './contracts'
 import { defaultProfile, validateProfile } from './profile'
 import { clusterEvents } from './events'
-import { adjustedBars, evaluateResearch } from './engine'
+import { adjustedBars, evaluateResearch, selectProductNav } from './engine'
 import { compactReplaySnapshot } from './replay'
 import { chinaDate, dateKey, sessionBoundary } from './time'
 import { matchesResearchDomain, researchTerms } from './relevance'
+import { selectHistoricalReports } from './history-reports'
+import { assessDecisionTiming } from '@/lib/analysis/decision-timing'
 
 export const encode = (value: unknown) => JSON.stringify(value, (_key,v)=>typeof v==='bigint'?Number(v):v)
 export const digest = (value: unknown) => createHash('sha256').update(encode(value)).digest('hex')
@@ -60,7 +62,7 @@ export async function saveResearchProfile(value: unknown, industryId: string) {
 export async function captureResearchSnapshot(industryId: string): Promise<ResearchSnapshot> {
   return prisma.$transaction(async tx=>{
     const asOf=new Date().toISOString(), id=randomUUID()
-    const subscriptions=await tx.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},include:{instrument:true}})
+    const subscriptions=await tx.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},include:{instrument:true,datasets:true}})
     const graphRow=await tx.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}})
     const group=(parse<GraphGroup[]>(graphRow?.payload)||[]).find(g=>g.id===industryId)
     const selected=subscriptions.filter(s=>parse<SubscriptionProfile>(s.profile)?.industryId===industryId || group?.etfs?.some(e=>symbol(e.code)===s.instrument.code))
@@ -76,6 +78,11 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const boundary=sessionBoundary(calendar,asOf)
     // Missing calendar permits diagnostics, but the engine blocks all actions.
     const cutoff=boundary.expectedSession||chinaDate(asOf)
+    // Older replay fixtures predate MarketQuote/subscription dataset auditing;
+    // their missing audit data must safely downgrade to reference-only.
+    const quoteRows=typeof tx.marketQuote?.findMany==='function'?await tx.marketQuote.findMany({where:{instrumentType:'ETF',code:{in:tickers},fetchedAt:{lte:new Date(asOf)}}}):[]
+    const eventChecks=selected.flatMap(subscription=>(subscription.datasets||[]).filter(dataset=>dataset.enabled&&dataset.datasetKey==='stock_announcement').map(dataset=>({key:`${dataset.datasetKey}:${subscription.instrument.code}`,lastSuccessAt:dataset.lastSuccessAt?.toISOString()||null})))
+    const decisionTiming=assessDecisionTiming({asOf,calendar,expectedTickers:tickers,quotes:quoteRows.map(quote=>({code:quote.code,tradeDate:quote.tradeDate||null,fetchedAt:quote.fetchedAt.toISOString()})),eventChecks})
     const evidence:Evidence[]=[], evidenceSet=new Set<string>(),records:Record<string,unknown>={}
     const add=(e:Evidence)=>{if(!evidenceSet.has(e.id)){evidence.push(e);evidenceSet.add(e.id)}return e.id}
     const sourceEvidence=(r:SourceRecord,unit?:string)=>{
@@ -112,15 +119,16 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       if(holdingRaw) sourceEvidence(holdingRaw)
       const rawHoldings=rowsOf(holdingRaw)
       const latestNav=(research.nav||[]).filter(n=>dateKey(n.nav_date)&&dateKey(n.nav_date)!<=cutoff&&dateKey(n.ann_date)&&dateKey(n.ann_date)!<=chinaDate(asOf)).sort((a,b)=>String(b.nav_date).localeCompare(String(a.nav_date)))[0]
+      const shareRows=(research.shares||[]).filter(n=>dateKey(n.trade_date)&&dateKey(n.trade_date)!<=cutoff).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)))
+      const productNav=selectProductNav({cutoff,officialDate:dateKey(latestNav?.nav_date),officialNav:number(latestNav?.unit_nav),shareDate:dateKey(shareRows[0]?.trade_date),shareNav:number(shareRows[0]?.nav),shareClose:number(shareRows[0]?.close)})
       const latestValuation=(research.indexValuation||[]).filter(row=>dateKey(row.trade_date||row.date)&&dateKey(row.trade_date||row.date)!<=cutoff).sort((a,b)=>String(b.trade_date||b.date).localeCompare(String(a.trade_date||a.date)))[0]
       const valuationHistory=(research.indexValuation||[]).filter(row=>dateKey(row.trade_date||row.date)&&dateKey(row.trade_date||row.date)!<=cutoff).sort((a,b)=>String(a.trade_date||a.date).localeCompare(String(b.trade_date||b.date)))
       const fiveYearCutoff=new Date(Date.parse(cutoff+'T00:00:00Z')-5*365.25*86400000).toISOString().slice(0,10)
       const fiveYearValuations=valuationHistory.filter(row=>dateKey(row.trade_date||row.date)!>=fiveYearCutoff)
       const percentile=(field:string,current:number|null)=>{const values=fiveYearValuations.map(row=>number(row[field])).filter((value):value is number=>value!==null&&value>0);return current!==null&&values.length>=500?values.filter(value=>value<=current).length/values.length*100:null}
       const currentPe=number(latestValuation?.pe_ttm),currentPb=number(latestValuation?.pb)
-      const shareRows=(research.shares||[]).filter(n=>dateKey(n.trade_date)&&dateKey(n.trade_date)!<=cutoff).sort((a,b)=>String(b.trade_date).localeCompare(String(a.trade_date)))
       const info=research.info?.[0]||{}
-      const productDate=dateKey(latestNav?.nav_date)
+      const productDate=productNav.date
       const book=(research.orderbook||[]).find(r=>String(r.code)===ticker&&dateKey(r.date)===cutoff&&Date.parse(String(r.publishedAt))<=Date.parse(asOf))
       const localBars=daily.filter(r=>r.ticker===ticker).slice(-profile.rules.minHistory-30)
       // Research collectors explicitly normalize amount to CNY; legacy daily amount is not trusted.
@@ -137,7 +145,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
           const period=dateKey(origin?.report_period||origin?.end_date||origin?.reportPeriod)
           return {code:h.stockCode,name:h.stockName,weight:origin?.weight_available===false?null:number(origin?.weight),period,publishedAt:dateKey(origin?.ann_date||origin?.publish_date),source:String(origin?.source||'legacy-holdings-period-unknown'),evidenceId:holdingRaw?.id||add({id:`${id}:holding:${h.id}`,source:'legacy-holdings-period-unknown',dataDate:null,publishedAt:null,fetchedAt:h.updateDate.toISOString(),hash:digest(h)})}
         }),
-        product:{date:productDate,nav:number(latestNav?.unit_nav),shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentile5y:percentile('pe_ttm',currentPe),pbPercentile5y:percentile('pb',currentPb),valuationSampleCount:fiveYearValuations.length,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:number(info.mgt_fee),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
+        product:{date:productDate,nav:productNav.nav,shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentile5y:percentile('pe_ttm',currentPe),pbPercentile5y:percentile('pb',currentPb),valuationSampleCount:fiveYearValuations.length,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:number(info.mgt_fee),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
     })
     const holdingCodes=[...new Set(etfs.flatMap(e=>e.holdings.map(h=>h.code)))],companyCodes=[...new Set([...holdingCodes,...profile.leaders.map(l=>l.code)])]
     const reportRows=await tx.stockFinancialReport.findMany({where:{stockCode:{in:companyCodes},fetchedAt:{lte:new Date(asOf)},publishDate:{gte:earliest,lte:new Date(asOf)}},orderBy:{fetchedAt:'desc'}})
@@ -194,11 +202,14 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const benchmarkId=add({id:`${id}:benchmark`,source:'local-index-daily',dataDate:dateKey(indexLocal.at(-1)?.date),publishedAt:null,fetchedAt:asOf,hash:digest(indexLocal)})
     records[benchmarkId]=indexLocal
     etfs.forEach(e=>e.evidenceIds.push(benchmarkId))
-    const snapshot:ResearchSnapshot={version:1,id,asOf,capturedAt:asOf,profile,calendar,evidence,etfs,benchmarkBars,sectorFlows,events,companies,projections:{},records}
+    const historicalCandidates=profile.historyReports?.enabled===false?[]:await tx.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId,createdAt:{lte:new Date(asOf)}},orderBy:{createdAt:'desc'},take:300,select:{id:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
+    const historicalReports=selectHistoricalReports({candidates:historicalCandidates,profile,tradingSessions:calendar.filter(day=>day.open).map(day=>day.date),cutoff:boundary.expectedSession,asOf})
+    const snapshot:ResearchSnapshot={version:1,id,asOf,capturedAt:asOf,profile,calendar,evidence,etfs,benchmarkBars,sectorFlows,events,companies,historicalReports,decisionTiming,projections:{},records}
     const evaluation=evaluateResearch(snapshot)
     const marketData=etfs.map(e=>{
       const series=adjustedBars(e,boundary.expectedSession||cutoff),d=evaluation.decisions.find(d=>d.ticker===e.ticker)!,metrics=calculateDetailMetrics(series.bars)
-      return {ticker:e.ticker,name:e.name,price:series.bars.at(-1)?.close||null,changePct:metrics.latestChangePct,history:series.bars,keyIndicators:series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:e.adjustmentSource||'subscription-database',dataDate:series.bars.at(-1)?.date,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
+      const quote=quoteRows.find(row=>row.code===e.ticker)
+      return {ticker:e.ticker,name:e.name,price:series.bars.at(-1)?.close||null,changePct:metrics.latestChangePct,history:series.bars,keyIndicators:series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:e.adjustmentSource||'subscription-database',dataDate:series.bars.at(-1)?.date,intradayQuote:quote&&quote.tradeDate===decisionTiming.tradingDate?{price:quote.price,changePct:quote.changePct,tradeDate:quote.tradeDate,source:quote.source,fetchedAt:quote.fetchedAt.toISOString()}:null,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
     })
     const stockDaily=await tx.stockDaily.findMany({where:{ticker:{in:companyCodes},date:{gte:earliest,lte:new Date(cutoff+'T23:59:59Z')}},orderBy:{date:'asc'}})
     const companyData=companies.map(c=>{
@@ -217,8 +228,9 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const hasDataGaps=perEtf.some(item=>item.status!=='available')||Boolean(evaluation.omittedConditions?.length)||trackingAnomalies.length>0
     const quality={status:evaluation.decisions.every(d=>d.state==='blocked')?'blocked':hasDataGaps?'limited':'available',requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable:evaluation.decisions.filter(d=>d.state!=='blocked').length,coverage:etfs.length?evaluation.decisions.filter(d=>d.state!=='blocked').length/etfs.length:0,asOf,expectedSession:boundary.expectedSession,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:articleData.length,dataAnomalies:trackingAnomalies}
     snapshot.projections={
+      'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-timing':decisionTiming},
       'fetch-etfs':{'industry-info':{id:industryId,name:profile.name,source:'frozen-snapshot'},'etf-bindings':etfs.map(e=>({etf_code:e.ticker,etf_name:e.name,indexCode:e.indexCode,indexName:e.indexName,holdings:e.holdings})),'etf-codes':tickers.join(',')},
-      'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,overview:{indices:marketIndices},capitalFlow:{scope:'配置的领域板块，不代表全市场新增资金',series:sectorFlows},quality:evaluation.modules.market},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
+      'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,decisionTiming,overview:{indices:marketIndices},capitalFlow:{scope:'配置的领域板块，不代表全市场新增资金',series:sectorFlows},quality:evaluation.modules.market},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
       'fetch-etf-data':{'etf-market-data':marketData,'etf-data-gaps':{missingCodes:etfs.filter(e=>!e.bars.length).map(e=>e.ticker),requested:etfs.length,available:marketData.length}},
       'fetch-etf-holdings':{'etf-holdings':allHoldings,'holdings-summary':{totalETFs:etfs.length,totalHoldings:allHoldings.length,uniqueStocks:holdingCodes.length}},
       'fetch-companies':{'companies':companyData.map(c=>({stockCode:c.code,stockName:c.name,source:c.pool,segment:c.segment})),'company-codes':companyCodes.join(',')},

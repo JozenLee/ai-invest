@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/db'
-import { parseSocialReport, socialMarkdown } from '@/lib/analysis/social-report'
+import { normalizeSocialReport, parseSocialReport, socialMarkdown } from '@/lib/analysis/social-report'
 import { mkdir } from 'node:fs/promises'
 import path from 'node:path'
 import sharp from 'sharp'
@@ -9,7 +9,7 @@ export async function preparePublicReport(reportId: string) {
   const report = await prisma.aIAnalysisReport.findUniqueOrThrow({ where: { id: reportId } })
   const data = JSON.parse(report.dataJson || '{}')
   if (report.type !== 'comprehensive' || !data.metadata?.runId || !data.socialReport) throw new Error('只能发布综合分析已生成的社媒报告')
-  const social = parseSocialReport(JSON.stringify(data.socialReport))
+  const social = normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)
   const directory = path.join(process.cwd(), '.runtime', 'publish', report.id)
   await mkdir(directory,{recursive:true})
   const svg = renderReportPoster(social, { industry: report.industryName || '产业观察', date: new Date(report.createdAt).toISOString().slice(0,10) })

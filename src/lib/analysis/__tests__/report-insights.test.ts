@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { fixture } from '@/lib/research/__tests__/fixtures'
 import { evaluateResearch } from '@/lib/research/engine'
-import { decisionEvents, guardActionLanguage, productGroups, reportReadiness, representativeProducts, safeDecisionAction } from '../report-insights'
+import { decisionEvents, guardActionLanguage, productGroups, reportCoverage, reportReadiness, representativeProducts, safeDecisionAction } from '../report-insights'
 
 describe('report investment readiness', () => {
-  it('fails closed while research rules are experimental', () => {
+  it('outputs a confidence-rated recommendation without a replay-history gate', () => {
     const evaluation = evaluateResearch(fixture())
-    expect(reportReadiness(evaluation, { status: 'available' }, false).level).toBe('watch-only')
-    expect(safeDecisionAction(evaluation.decisions[0], false).unheld).toBe('观察候选')
+    expect(reportReadiness(evaluation, { status: 'available' }, false).level).toBe('advice-ready')
+    expect(reportReadiness(evaluation, { status: 'available' }, false).confidencePct).toBeGreaterThan(0)
+    expect(safeDecisionAction(evaluation.decisions[0]).unheld).toBe('建仓')
+    expect(safeDecisionAction(evaluation.decisions[0], false).unheld).toBe('待盘中复核')
   })
 
   it('does not rank a product with an implausible tracking error', () => {
@@ -30,6 +32,20 @@ describe('report investment readiness', () => {
 
   it('guards direct action wording in archived AI sections',()=>{
     expect(guardActionLanguage({analysis:'未持有观望、已持有减仓'},false)).toEqual({analysis:'未持有暂缓新增、已持有复核风险敞口'})
+  })
+  it('separates missing data from unmet market signals and deduplicates valuation indices',()=>{
+    const evaluation=evaluateResearch(fixture())
+    evaluation.decisions[0].conditions.find(item=>item.key==='premium')!.value=null
+    evaluation.decisions[0].conditions.find(item=>item.key==='premium')!.status='unknown'
+    evaluation.decisions[0].conditions.find(item=>item.key==='trend')!.status='unmet'
+    evaluation.products=[
+      {ticker:'A',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]},
+      {ticker:'B',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]},
+    ]
+    const coverage=reportCoverage(evaluation)
+    expect(coverage.data.find(item=>item.key==='premium')?.known).toBe(0)
+    expect(coverage.signalUnmet).toBe(1)
+    expect(coverage.data.find(item=>item.key==='valuation-history')).toMatchObject({known:0,total:1})
   })
   it('selects one representative per exposure family and rejects anomalous tracking first',()=>{
     const evaluation=evaluateResearch(fixture()),chip=structuredClone(evaluation.decisions[0]),cloud=structuredClone(evaluation.decisions[0]),communication=structuredClone(evaluation.decisions[0])

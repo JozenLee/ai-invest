@@ -2,6 +2,7 @@ import { ExecutionOrchestrator } from '../execution-orchestrator'
 import { freezeResearchStep } from '../steps/freeze-research-step'
 import { fetchPortfolioStep } from '../steps/fetch-portfolio-step'
 import { portfolioAnalysisStep } from '../steps/portfolio-analysis-step'
+import { portfolioDecisionStep } from '../steps/portfolio-decision-step'
 import { socialReportStep } from '../steps/social-report-step'
 import { assessDataQualityStep } from '../steps/assess-data-quality-step'
 import { fetchETFsStep } from '../steps/fetch-etfs-step'
@@ -60,6 +61,7 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     calculateMarketTrendsStep,
     assessDataQualityStep,
     etfActionStep,
+    portfolioDecisionStep,
 
     // AI分析报告阶段
     marketAnalysisStep,

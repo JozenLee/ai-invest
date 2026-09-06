@@ -33,6 +33,11 @@ model UserSetting {
   investHorizon String @default("medium") // short/medium/long
   totalAssets   Float  @default(0)
   cashRatio     Float  @default(0.2)
+  minCashRatio Float  @default(0.1)
+  maxIndustryRatio Float @default(0.2)
+  maxFundRatio Float @default(0.15)
+  maxSingleAdjustmentRatio Float @default(0.05)
+  stagedAdjustment Boolean @default(true)
   user          User   @relation(fields: [userId], references: [id])
 }
 
@@ -93,6 +98,14 @@ model Holding {
   industryDomainCode String? // 知识图谱产业领域代码或ID
   industryDomainSource String? // ai/manual
   industryDomainConfidence Float? // AI匹配置信度 0-1
+  fundType      String? // etf/feeder/index-enhanced/active/qdii/other
+  targetEtfCode String? // 联接基金对应的场内ETF；人工或数据源核验
+  targetIndexCode String? // 基金跟踪指数代码
+  mappingSource String? // manual/provider/name-inference/domain-proxy
+  mappingConfidence Float? // 底层产品映射置信度 0-1
+  purchaseDate DateTime? // 用于估算赎回费档位
+  costNav Float? // 用户持仓成本净值
+  redemptionFeePct Float? // 当前持有期适用的赎回费率（%）
   quantity     Float // 持有份额（基金可能包含小数份额）
   unitNav      Float // 邮箱资产证明中的单位净值
   updatedAt    DateTime @updatedAt

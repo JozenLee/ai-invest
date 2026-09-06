@@ -1,4 +1,5 @@
 import { etfActionsMarkdown, type ETFAction } from './etf-actions'
+import type { DecisionTimingAssessment } from './decision-timing'
 
 const labels: Record<string, string> = {
   analysis: '分析', score: '评分', rating: '评级', thesis: '投资论点', etfImplications: 'ETF影响',
@@ -18,7 +19,9 @@ function renderValue(value: unknown, depth = 0): string {
   return String(value)
 }
 
-export function fullResearchMarkdown(input: { title: string; sections: Array<{ title: string; value: unknown }>; actions: ETFAction[]; onePageAvailable: boolean }) {
+export function fullResearchMarkdown(input: { title: string; sections: Array<{ title: string; value: unknown }>; actions: ETFAction[]; onePageAvailable: boolean; decisionTiming?: DecisionTimingAssessment }) {
   const notice = input.onePageAvailable ? '' : '\n\n> 一页发布版暂不可用。以下为已完成的完整研究与ETF操作建议，不受一页模板字数限制。'
-  return `# ${input.title}${notice}\n\n` + input.sections.map(section => `## ${section.title}\n\n${renderValue(section.value)}`).join('\n\n') + '\n\n' + etfActionsMarkdown(input.actions)
+  const timing = input.decisionTiming
+  const timingNotice = timing ? `\n\n> **${timing.label}**：${timing.executionReady ? `本报告在收盘前决策窗口完成，有效至 ${timing.validUntil}。` : `不得据此直接下单。${timing.reasons.join('；') || '未通过盘中执行时效门禁'}。`}\n> 冻结时点：${timing.asOf}；收盘数据基准：${timing.closeDataSession || '未核验'}；事件截点：${timing.eventCutoff}。` : '\n\n> **仅供投资参考**：旧报告没有盘中时效审计，不得据此直接下单。'
+  return `# ${input.title}${notice}${timingNotice}\n\n` + input.sections.map(section => `## ${section.title}\n\n${renderValue(section.value)}`).join('\n\n') + '\n\n' + etfActionsMarkdown(input.actions)
 }

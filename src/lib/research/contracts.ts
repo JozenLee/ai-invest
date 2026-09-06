@@ -1,3 +1,5 @@
+import type { DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
+
 /** Versioned, serializable boundary shared by collection, research, replay and UI. */
 export const RESEARCH_VERSION = 1 as const
 export type Bar = { date: string; open: number; high: number; low: number; close: number; volume: number; amount: number }
@@ -8,6 +10,7 @@ export type Profile = {
   version: 1; industryId: string; name: string; benchmark: string; horizonDays: number;
   sectors: string[]; segments: Array<{ name: string; companies: string[] }>;
   leaders: Array<{ code: string; name: string; segment: string }>;
+  historyReports?: { enabled: boolean; lookbackTradingDays: number; mode: 'latest-per-trading-day' };
   rules: { minHistory: number; maxPremiumPct: number; minDailyAmount: number; maxSpreadBps: number; maxVolatilityPct: number; flowDays: number; entryConfirmDays: number };
 }
 export type EventInput = { id: string; title: string; content: string; source: string; url?: string | null; publishedAt: string; fetchedAt: string; company?: string; segments?: string[]; kind: 'announcement' | 'news' }
@@ -30,10 +33,12 @@ export type ResearchSnapshot = {
   version: 1; id: string; asOf: string; capturedAt: string; profile: Profile; calendar: CalendarDay[]; evidence: Evidence[];
   etfs: ETFInput[]; benchmarkBars: Bar[]; sectorFlows: Array<{ date: string; sector: string; net: number; netPct: number | null; evidenceId: string }>;
   events: ResearchEvent[];
+  historicalReports?: Array<{ reportId:string; industryId:string; industryName:string; sessionDate:string; createdAt:string; title:string; summary:string; confidencePct:number|null; recommendation:unknown; stateCounts:Record<string,number>; role:'historical-context' }>;
   companies: Array<{ code: string; name: string; segment: string; pool: 'holding' | 'leader' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; evidenceIds: string[] }>;
   /** Frozen projections keep the existing report steps on exactly the same input. */
   projections: Record<string, Record<string, unknown>>;
   records?: Record<string, unknown>;
+  decisionTiming?: DecisionTimingAssessment;
   workflow?: { runId: string; parentRunId: string | null; baselineSnapshotId: string | null };
 }
 export type Condition = { key: string; label: string; value: number | string | null; operator: '>=' | '<=' | '='; threshold: number | string; status: 'met' | 'unmet' | 'unknown'; evidenceIds: string[] }

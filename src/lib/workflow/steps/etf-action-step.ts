@@ -2,6 +2,7 @@ import type { StepDefinition } from '../types'
 import type { ResearchSnapshot } from '@/lib/research/contracts'
 import { latestEvaluation, persistEvaluation, readSnapshot } from '@/lib/research/store'
 import { evaluateResearch } from '@/lib/research/engine'
+import { decisionConfidence, reportAdviceConfidence } from '@/lib/analysis/report-insights'
 
 export const etfActionStep: StepDefinition = {
   name: 'etf-actions', description: '逐ETF规则决策、条件校验与变更记录（实验研究）',
@@ -14,7 +15,8 @@ export const etfActionStep: StepDefinition = {
       : await latestEvaluation(snapshot.profile.industryId)
     const evaluation=await persistEvaluation(snapshot,previous?.snapshotId===snapshot.id?null:previous)
     await context.saveArtifact('research-evaluation',evaluation,'DATA')
-    await context.saveArtifact('etf-actions',evaluation.decisions,'DATA')
-    await context.updateProgress(1,1,'规则已逐只执行，缺口不会触发卖出；尚未经样本外验证')
+    const reportConfidence=reportAdviceConfidence(evaluation,context.artifacts.get('data-quality'))
+    await context.saveArtifact('etf-actions',evaluation.decisions.map(decision=>({...decision,confidencePct:Math.min(decisionConfidence(decision),reportConfidence)})),'DATA')
+    await context.updateProgress(1,1,'已逐只生成带置信度的投资建议；缺失数据会降低置信度或转为观望')
   }
 }

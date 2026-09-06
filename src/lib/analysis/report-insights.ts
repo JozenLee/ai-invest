@@ -1,29 +1,94 @@
 import type { Decision, Evaluation } from '@/lib/research/contracts'
 import { matchesResearchDomain, researchTerms } from '@/lib/research/relevance'
+import type { DecisionTimingAssessment } from './decision-timing'
 
 export type ReportQuality = { status?: string } | null | undefined
 
-export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, performanceApproved = false) {
+const signalConditionKeys=new Set(['market','trend','relative','flow'])
+const dataConditionKeys=['calendar','session','history','continuity','adjustment','index','premium','liquidity','spread','volatility','holdings','fundamentals','profit-growth','cash-quality','events']
+
+export function reportCoverage(evaluation?:Evaluation){
+  const decisions=evaluation?.decisions||[],total=decisions.length
+  const omitted=new Set(evaluation?.omittedConditions?.map(item=>item.key)||[])
+  const conditionCount=(key:string,status?:'met'|'unmet'|'unknown')=>decisions.filter(decision=>{
+    const condition=decision.conditions.find(item=>item.key===key)
+    if(!condition)return status==='unknown'&&omitted.has(key)
+    return status?condition.status===status:condition.status!=='unknown'
+  }).length
+  const dataUnknown=dataConditionKeys.reduce((sum,key)=>sum+conditionCount(key,'unknown'),0)
+  const signalTotal=total*signalConditionKeys.size
+  const signalUnmet=[...signalConditionKeys].reduce((sum,key)=>sum+conditionCount(key,'unmet'),0)
+  const signalUnknown=[...signalConditionKeys].reduce((sum,key)=>sum+conditionCount(key,'unknown'),0)
+  const groups=new Map<string,NonNullable<Evaluation['products']>>()
+  for(const product of evaluation?.products||[]){if(product.indexCode)groups.set(product.indexCode,[...(groups.get(product.indexCode)||[]),product])}
+  const currentValuation=[...groups.values()].filter(rows=>rows.some(row=>finite(row.pe)&&row.pe!>0||finite(row.pb)&&row.pb!>0)).length
+  const historicalValuation=[...groups.values()].filter(rows=>rows.some(row=>(row.valuationSampleCount||0)>=500&&(finite(row.pePercentile5y)||finite(row.pbPercentile5y)))).length
+  return {
+    dataUnknown,dataTotal:total*dataConditionKeys.length,signalUnmet,signalUnknown,signalTotal,
+    data:[
+      {key:'premium',label:'同日折溢价',known:conditionCount('premium'),total},
+      {key:'spread',label:'同日买卖价差',known:conditionCount('spread'),total},
+      {key:'holdings',label:'最新持仓权重',known:conditionCount('holdings'),total},
+      {key:'profit-growth',label:'持仓加权利润',known:conditionCount('profit-growth'),total},
+      {key:'cash-quality',label:'持仓加权现金质量',known:conditionCount('cash-quality'),total},
+      {key:'valuation-history',label:'指数历史估值分位',known:historicalValuation,total:groups.size||evaluation?.indexBreadth.mappedIndices||0,detail:`${currentValuation}个指数仅有当期估值`},
+    ],
+    signals:[
+      {key:'market',label:'基准趋势',met:conditionCount('market','met'),total},
+      {key:'trend',label:'指数趋势确认',met:conditionCount('trend','met'),total},
+      {key:'relative',label:'相对基准转强',met:conditionCount('relative','met'),total},
+      {key:'flow',label:'领域资金改善',met:conditionCount('flow','met'),total},
+    ],
+  }
+}
+
+export function decisionConfidence(decision: Decision) {
+  const criticalKeys = new Set(['calendar','session','history','continuity','adjustment','index'])
+  const signalKeys = new Set(['market','trend','relative','flow'])
+  const fundamentalKeys = new Set(['holdings','fundamentals','profit-growth','cash-quality','events'])
+  const coverage = (keys:Set<string>) => {
+    const rows=decision.conditions.filter(item=>keys.has(item.key))
+    return rows.length ? rows.filter(item=>item.status!=='unknown').length/rows.length : 0
+  }
+  const score=Math.round(coverage(criticalKeys)*35+coverage(signalKeys)*25+coverage(fundamentalKeys)*20+Math.min(1,decision.evidenceIds.length/12)*20)
+  return Math.min(decision.state==='blocked'?35:decision.state==='watch'?75:90,Math.max(15,score))
+}
+
+export function reportAdviceConfidence(evaluation?:Evaluation,quality?:ReportQuality){
+  if(!evaluation?.decisions.length)return 0
+  const base=evaluation.decisions.reduce((sum,item)=>sum+decisionConfidence(item),0)/evaluation.decisions.length
+  const qualityFactor=quality?.status==='blocked' ? .45 : quality?.status==='limited' ? .8 : 1
+  return Math.round(base*qualityFactor)
+}
+
+export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, _performanceApproved = false, timing?: DecisionTimingAssessment) {
+  void _performanceApproved
   const reasons: string[] = []
   if (!evaluation) reasons.push('缺少冻结规则评估')
-  if (!performanceApproved) reasons.push('尚未完成两年以上样本外滚动验证')
-  if (quality?.status !== 'available') reasons.push('仍有产品或基本面数据缺口')
-  const approved = !!evaluation && performanceApproved && quality?.status === 'available'
+  if (quality?.status === 'blocked') reasons.push('核心行情数据不足，只能给出低置信度观望建议')
+  else if (quality?.status === 'limited') reasons.push('部分产品或基本面数据缺失，已降低建议置信度')
+  if (timing && !timing.executionReady) reasons.push(...timing.reasons)
+  const approved = !!evaluation && quality?.status !== 'blocked'
+  const executionReady = approved && timing?.executionReady !== false
   return {
-    level: approved ? 'trade-ready' as const : 'watch-only' as const,
-    label: approved ? '交易条件已验证' : '观察级报告',
+    level: executionReady ? 'advice-ready' as const : approved ? 'reference-only' as const : 'data-limited' as const,
+    label: executionReady ? '盘中投资建议' : approved ? '投资参考已生成' : '低置信度参考',
+    confidencePct: reportAdviceConfidence(evaluation,quality),
     reasons,
   }
 }
 
-export function safeDecisionAction(decision: Decision, tradeReady = false) {
-  if (decision.state === 'blocked') return { unheld: '数据受限', held: '保持原计划并复核数据', intent: '不形成动作' }
-  if (!tradeReady) {
-    if (decision.state === 'risk-off') return { unheld: '暂缓新增', held: '复核风险敞口', intent: '实验规则触发风险收缩，但不直接给出减仓比例' }
-    if (decision.state === 'eligible') return { unheld: '观察候选', held: '复核持有条件', intent: '条件满足但尚未经样本外验证' }
-    return { unheld: '继续观察', held: '复核持有条件', intent: '关键条件尚未全部满足' }
+export function safeDecisionAction(decision: Decision, _tradeReady = true) {
+  const confidencePct=decisionConfidence(decision)
+  if (decision.state === 'blocked') return { unheld: '观望', held: '持有并复核数据', intent: decision.reason||'核心数据不足，暂不改变仓位。', confidencePct }
+  if (!_tradeReady) {
+    if (decision.state === 'risk-off') return { unheld: '暂缓新增', held: '复核风险敞口', intent: `时效未通过，以下仅作参考：${decision.reason}`, confidencePct }
+    if (decision.state === 'eligible') return { unheld: '待盘中复核', held: '持有并等待复核', intent: `条件方向仅作参考：${decision.reason}`, confidencePct }
+    return { unheld: '观望', held: '持有并等待复核', intent: decision.reason||'关键条件尚未形成一致方向。', confidencePct }
   }
-  return { unheld: decision.unheldAction, held: decision.heldAction, intent: decision.reason }
+  if (decision.state === 'risk-off') return { unheld: '观望', held: '减仓', intent: decision.reason, confidencePct }
+  if (decision.state === 'eligible') return { unheld: '建仓', held: '持有', intent: decision.reason, confidencePct }
+  return { unheld: '观望', held: '持有', intent: decision.reason||'关键条件尚未形成一致方向。', confidencePct }
 }
 
 export function guardActionLanguage(value: unknown, tradeReady = false): unknown {

@@ -1,11 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Deliberately mutable Prisma test doubles; production boundaries are typed in store.ts. */
 import {beforeEach,afterEach,describe,it,expect,vi} from 'vitest'
-const state=vi.hoisted(()=>({raw:[] as any[],daily:[] as any[],index:[] as any[],holdings:[] as any[],reports:[] as any[],announcements:[] as any[],subscriptions:[] as any[]}))
+const state=vi.hoisted(()=>({raw:[] as any[],daily:[] as any[],index:[] as any[],holdings:[] as any[],reports:[] as any[],historicalReports:[] as any[],announcements:[] as any[],subscriptions:[] as any[]}))
 vi.mock('@/lib/db',()=>{
   const match=(r:any,w:any)=>!w||( (!w.id||r.id===w.id)&&(!w.datasetKey||typeof w.datasetKey==='object'||r.datasetKey===w.datasetKey)&&(!w.targetCode||typeof w.targetCode==='object'||r.targetCode===w.targetCode))
   const db:any={
     rawPayload:{findFirst:vi.fn(async({where}:any)=>state.raw.filter(r=>match(r,where)).sort((a,b)=>b.fetchedAt-a.fetchedAt)[0]||null),findMany:vi.fn(async()=>state.raw.filter(r=>!r.datasetKey.startsWith('research_evaluation')&&!r.datasetKey.startsWith('research_snapshot'))),findUnique:vi.fn(async({where}:any)=>state.raw.find(r=>r.id===where.id)||null),upsert:vi.fn(async({where,create}:any)=>{const existing=state.raw.find(r=>r.id===where.id);if(existing)return existing;const r={...create,fetchedAt:new Date()};state.raw.push(r);return r})},
-    dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},eTFDaily:{findMany:vi.fn(async()=>state.daily)},indexDaily:{findMany:vi.fn(async()=>state.index)},eTFHolding:{findMany:vi.fn(async()=>state.holdings)},stockFinancialReport:{findMany:vi.fn(async()=>state.reports)},stockAnnouncement:{findMany:vi.fn(async()=>state.announcements)},stockDaily:{findMany:vi.fn(async()=>[])},newsArticle:{findMany:vi.fn(async()=>[])},
+    dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},eTFDaily:{findMany:vi.fn(async()=>state.daily)},indexDaily:{findMany:vi.fn(async()=>state.index)},eTFHolding:{findMany:vi.fn(async()=>state.holdings)},stockFinancialReport:{findMany:vi.fn(async()=>state.reports)},stockAnnouncement:{findMany:vi.fn(async()=>state.announcements)},stockDaily:{findMany:vi.fn(async()=>[])},newsArticle:{findMany:vi.fn(async()=>[])},aIAnalysisReport:{findMany:vi.fn(async()=>state.historicalReports)},
     $transaction:vi.fn(async(arg:any)=>typeof arg==='function'?arg(db):Promise.all(arg)),
   };return {prisma:db}
 })
@@ -82,5 +82,13 @@ describe('P0→P2 frozen workflow integration',()=>{
     expect(artifacts.get('etf-actions')).toHaveLength(1)
     expect(artifacts.get('research-evaluation').validation).toBe('experimental-not-backtest-validated')
     expect(network).not.toHaveBeenCalled();network.mockRestore()
+  })
+  it('freezes the latest report per trading day as historical analysis context',async()=>{
+    state.historicalReports=[
+      {id:'older',industryId:'ai',industryName:'测试领域',title:'旧版',summary:'旧',createdAt:new Date('2026-09-03T08:00:00Z'),dataJson:JSON.stringify({researchEvaluation:{expectedSession:'2026-09-03',decisions:[]}})},
+      {id:'latest',industryId:'ai',industryName:'测试领域',title:'新版',summary:'新',createdAt:new Date('2026-09-03T09:00:00Z'),dataJson:JSON.stringify({researchEvaluation:{expectedSession:'2026-09-03',decisions:[]}})},
+    ]
+    const snapshot=await captureResearchSnapshot('ai')
+    expect(snapshot.historicalReports?.map(item=>item.reportId)).toEqual(['latest'])
   })
 })

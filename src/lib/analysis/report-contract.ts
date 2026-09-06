@@ -416,7 +416,9 @@ export function normalizeMarket(value: unknown): NormalizedMarket {
     analyzedAt: textValue(raw.analyzed_at ?? raw.analyzedAt),
     periodDays: numberValue(raw.analysis_period_days ?? raw.periodDays),
     etfs,
-    indices: marketIndices,  // 使用marketIndices数据填充indices
+    // `indices` is reserved for industry indices. Legacy `index_analysis`
+    // contains broad-market benchmarks and must not be rendered twice.
+    indices: [],
     marketIndices,
     overview,
     sectorFlow: normalizeSectorFlow(raw.sector_flow ?? raw.sectorFlow),

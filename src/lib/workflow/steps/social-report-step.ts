@@ -21,18 +21,27 @@ function cited(value:Record<string,any>,fallback:string){
 function scenario(value:unknown){return prose(value).replace(/[。；;]+$/u,'')||'待核验'}
 function companyHighlight(company:Record<string,any>){
   const item=Array.isArray(company.key_companies)?company.key_companies[0]:null
-  return item?.fact?`【${item.evidence||'来源待核验'}】${item.company||item.name||'代表企业'}：${item.fact}`:cited(company,'企业盈利质量证据不足。')
+  if(!item?.fact)return cited(company,'企业盈利质量证据不足。')
+  const name=String(item.company||item.name||'代表企业'),code=String(item.code||'')
+  const evidence=(Array.isArray(company.evidence)?company.evidence:[]).find((candidate:any)=>{
+    const claim=String(candidate?.claim||'')
+    return claim.includes(name)||(code&&claim.includes(code))
+  })
+  const citation=item.evidence?String(item.evidence):evidence?`${evidence.date||'日期待核验'}｜${evidence.source||'来源待核验'}`:'来源待核验'
+  return `${citation}：${name}：${item.fact}`
 }
 
 function buildSocialReport(context:StepContext):SocialReport{
   const industry=parsed(context.artifacts.get('industry-info')),market=parsed(context.artifacts.get('market-analysis')),company=parsed(context.artifacts.get('company-analysis'))
   const news=parsed(context.artifacts.get('news-analysis')),overview=parsed(context.artifacts.get('industry-overview')),investment=parsed(context.artifacts.get('investment-advice'))
   const evaluation=context.artifacts.get('research-evaluation'),decisions=evaluation?.decisions||[],riskOff=decisions.filter((item:any)=>item.state==='risk-off').length,eligible=decisions.filter((item:any)=>item.state==='eligible').length
-  const scenarios=investment.scenarios||{},valuationCount=(evaluation?.products||[]).filter((item:any)=>Number.isFinite(item.pe)||Number.isFinite(item.pb)).length
+  const scenarios=investment.scenarios||{},valuationProducts=(evaluation?.products||[]).filter((item:any)=>Number.isFinite(item.pe)||Number.isFinite(item.pb))
+  const valuationCount=new Set(valuationProducts.map((item:any)=>item.indexCode).filter(Boolean)).size
+  const historicalValuationCount=new Set(valuationProducts.filter((item:any)=>item.valuationSampleCount>=500&&(Number.isFinite(item.pePercentile5y)||Number.isFinite(item.pbPercentile5y))).map((item:any)=>item.indexCode).filter(Boolean)).size
   const draft={version:2 as const,title:`${industry.name||'产业'}ETF观察`,subtitle:first(overview.analysis||investment.thesis,'产业与市场证据已完成交叉复核。'),takeaways:[
     `产业：${overview.stage||'阶段待核验'}，盈利质量仍需持续验证。`,
     `战术：${riskOff}只风险收缩，${eligible}只满足实验条件。`,
-    `估值：${valuationCount}只产品有底层数据，仍为观察级。`,
+    `估值：${valuationCount}个指数有当期值，${historicalValuationCount}个具备历史分位。`,
   ],sections:[
     {title:REPORT_SECTIONS[0],body:cited(news,first(overview.drivers||overview.analysis,'产业驱动证据不足。'))},
     {title:REPORT_SECTIONS[1],body:companyHighlight(company)},

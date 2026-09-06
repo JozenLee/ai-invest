@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest'
 import {fixture} from './fixtures'
-import {evaluateResearch,adjustedBars} from '../engine'
+import {evaluateResearch,adjustedBars,requiredHoldingPeriod,selectProductNav} from '../engine'
 import {sessionBoundary,dateKey,visibleAt,nextReview} from '../time'
 import {clusterEvents} from '../events'
 import {validateProfile} from '../profile'
@@ -58,6 +58,20 @@ describe('P1 mapping and representative evidence',()=>{
     expect(d.conditions.find(c=>c.key==='spread')).toBeUndefined();expect(d.conditions.find(c=>c.key==='fundamentals')?.status).toBe('unmet')
     expect(evaluateResearch(s).omittedConditions?.map(item=>item.key)).toContain('spread')
   })
+  it('requires the latest legally available holding period instead of a loose age window',()=>{
+    expect(requiredHoldingPeriod('2026-09-04')).toBe('2026-06-30')
+    const s=fixture();s.etfs[0].holdings[0].period='2026-03-31';s.etfs[0].holdings[0].publishedAt='2026-04-20'
+    const holding=evaluateResearch(s).decisions[0].conditions.find(condition=>condition.key==='holdings')
+    expect(holding?.status).toBe('unknown')
+  })
+  it('uses aligned share-size NAV only when its own close passes a sanity check',()=>{
+    expect(selectProductNav({cutoff:'2026-09-04',officialDate:'2026-08-28',officialNav:1,shareDate:'2026-09-04',shareNav:1.01,shareClose:1.02})).toMatchObject({date:'2026-09-04',nav:1.01,source:'etf_share_size'})
+    expect(selectProductNav({cutoff:'2026-09-04',officialDate:'2026-08-28',officialNav:1,shareDate:'2026-09-04',shareNav:1,shareClose:2})).toMatchObject({date:'2026-08-28',nav:1,source:'fund_nav'})
+  })
+  it('uses a bounded weighted median for look-through growth',()=>{
+    const s=fixture();s.companies[0].profitGrowthPct=5000
+    expect(evaluateResearch(s).decisions[0].conditions.find(condition=>condition.key==='profit-growth')?.value).toBe(300)
+  })
   it('does not turn good technicals into entry when earnings or cash deteriorate',()=>{
     const s=fixture();s.companies[0].profitGrowthPct=-20;s.companies[0].cashConversionPct=10
     const d=evaluateResearch(s).decisions[0];expect(d.state).toBe('watch');expect(d.conditions.find(c=>c.key==='profit-growth')?.status).toBe('unmet')
@@ -92,7 +106,7 @@ describe('P2 decisions and paper replay',()=>{
   it('reduces risk only on verified market signals, not on missing data',()=>{
     const s=fixture();s.benchmarkBars=s.benchmarkBars.map((b,i)=>({...b,open:300-i,high:301-i,low:299-i,close:300-i}));s.etfs[0].bars=s.etfs[0].bars.map((b,i)=>({...b,open:300-i,high:301-i,low:299-i,close:300-i}));s.etfs[0].indexBars=s.etfs[0].indexBars.map((b,i)=>({...b,open:300-i,high:301-i,low:299-i,close:300-i}))
     const risk=evaluateResearch(s).decisions[0]
-    expect(risk.state).toBe('risk-off');expect(risk.ruleAction?.held).toBe('减仓');expect(risk.heldAction).toBe('观望')
+    expect(risk.state).toBe('risk-off');expect(risk.ruleAction?.held).toBe('减仓');expect(risk.heldAction).toBe('减仓')
     s.etfs[0].factors=[];expect(evaluateResearch(s).decisions[0].heldAction).toBe('观望')
   })
   it('does not make a broad benchmark signal an industry-wide exit by itself',()=>{

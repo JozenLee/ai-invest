@@ -23,6 +23,22 @@ function condition(key: string,label: string,value: number|string|null,operator:
   const met = known && (operator==='='?value===threshold:operator==='>='?value>=threshold:value<=threshold)
   return {key,label,value,operator,threshold,status:!known?'unknown':met?'met':'unmet',evidenceIds}
 }
+export function requiredHoldingPeriod(cutoff:string|null){
+  if(!cutoff||!/^\d{4}-\d{2}-\d{2}$/.test(cutoff))return null
+  const year=Number(cutoff.slice(0,4)),monthDay=cutoff.slice(5)
+  if(monthDay>='10-31')return `${year}-09-30`
+  if(monthDay>='08-31')return `${year}-06-30`
+  if(monthDay>='04-30')return `${year}-03-31`
+  if(monthDay>='01-31')return `${year-1}-12-31`
+  return `${year-1}-09-30`
+}
+export function selectProductNav(input:{cutoff:string|null;officialDate:string|null;officialNav:number|null;shareDate:string|null;shareNav:number|null;shareClose:number|null}){
+  const positive=(value:number|null)=>value!==null&&Number.isFinite(value)&&value>0
+  if(input.officialDate===input.cutoff&&positive(input.officialNav))return {date:input.officialDate,nav:input.officialNav,source:'fund_nav' as const}
+  const shareAligned=input.shareDate===input.cutoff&&positive(input.shareNav)&&positive(input.shareClose)&&Math.abs(input.shareClose!/input.shareNav!-1)<=0.05
+  if(shareAligned)return {date:input.shareDate,nav:input.shareNav,source:'etf_share_size' as const}
+  return {date:input.officialDate,nav:positive(input.officialNav)?input.officialNav:null,source:positive(input.officialNav)?'fund_nav' as const:null}
+}
 export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluation | null): Evaluation {
   const boundary=sessionBoundary(snapshot.calendar,snapshot.asOf), cutoff=boundary.expectedSession
   const openDates=new Set(snapshot.calendar.filter(c=>c.open).map(c=>c.date))
@@ -63,7 +79,8 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
       const sample=indices.slice(0,indices.length-i); return sample.at(-1)!.close>mean(sample.slice(-20).map(b=>b.close))!
     }).every(Boolean):null
     const benchmarkTrend=benchmarkValid?benchmark.at(-1)!.close/mean(benchmark.slice(-60).map(b=>b.close))!-1:null
-    const holdingsKnown=etf.holdings.length>0&&new Set(etf.holdings.map(h=>h.period)).size===1&&etf.holdings.every(h=>h.period&&h.publishedAt&&dateKey(h.period)!<=cutoff!&&Date.parse(snapshot.asOf)-Date.parse(h.period)<190*86400000&&Date.parse(h.publishedAt)<=Date.parse(snapshot.asOf)&&finite(h.weight)&&h.weight>=0&&h.weight<=100)&&etf.holdings.reduce((s,h)=>s+(h.weight||0),0)<=100.5
+    const holdingFloor=requiredHoldingPeriod(cutoff)
+    const holdingsKnown=etf.holdings.length>0&&new Set(etf.holdings.map(h=>h.period)).size===1&&etf.holdings.every(h=>h.period&&h.publishedAt&&holdingFloor&&dateKey(h.period)!>=holdingFloor&&dateKey(h.period)!<=cutoff!&&Date.parse(h.publishedAt)<=Date.parse(snapshot.asOf)&&finite(h.weight)&&h.weight>=0&&h.weight<=100)&&etf.holdings.reduce((s,h)=>s+(h.weight||0),0)<=100.5
     const weight=holdingsKnown?etf.holdings.reduce((s,h)=>s+h.weight!,0):null
     // A decision cites representative records, not every raw bundle ever fetched for the product.
     const priceEvidenceIds=etf.evidenceIds.slice(0,12)
@@ -103,9 +120,14 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     conditions.push(condition('fundamentals','持仓企业多期财报覆盖(%)',financialCoverage,'>=',80,companyEvidenceIds))
     const weightedFinancial=(field:'profitGrowthPct'|'cashConversionPct')=>{
       if(weight===null||weight<=0)return null
-      const rows=etf.holdings.flatMap(h=>{const company=covered.find(c=>c.code===h.code),value=company?.[field];return finite(value)&&h.weight!==null?[{value,weight:h.weight}]:[]})
+      const bounds=field==='profitGrowthPct'?[-100,300]:[-300,300]
+      const rows=etf.holdings.flatMap(h=>{const company=covered.find(c=>c.code===h.code),value=company?.[field];return finite(value)&&h.weight!==null?[{value:Math.min(bounds[1],Math.max(bounds[0],value)),weight:h.weight}]:[]})
       const knownWeight=rows.reduce((n,r)=>n+r.weight,0)
-      return knownWeight>=weight*0.8?rows.reduce((n,r)=>n+r.value*r.weight,0)/knownWeight:null
+      if(knownWeight<weight*0.8)return null
+      const ordered=[...rows].sort((a,b)=>a.value-b.value)
+      let cumulative=0
+      for(const row of ordered){cumulative+=row.weight;if(cumulative>=knownWeight/2)return row.value}
+      return null
     }
     conditions.push(condition('profit-growth','披露持仓加权利润同比(%，同币种同报告期)',weightedFinancial('profitGrowthPct'),'>=',0,companyEvidenceIds))
     conditions.push(condition('cash-quality','披露持仓加权经营现金/利润(%)',weightedFinancial('cashConversionPct'),'>=',50,companyEvidenceIds))
@@ -119,8 +141,8 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     const trackingDiff=trackingDates.slice(1).flatMap((d,i)=>{const before=trackingDates[i];return navMap.has(d)&&navMap.has(before)&&iMap.has(d)&&iMap.has(before)?[navMap.get(d)!/navMap.get(before)!-iMap.get(d)!.close/iMap.get(before)!.close]:[]})
     const tracking=trackingDiff.length>=20?std(trackingDiff):null
     const ruleAction={unheld:state==='eligible'?'建仓' as const:'观望' as const,held:state==='eligible'?'持有' as const:state==='risk-off'?'减仓' as const:'观望' as const}
-    return {ticker:etf.ticker,name:etf.name,indexCode:etf.indexCode,state,unheldAction:'观望' as const,heldAction:'观望' as const,ruleAction,researchOnly:true,
-      reason:state==='eligible'?'实验规则全部满足，仅作为模拟跟踪候选；样本外验证通过前不形成建仓指令。':state==='risk-off'?'已核验价格或市场条件触发风险复核；样本外验证通过且取得组合风险预算前，不直接给出减仓指令。':gaps.join('；'),
+    return {ticker:etf.ticker,name:etf.name,indexCode:etf.indexCode,state,unheldAction:ruleAction.unheld,heldAction:ruleAction.held,ruleAction,researchOnly:true,
+      reason:state==='eligible'?'价格、相对强度、资金与产品门禁均满足，建议按风险预算分批建仓；后续按失效条件复核。':state==='risk-off'?'已核验的价格与市场条件触发风险收缩，未持有者建议观望，已持有者建议按组合风险预算分批减仓。':state==='blocked'?'核心数据条件不足，建议维持观望并优先补齐数据。':gaps.join('；'),
       trigger:`规则版本1：连续${rules.entryConfirmDays}日指数趋势确认、相对强度、${rules.flowDays}日资金及全部产品/证据门禁同时满足。`,
       invalidation:'基准或ETF跌破60日均线、重大事件风险、任一关键数据失效；新事件需人工核验，不自动清仓。',horizon:`${profile.horizonDays}个交易日，盘后复核，次日盘前过期`,evidence:evidenceIds.map(id=>{const e=snapshot.evidence.find(e=>e.id===id);return e?`${id} · ${e.source} · ${e.dataDate||e.publishedAt||'日期未知'}`:id}),
       conditions,gaps,evidenceIds,expiresAt:expiry,metrics:{date,ma20,ma60,return20Pct:ret,relative20Pct:rs,volatilityPct:volatility===null?null:volatility*Math.sqrt(252)*100,premiumPct:premium,amount20:amount,flowSum,flowNetPct,flowDays:flowComplete?rules.flowDays:0,adjusted,trackingErrorPct:tracking===null?null:tracking*Math.sqrt(252)*100,disclosedWeightPct:weight} }
@@ -137,7 +159,7 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
       const gaps=conditions.filter(condition=>condition.status!=='met').map(condition=>`${condition.label}：${condition.status==='unknown'?'证据缺失或口径未核验':'未满足条件'}`)
       const state=decision.state==='blocked'?'blocked':decision.state==='risk-off'?'risk-off':conditions.every(condition=>condition.status==='met')?'eligible':'watch'
       const ruleAction={unheld:state==='eligible'?'建仓' as const:'观望' as const,held:state==='eligible'?'持有' as const:state==='risk-off'?'减仓' as const:'观望' as const}
-      return {...decision,conditions,gaps,state,unheldAction:'观望' as const,heldAction:'观望' as const,ruleAction,evidenceIds:[...new Set(conditions.flatMap(condition=>condition.evidenceIds))]}
+      return {...decision,conditions,gaps,state,unheldAction:ruleAction.unheld,heldAction:ruleAction.held,ruleAction,evidenceIds:[...new Set(conditions.flatMap(condition=>condition.evidenceIds))]}
     })
   }
   const indexGroups=new Map<string,Bar[]>()
