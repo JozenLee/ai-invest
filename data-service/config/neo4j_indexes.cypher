@@ -4,6 +4,7 @@
 // Industry节点索引
 CREATE INDEX industry_code_idx IF NOT EXISTS FOR (i:Industry) ON (i.code);
 CREATE INDEX industry_id_idx IF NOT EXISTS FOR (i:Industry) ON (i.id);
+CREATE INDEX industry_revision_idx IF NOT EXISTS FOR (i:Industry) ON (i.revision_id);
 CREATE CONSTRAINT industry_id_unique IF NOT EXISTS FOR (i:Industry) REQUIRE i.id IS UNIQUE;
 
 // Stage节点索引

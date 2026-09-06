@@ -3,7 +3,7 @@ import os
 import yaml
 import json
 import asyncio
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from anthropic import AsyncAnthropic
 from tavily import TavilyClient
 from models.industry_models import (
@@ -14,7 +14,9 @@ from models.industry_models import (
     CompanyInfo,
     RelationshipInfo,
     SegmentDetail,
-    ExplorationResult
+    ExplorationResult,
+    EvidenceRef,
+    SegmentRelationshipInfo,
 )
 
 class IndustryExplorerService:
@@ -30,7 +32,11 @@ class IndustryExplorerService:
         )
         self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
 
-    async def explore_structure(self, industry_name: str) -> IndustryStructure:
+    async def explore_structure(
+        self,
+        industry_name: str,
+        description: Optional[str] = None,
+    ) -> IndustryStructure:
         """
         第一轮：探索产业链结构
 
@@ -41,16 +47,17 @@ class IndustryExplorerService:
             IndustryStructure: 产业链骨架
         """
         # 1. 搜索产业研究资料
-        search_context = await self._search_industry_info(industry_name)
+        search_context, evidence = await self._search_industry_info(industry_name)
 
         # 2. 生成结构化Prompt
-        prompt = self._build_structure_prompt(industry_name, search_context)
+        prompt = self._build_structure_prompt(industry_name, search_context, description)
 
         # 3. 调用Claude分析
         response = await self._call_claude_for_structure(prompt)
 
         # 4. 解析YAML响应
         structure = self._parse_structure_response(response, industry_name)
+        structure.evidence = evidence
 
         return structure
 
@@ -87,6 +94,7 @@ class IndustryExplorerService:
             response,
             current_structure.industry.name
         )
+        refined_structure.evidence = current_structure.evidence
 
         return refined_structure
 
@@ -98,7 +106,11 @@ class IndustryExplorerService:
                 "code": structure.industry.code,
                 "description": structure.industry.description
             },
-            "structure": []
+            "structure": [],
+            "relationships": [
+                relationship.model_dump(by_alias=True)
+                for relationship in structure.relationships
+            ],
         }
 
         for stage in structure.structure:
@@ -181,12 +193,24 @@ structure:
         code: 环节代码  # ⚠️ 保留的环节使用原有code
         description: 环节描述
         key_categories: [类别列表]
+
+relationships:
+  - from: 源环节code
+    to: 目标环节code
+    type: SUPPLIES
+    direction: positive
+    weight: 0.7
+    confidence: 0.8
+    lag: 中期
+    description: 关系说明
+    evidence_urls: []
 ```
 
 **要求：**
 - 必须输出完整的YAML结构，不能省略未修改的部分
 - 根据用户反馈进行针对性修改
 - ⚠️ 保留的环节必须使用原有code，不能随意改变
+- 同步维护 relationships；删除环节时必须删除引用它的关系
 - 保持YAML格式正确
 - 只输出YAML，不要其他解释
 
@@ -200,7 +224,10 @@ structure:
 """
         return prompt
 
-    async def _search_industry_info(self, industry_name: str) -> str:
+    async def _search_industry_info(
+        self,
+        industry_name: str,
+    ) -> Tuple[str, List[EvidenceRef]]:
         """搜索产业链相关信息"""
         query = f"{industry_name} 产业链 上中下游 研究报告 结构分析"
 
@@ -214,27 +241,43 @@ structure:
 
             # 提取关键内容
             context_parts = []
+            evidence: List[EvidenceRef] = []
 
             if result.get("answer"):
                 context_parts.append(f"综述：{result['answer']}")
 
             for item in result.get("results", [])[:5]:
+                title = item.get('title', '')
+                url = item.get('url', '')
+                excerpt = item.get('content', '')[:500]
                 context_parts.append(
-                    f"来源：{item.get('title', '')}\n"
-                    f"内容：{item.get('content', '')[:500]}"
+                    f"来源：{title}\n"
+                    f"链接：{url}\n"
+                    f"内容：{excerpt}"
                 )
+                if title and url:
+                    evidence.append(EvidenceRef(title=title, url=url, excerpt=excerpt))
 
-            return "\n\n".join(context_parts)
+            return "\n\n".join(context_parts), evidence
 
         except Exception as e:
             print(f"搜索失败: {e}")
-            return ""
+            return "", []
 
-    def _build_structure_prompt(self, industry_name: str, context: str) -> str:
+    def _build_structure_prompt(
+        self,
+        industry_name: str,
+        context: str,
+        description: Optional[str] = None,
+    ) -> str:
         """构建第一轮探索Prompt"""
         code = self._generate_industry_code(industry_name)
 
+        scope = description.strip() if description and description.strip() else "未额外限定，以产业通行口径为准"
         prompt = f"""你是一位专业的产业分析师。请分析「{industry_name}」产业链结构。
+
+**用户定义的研究边界：**
+{scope}
 
 **参考资料：**
 {context}
@@ -243,6 +286,7 @@ structure:
 1. 识别产业链的上游、中游、下游阶段
 2. 列出每个阶段包含的关键环节（segment）
 3. 每个环节需包含：名称、功能描述、核心技术/产品类别
+4. 给出环节之间可用于事件传导的有向关系，必须能由参考资料支持
 
 **输出格式（YAML）：**
 ```yaml
@@ -278,6 +322,17 @@ structure:
         code: segment_code
         description: 功能描述
         key_categories: []
+
+relationships:
+  - from: upstream_segment_code
+    to: downstream_segment_code
+    type: SUPPLIES  # 仅限 SUPPLIES/INFLUENCES/CONSTRAINS/SUBSTITUTES
+    direction: positive  # positive/negative/mixed
+    weight: 0.7
+    confidence: 0.8
+    lag: 中期
+    description: 关系及传导条件
+    evidence_urls: [支持该关系的参考资料链接]
 ```
 
 **要求：**
@@ -286,6 +341,8 @@ structure:
 - 环节划分要清晰，避免重叠
 - 每个阶段2-4个环节为宜
 - code使用英文小写下划线格式
+- relationships 的 from/to 必须引用本次输出的 segment code
+- 证据不足的关系不要输出，不得用常识补全来源
 - 只输出YAML，不要其他解释
 
 **⚠️ 关键约束（产业名称）：**
@@ -370,6 +427,32 @@ structure:
             if data["industry"]["name"] != industry_name:
                 print(f"[WARNING] AI修改了产业名称: '{data['industry']['name']}' -> '{industry_name}'（已强制修正）")
                 data["industry"]["name"] = industry_name
+
+            segment_codes = {
+                segment.get("code")
+                for stage in data.get("structure", [])
+                for segment in stage.get("segments", [])
+                if isinstance(segment, dict) and segment.get("code")
+            }
+            normalized_relationships = []
+            relation_aliases = {"ENABLES": "INFLUENCES", "DRIVES_DEMAND": "INFLUENCES"}
+            for raw_relation in data.get("relationships", []) or []:
+                if not isinstance(raw_relation, dict):
+                    continue
+                candidate = dict(raw_relation)
+                candidate["type"] = relation_aliases.get(
+                    str(candidate.get("type", "")).upper(),
+                    str(candidate.get("type", "")).upper(),
+                )
+                if candidate.get("from") not in segment_codes or candidate.get("to") not in segment_codes:
+                    continue
+                try:
+                    normalized_relationships.append(
+                        SegmentRelationshipInfo(**candidate).model_dump(by_alias=True)
+                    )
+                except Exception as relation_error:
+                    print(f"跳过无效环节关系: {relation_error}")
+            data["relationships"] = normalized_relationships
 
             # 使用Pydantic解析和验证
             structure = IndustryStructure(**data)
@@ -538,6 +621,7 @@ structure:
             response,
             current_structure.industry.name
         )
+        refined_structure.evidence = current_structure.evidence
         logger.info(f"[refine_unified] 结构解析完成，阶段数: {len(refined_structure.structure)}")
 
         # 5. 如果结构发生了变化（新增或删除环节），需要相应调整企业信息
@@ -838,12 +922,25 @@ structure:
         code: 环节代码  # ⚠️ 保留的环节使用原有code
         description: 环节描述
         key_categories: [类别列表]
+
+relationships:
+  - from: 源环节code
+    to: 目标环节code
+    type: SUPPLIES
+    direction: positive
+    weight: 0.7
+    confidence: 0.8
+    lag: 中期
+    description: 关系说明
+    evidence_urls: []
 ```
 
 **要求：**
 - 必须输出完整的YAML结构，不能省略未修改的部分
 - 根据用户反馈进行针对性修改
 - ⚠️ 保留的环节必须使用原有code，不能随意改变
+- 必须同步维护 relationships；删除环节时删除所有引用关系
+- 未被反馈涉及的关系保持原样，证据不足不得新增关系
 - 保持YAML格式正确
 - 只输出YAML，不要其他解释
 
@@ -990,7 +1087,9 @@ structure:
             context_parts = []
             for item in result.get("results", []):
                 context_parts.append(
-                    f"{item.get('title', '')}\n{item.get('content', '')[:400]}"
+                    f"{item.get('title', '')}\n"
+                    f"链接：{item.get('url', '')}\n"
+                    f"{item.get('content', '')[:400]}"
                 )
 
             return "\n\n".join(context_parts)
@@ -1036,7 +1135,8 @@ structure:
       "country": "国家代码（如CN/US/JP）",
       "market_position": "市场地位（leader/major/emerging）",
       "key_products": ["主要产品1", "主要产品2"],
-      "description": "企业简介（1-2句话）"
+      "description": "企业简介（1-2句话）",
+      "evidence_urls": ["直接支持企业归属和主营判断的搜索结果链接"]
     }}
   ],
   "relationships": []
@@ -1046,6 +1146,7 @@ structure:
 **要求：**
 - 优先选择A股上市公司，其次港股、美股
 - 必须包含股票代码和交易所
+- 每家企业必须提供至少一个搜索结果中的 evidence_urls；无法提供证据的企业不要输出
 - 只输出JSON，不要其他解释
 """
         return prompt
@@ -1102,7 +1203,8 @@ structure:
       "country": "国家代码（如CN/US/JP）",
       "market_position": "市场地位（leader/major/emerging）",
       "key_products": ["主要产品1", "主要产品2"],
-      "description": "企业简介（1-2句话）"
+      "description": "企业简介（1-2句话）",
+      "evidence_urls": ["直接支持企业归属和主营判断的搜索结果链接"]
     }}
   ],
   "relationships": []
@@ -1116,6 +1218,7 @@ structure:
 - 只输出JSON，不要其他解释
 - 优先选择A股上市公司，其次港股、美股
 - 必须包含股票代码和交易所
+- 新增企业必须提供至少一个搜索结果中的 evidence_urls
 """
         return prompt
 

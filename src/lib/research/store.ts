@@ -13,12 +13,13 @@ import { chinaDate, dateKey, sessionBoundary } from './time'
 import { matchesResearchDomain, researchTerms } from './relevance'
 import { selectHistoricalReports } from './history-reports'
 import { assessDecisionTiming } from '@/lib/analysis/decision-timing'
+import { buildFrozenGraphContext, graphCompanyCandidates, type RawGraphGroup } from '@/lib/graph/research-context'
 
 export const encode = (value: unknown) => JSON.stringify(value, (_key,v)=>typeof v==='bigint'?Number(v):v)
 export const digest = (value: unknown) => createHash('sha256').update(encode(value)).digest('hex')
 type WireRow = Record<string, string | number | boolean | null>
 type SubscriptionProfile = {industryId?:string;industryName?:string}
-type GraphGroup = {id:string;name:string;etfs?:Array<{code?:string}>}
+type GraphGroup = RawGraphGroup & {etfs?:Array<{code?:string}>}
 type Bundle = {source?:string;data?:Record<string,WireRow[]>}
 function parse<T = unknown>(value: string | null | undefined): T | null { try {return JSON.parse(value||'null') as T} catch {return null} }
 const number = (value: unknown) => value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null
@@ -65,6 +66,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const subscriptions=await tx.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},include:{instrument:true,datasets:true}})
     const graphRow=await tx.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}})
     const group=(parse<GraphGroup[]>(graphRow?.payload)||[]).find(g=>g.id===industryId)
+    const graphCompanies=graphCompanyCandidates(group).slice(0,100)
     const selected=subscriptions.filter(s=>parse<SubscriptionProfile>(s.profile)?.industryId===industryId || group?.etfs?.some(e=>symbol(e.code)===s.instrument.code))
     if(!selected.length) throw new Error('该领域没有已订阅ETF，请先同步领域映射')
     const configRow=await tx.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}})
@@ -85,6 +87,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const decisionTiming=assessDecisionTiming({asOf,calendar,expectedTickers:tickers,quotes:quoteRows.map(quote=>({code:quote.code,tradeDate:quote.tradeDate||null,fetchedAt:quote.fetchedAt.toISOString()})),eventChecks})
     const evidence:Evidence[]=[], evidenceSet=new Set<string>(),records:Record<string,unknown>={}
     const add=(e:Evidence)=>{if(!evidenceSet.has(e.id)){evidence.push(e);evidenceSet.add(e.id)}return e.id}
+    const graphEvidenceId=group&&graphRow?add({id:`graph:${group.revisionId||group.revision_id||graphRow.id}`,source:'neo4j-versioned-industry-graph',dataDate:null,publishedAt:group.publishedAt||group.published_at||null,fetchedAt:graphRow.fetchedAt.toISOString(),hash:group.contentHash||group.content_hash||graphRow.contentHash}):null
+    if(graphEvidenceId)records[graphEvidenceId]={industryId:group?.id,revisionId:group?.revisionId||group?.revision_id,version:group?.version,contentHash:group?.contentHash||group?.content_hash}
     const sourceEvidence=(r:SourceRecord,unit?:string)=>{
       const p=parse<{source?:string;data?:WireRow|Record<string,WireRow[]>}>(r.payload),data=rowsOf(r)
       const nested=p?.data&&!Array.isArray(p.data)&&typeof p.data==='object'?Object.values(p.data).flatMap(value=>Array.isArray(value)?value:[]):[]
@@ -147,7 +151,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
         }),
         product:{date:productDate,nav:productNav.nav,shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentile5y:percentile('pe_ttm',currentPe),pbPercentile5y:percentile('pb',currentPb),valuationSampleCount:fiveYearValuations.length,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:number(info.mgt_fee),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
     })
-    const holdingCodes=[...new Set(etfs.flatMap(e=>e.holdings.map(h=>h.code)))],companyCodes=[...new Set([...holdingCodes,...profile.leaders.map(l=>l.code)])]
+    const holdingCodes=[...new Set(etfs.flatMap(e=>e.holdings.map(h=>h.code)))],companyCodes=[...new Set([...holdingCodes,...profile.leaders.map(l=>l.code),...graphCompanies.map(company=>company.code)])]
     const reportRows=await tx.stockFinancialReport.findMany({where:{stockCode:{in:companyCodes},fetchedAt:{lte:new Date(asOf)},publishDate:{gte:earliest,lte:new Date(asOf)}},orderBy:{fetchedAt:'desc'}})
     const reports=[...reportRows.reduce((items,row)=>{const period=dateKey(row.reportPeriod);if(!period)return items;const key=`${row.stockCode}:${row.reportType}:${period}`,current=items.get(key);if(!current||financialReportScore(row)>financialReportScore(current))items.set(key,{...row,reportPeriod:period});return items},new Map<string,typeof reportRows[number]>()).values()].sort((a,b)=>b.reportPeriod.localeCompare(a.reportPeriod)||a.reportType.localeCompare(b.reportType))
     const announcementRows=await tx.stockAnnouncement.findMany({where:{stockCode:{in:companyCodes},fetchedAt:{lte:new Date(asOf)},publishDate:{gte:new Date(Date.parse(asOf)-90*86400000),lte:new Date(asOf)}},orderBy:{publishDate:'desc'}})
@@ -176,7 +180,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const companies=companyCodes.map(code=>{
       const rs=reports.filter(r=>r.stockCode===code).slice(0,24)
       const ids=rs.map(r=>{records[r.id]=r;return add({id:r.id,source:r.source||'unknown',dataDate:dateKey(r.reportPeriod),publishedAt:r.publishDate?.toISOString()||null,fetchedAt:r.fetchedAt.toISOString(),hash:r.contentHash})})
-      const leader=profile.leaders.find(l=>l.code===code),holding=etfs.flatMap(e=>e.holdings).find(h=>h.code===code)
+      const leader=profile.leaders.find(l=>l.code===code),holding=etfs.flatMap(e=>e.holdings).find(h=>h.code===code),graphCompany=graphCompanies.find(company=>company.code===code)
       const views=rs.map(financialView),income=views.find(r=>r.reportType==='income')
       const priorPeriod=income?.period.replace(/^\d{4}/,year=>String(Number(year)-1))
       const knownCurrency=typeof income?.currency==='string'&&/^[A-Z]{3}$/.test(income.currency)
@@ -185,7 +189,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const profit=number(income?.metrics.find(m=>m.label==='净利润')?.value),oldProfit=number(prior?.metrics.find(m=>m.label==='净利润')?.value),cashFlow=number(cash?.metrics.find(m=>m.label==='经营现金流')?.value)
       const profitGrowthPct=profit!==null&&oldProfit!==null&&oldProfit>0?(profit/oldProfit-1)*100:null
       const cashConversionPct=profit!==null&&profit>0&&cashFlow!==null?cashFlow/profit*100:null
-      return {code,name:leader?.name||holding?.name||code,segment:leader?.segment||profile.segments.find(s=>s.companies.includes(code))?.name||'未映射',pool:leader?(holding?'both':'leader') as 'both'|'leader':'holding' as const,financialPeriods:new Set(views.filter(r=>r.metrics.length).map(r=>r.period)).size,announcementCount:events.filter(e=>e.companies.includes(code)&&e.status==='evidence').length,profitGrowthPct,cashConversionPct,evidenceIds:ids}
+      if(graphEvidenceId&&(leader||graphCompany))ids.push(graphEvidenceId)
+      return {code,name:leader?.name||graphCompany?.name||holding?.name||code,segment:leader?.segment||graphCompany?.segment||profile.segments.find(s=>s.companies.includes(code))?.name||'未映射',pool:holding&&(leader||graphCompany)?'both' as const:leader?'leader' as const:graphCompany?'graph' as const:'holding' as const,financialPeriods:new Set(views.filter(r=>r.metrics.length).map(r=>r.period)).size,announcementCount:events.filter(e=>e.companies.includes(code)&&e.status==='evidence').length,profitGrowthPct,cashConversionPct,evidenceIds:[...new Set(ids)]}
     })
     const sectorFlowMap=new Map<string,ResearchSnapshot['sectorFlows'][number]>()
     for(const r of raw.filter(r=>r.datasetKey==='sector_capital_flow')){
@@ -204,7 +209,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     etfs.forEach(e=>e.evidenceIds.push(benchmarkId))
     const historicalCandidates=profile.historyReports?.enabled===false?[]:await tx.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId,createdAt:{lte:new Date(asOf)}},orderBy:{createdAt:'desc'},take:300,select:{id:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
     const historicalReports=selectHistoricalReports({candidates:historicalCandidates,profile,tradingSessions:calendar.filter(day=>day.open).map(day=>day.date),cutoff:boundary.expectedSession,asOf})
-    const snapshot:ResearchSnapshot={version:1,id,asOf,capturedAt:asOf,profile,calendar,evidence,etfs,benchmarkBars,sectorFlows,events,companies,historicalReports,decisionTiming,projections:{},records}
+    const graphContext=group?buildFrozenGraphContext(group,{fetchedAt:graphRow?.fetchedAt,contentHash:graphRow?.contentHash},events):undefined
+    const snapshot:ResearchSnapshot={version:1,id,asOf,capturedAt:asOf,profile,calendar,evidence,etfs,benchmarkBars,sectorFlows,events,companies,graphContext,historicalReports,decisionTiming,projections:{},records}
     const evaluation=evaluateResearch(snapshot)
     const marketData=etfs.map(e=>{
       const series=adjustedBars(e,boundary.expectedSession||cutoff),d=evaluation.decisions.find(d=>d.ticker===e.ticker)!,metrics=calculateDetailMetrics(series.bars)
@@ -228,8 +234,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const hasDataGaps=perEtf.some(item=>item.status!=='available')||Boolean(evaluation.omittedConditions?.length)||trackingAnomalies.length>0
     const quality={status:evaluation.decisions.every(d=>d.state==='blocked')?'blocked':hasDataGaps?'limited':'available',requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable:evaluation.decisions.filter(d=>d.state!=='blocked').length,coverage:etfs.length?evaluation.decisions.filter(d=>d.state!=='blocked').length/etfs.length:0,asOf,expectedSession:boundary.expectedSession,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:articleData.length,dataAnomalies:trackingAnomalies}
     snapshot.projections={
-      'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-timing':decisionTiming},
-      'fetch-etfs':{'industry-info':{id:industryId,name:profile.name,source:'frozen-snapshot'},'etf-bindings':etfs.map(e=>({etf_code:e.ticker,etf_name:e.name,indexCode:e.indexCode,indexName:e.indexName,holdings:e.holdings})),'etf-codes':tickers.join(',')},
+      'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-timing':decisionTiming,'graph-context':graphContext},
+      'fetch-etfs':{'industry-info':{id:industryId,name:profile.name,source:'frozen-snapshot',graphRevisionId:graphContext?.revisionId,graphVersion:graphContext?.version},'etf-bindings':etfs.map(e=>({etf_code:e.ticker,etf_name:e.name,indexCode:e.indexCode,indexName:e.indexName,holdings:e.holdings})),'etf-codes':tickers.join(',')},
       'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,decisionTiming,overview:{indices:marketIndices},capitalFlow:{scope:'配置的领域板块，不代表全市场新增资金',series:sectorFlows},quality:evaluation.modules.market},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
       'fetch-etf-data':{'etf-market-data':marketData,'etf-data-gaps':{missingCodes:etfs.filter(e=>!e.bars.length).map(e=>e.ticker),requested:etfs.length,available:marketData.length}},
       'fetch-etf-holdings':{'etf-holdings':allHoldings,'holdings-summary':{totalETFs:etfs.length,totalHoldings:allHoldings.length,uniqueStocks:holdingCodes.length}},

@@ -60,14 +60,16 @@ export function newsSignals(rows: Artifact[]) {
 
 const tasks: Record<string, string> = {
   'market-analysis': '优先分析已核验的指数基金趋势、广度、流动性与背离；缺失项只在证据边界中汇总一次，不逐标的重复。输出JSON：{analysis,score:null,trend:"上行/下行/震荡/未知",risk_level:"低/中/高/未知",evidence:[{claim,source,date}],counterEvidence:[],watchlist:[]}。无统一评分模型不输出主观数值评分。',
-  'company-analysis': '分析产业链驱动、盈利质量与竞争壁垒，企业仅作ETF底层研究。输出JSON：{analysis,key_companies:[],chain_structure:[],evidence:[{claim,source,date}],counterEvidence:[],watchlist:[]}。样本不代表全产业。',
-  'news-analysis': '将同事件归并，分析催化剂的传导路径、受益环节、兑现条件和反证。输出JSON：{analysis,sentiment:"积极/中性/消极/未知",catalysts:[],risks:[],evidence:[{claim,source,date}],watchlist:[]}。不将新闻热度等同业绩或资金流。',
-  'industry-overview': '整合研究，消除重复并指出冲突。输出JSON：{analysis,stage:"萌芽期/成长期/成熟期/衰退期/未知",drivers:[],outlook,evidence:[{claim,source,date}],counterEvidence:[],watchlist:[]}。展望区分基准、乐观、悲观条件，不编造概率。',
+  'company-analysis': '基于已审核图谱定位产业环节，再分析企业驱动、盈利质量与竞争壁垒；企业仅作ETF底层研究。图谱归属是研究范围证据，不等同当前经营事实。输出JSON：{analysis,key_companies:[],chain_structure:[],evidence:[{claim,source,date}],counterEvidence:[],watchlist:[]}。样本不代表全产业。',
+  'news-analysis': '将同事件归并，使用图谱关系分析“事件→直接环节→传导环节”的路径、方向、兑现条件和反证。路径是带置信度的研究假设，不得当作已发生事实。输出JSON：{analysis,sentiment:"积极/中性/消极/未知",catalysts:[],risks:[],evidence:[{claim,source,date}],watchlist:[]}。不将新闻热度等同业绩或资金流。',
+  'industry-overview': '整合研究，明确引用图谱版本，消除重复并指出市场、企业、事件与产业认知之间的冲突。输出JSON：{analysis,stage:"萌芽期/成长期/成熟期/衰退期/未知",drivers:[],outlook,evidence:[{claim,source,date}],counterEvidence:[],watchlist:[]}。展望区分基准、乐观、悲观条件，不编造概率。',
   'investment-advice': '形成明确的产业ETF投资建议，不给个股推荐。必须区分未持有与已持有情形，并分开20个交易日战术建议与6—12个月产业观点；建议包含行动方向、触发条件、失效条件和主要风险。输出JSON：{score:null,rating:"积极/中性/谨慎/证据不足",recommendation:{unheld:"建仓/观望",held:"加仓/持有/减仓",reason},tacticalView:{horizon,signal,conditions},strategicView:{horizon,thesis,valuation},thesis,etfImplications,scenarios:{base:{conditions,probability:null,expectedReturn:null},bull:{conditions,probability:null,expectedReturn:null},bear:{conditions,probability:null,expectedReturn:null}},counterEvidence:[],risks:[],watchlist:[]}。只有存在估值、概率或目标收益的底层证据时才填写数值，否则必须为null；置信度由系统按数据与信号覆盖计算，不得自行编造。',
 }
 
 export function researchEvidence(context: StepContext, stage: string) {
   const get = (key: string) => context.artifacts.get(key)
+  const graph=get('graph-context')||get('research-snapshot')?.graphContext
+  const graphBoundary=graph?compactEvidence({revisionId:graph.revisionId,version:graph.version,contentHash:graph.contentHash,sourceFetchedAt:graph.sourceFetchedAt,industry:graph.industry,coverage:graph.coverage,evidenceUrls:graph.evidenceUrls}):undefined
   const decisions=get('research-evaluation')?.decisions||[]
   const unknownSummary=[...new Map<string,{label:string;tickers:string[]}>(decisions.flatMap((d:Artifact)=>(d.conditions||[]).filter((c:Artifact)=>c.status==='unknown').map((c:Artifact)=>[c.key,{label:c.label,tickers:decisions.filter((item:Artifact)=>item.conditions?.some((condition:Artifact)=>condition.key===c.key&&condition.status==='unknown')).map((item:Artifact)=>item.ticker)}]))).values()].map(item=>({...item,affectedETFCount:item.tickers.length}))
   const modules=Object.fromEntries(Object.entries(get('data-quality')?.modules||{}).map(([key,value]:[string,Artifact])=>[key,{status:statusText[value?.status]||value?.status,detail:value?.detail}]))
@@ -85,7 +87,7 @@ export function researchEvidence(context: StepContext, stage: string) {
     return compactEvidence({ ...base, etfs: marketSignals(get('etf-market-data') || []), market: { overview: snapshot.overview, capitalFlow,
       sources: Object.entries(rawFlowEvidence || {}).map(([key,value]: [string,Artifact])=>({key,source:value?.source,date:value?.dataDate,stale:value?.stale})) }, referenceIndicators: get('market-reference-indicators') })
   }
-  if (stage === 'company-analysis') return compactEvidence({ ...base, sampleScope: '持仓暴露与产业领先企业按环节轮选，保留多期财报与重要公告；非全产业代表样本。', companies: companyEvidence(get('company-market-data') || []).map(row => ({
+  if (stage === 'company-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graph?.stages,relations:graph?.relations}, sampleScope: 'ETF持仓暴露、研究配置与已审核图谱企业取并集，保留多期财报与重要公告；非全产业代表样本。', companies: companyEvidence(get('company-market-data') || []).map(row => ({
     stockCode: row.stockCode, stockName: row.stockName,
     financials: row.financials.map(report => {
       // Join cash flow and income only for the same period and explicitly known currency.
@@ -99,8 +101,8 @@ export function researchEvidence(context: StepContext, stage: string) {
     }),
     announcements: (row.announcements || []).slice(0,4).map((a: Artifact)=>({id:a.id,evidenceIds:a.evidenceIds,status:a.status,title:a.title,date:a.publishDate,source:a.source,url:a.url,excerpt:String(a.summary || '').slice(0,800)}))
   })) })
-  if (stage === 'news-analysis') return compactEvidence({ ...base, events: get('research-evaluation')?decisionEvents(get('research-evaluation'),24):(get('news-events') || []).filter((event:Artifact)=>event.status==='evidence'&&event.category!=='administrative'&&event.priority>=4).slice(0,24), legacyNews: get('news-events') ? undefined : newsSignals(get('news-articles') || []) })
-  if (stage === 'industry-overview') return compactEvidence({ ...base, market: get('market-analysis'), companies: get('company-analysis'), news: get('news-analysis') })
+  if (stage === 'news-analysis') return compactEvidence({ ...base, graph:{...graphBoundary,relations:graph?.relations,eventMappings:graph?.eventMappings}, events: get('research-evaluation')?decisionEvents(get('research-evaluation'),24):(get('news-events') || []).filter((event:Artifact)=>event.status==='evidence'&&event.category!=='administrative'&&event.priority>=4).slice(0,24), legacyNews: get('news-events') ? undefined : newsSignals(get('news-articles') || []) })
+  if (stage === 'industry-overview') return compactEvidence({ ...base, graph:{...graphBoundary,stages:graph?.stages,relations:graph?.relations,eventMappings:graph?.eventMappings}, market: get('market-analysis'), companies: get('company-analysis'), news: get('news-analysis') })
   if (stage === 'social-report') return compactEvidence({industry:base.industry,asOf:base.asOf,boundary:base.boundary,market:get('market-analysis'),companies:get('company-analysis'),news:get('news-analysis'),overview:get('industry-overview'),investment:get('investment-advice')})
   const bindings = get('etf-bindings') || []
   const holdings = get('etf-holdings') || []
@@ -109,7 +111,7 @@ export function researchEvidence(context: StepContext, stage: string) {
     indexCode:b.indexCode, indexName:b.indexName,
     disclosedHoldings: holdings.filter((h: Artifact)=>h.etfCode === b.etf_code).slice(0,5).map((h: Artifact)=>({name:h.stock_name,code:h.stock_code,weight:h.weight,period:h.period,publishedAt:h.publishedAt,evidenceId:h.evidenceId,source:h.source})),
   }))
-  return compactEvidence({ ...base, overview: get('industry-overview'), etfMapping,
+  return compactEvidence({ ...base, graph:{...graphBoundary,eventMappings:graph?.eventMappings}, overview: get('industry-overview'), etfMapping,
     products:get('research-snapshot')?.etfs?.map((etf:Artifact)=>({ticker:etf.ticker,indexCode:etf.indexCode,product:{...etf.product,evidenceIds:undefined},evidenceIds:(etf.evidenceIds||[]).slice(0,8)})),
     mappingLimit: '仅展示订阅中的部分持仓关系，不是完整穿透；持仓披露期未核验，不推断实时权重或重叠比例。',
     investment: stage === 'social-report' ? get('investment-advice') : undefined })

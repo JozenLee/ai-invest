@@ -4,11 +4,12 @@ import { companySyncState } from '@/lib/subscription-sync-status'
 import { DEFAULT_SUBSCRIPTION_CONFIG, MARKET_INDEXES } from '@/lib/subscription-config'
 import { ensureMarketIndexSubscriptions } from '@/lib/market-index-subscriptions'
 import { readStoredOverview } from '@/lib/stored-market-data'
+import { createHash } from 'node:crypto'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 
 type GraphEtf = { code?: string; ticker?: string; name?: string; etfName?: string; relevance?: number }
-type Industry = { id: string; name: string; code?: string }
+type Industry = { id: string; name: string; code?: string; version?: number; revisionId?: string; revision_id?: string; contentHash?: string; content_hash?: string; publishedAt?: string; published_at?: string }
 
 function normalizeCode(value: unknown) {
   const normalized = String(value || '').trim().toLowerCase().replace(/^(sh|sz)/, '')
@@ -56,7 +57,7 @@ async function getGraphSnapshot(force = false) {
     try {
       const graphResponse = await fetch(`${DATA_SERVICE_URL}/api/v1/industries/${encodeURIComponent(industry.id)}/swimlane`, { cache: 'no-store', signal: AbortSignal.timeout(15000) })
       if (!graphResponse.ok) return { ...industry, etfs: [] as GraphEtf[] }
-      const graph = await graphResponse.json() as { lanes?: Record<string, { segments?: Array<{ matched_etfs?: GraphEtf[]; matchedEtfs?: GraphEtf[] }> }> }
+      const graph = await graphResponse.json() as { lanes?: Record<string, { segments?: Array<{ code?: string; matched_etfs?: GraphEtf[]; matchedEtfs?: GraphEtf[]; matched_indices?: Array<Record<string, unknown>>; matchedIndices?: Array<Record<string, unknown>> }> }> }
       const etfs = Object.values(graph.lanes || {}).flatMap((lane) => (lane.segments || []).flatMap((segment) => segment.matched_etfs || segment.matchedEtfs || []))
       const unique = new Map<string, GraphEtf>()
       for (const etf of etfs) {
@@ -64,6 +65,9 @@ async function getGraphSnapshot(force = false) {
         if (code && !unique.has(code)) unique.set(code, { ...etf, code, name: etf.name || etf.etfName || code })
       }
       let companies: Array<Record<string, unknown>> = []
+      let stages: Array<Record<string, unknown>> = []
+      let relations: Array<Record<string, unknown>> = []
+      let graphIndustry: Record<string, unknown> = {}
       if (force) {
         try {
           const companyResponse = await fetch(`${DATA_SERVICE_URL}/api/v1/industries/${encodeURIComponent(industry.id)}/graph`, { cache: 'no-store', signal: AbortSignal.timeout(15000) })
@@ -71,10 +75,29 @@ async function getGraphSnapshot(force = false) {
             const payload = await companyResponse.json()
             const nodes = payload.nodes || (payload.stages || []).flatMap((stage: any) => stage.segments || [])
             companies = nodes.flatMap((node: any) => (node.companies || []).map((company: any) => ({ ...company, nodeName: node.name })))
+            const matches = new Map(Object.values(graph.lanes || {}).flatMap(lane => lane.segments || []).map(segment => [segment.code, segment] as const))
+            stages = (payload.stages || []).map((stage: any) => ({
+              ...stage,
+              segments: (stage.segments || []).map((segment: any) => {
+                const match = matches.get(segment.code)
+                return { ...segment, matched_etfs: match?.matched_etfs || match?.matchedEtfs || [], matched_indices: match?.matched_indices || match?.matchedIndices || [] }
+              }),
+            }))
+            relations = payload.relations || []
+            graphIndustry = payload.industry || {}
           }
         } catch { /* Missing company metadata must not discard valid ETF bindings. */ }
       }
-      return { ...industry, etfs: [...unique.values()], companies }
+      return {
+        ...industry,
+        ...graphIndustry,
+        etfs: [...unique.values()],
+        companies,
+        stages,
+        relations,
+        revisionId: String(graphIndustry.revisionId || graphIndustry.revision_id || industry.revisionId || industry.revision_id || '') || undefined,
+        contentHash: String(graphIndustry.contentHash || graphIndustry.content_hash || industry.contentHash || industry.content_hash || '') || undefined,
+      }
     } catch {
       return { ...industry, etfs: [] as GraphEtf[] }
     }
@@ -85,7 +108,18 @@ async function getGraphSnapshot(force = false) {
 
 export async function syncGraphEtfSubscriptions() {
   const groups = await getGraphSnapshot(true)
-  if (groups.length) await prisma.rawPayload.create({ data: { datasetKey: 'industry_graph', targetCode: 'all', provider: 'graph', payload: JSON.stringify(groups), contentHash: 'graph-snapshot' } })
+  if (groups.length) {
+    const payload = JSON.stringify(groups)
+    const contentHash = createHash('sha256').update(payload).digest('hex')
+    const latest = await prisma.rawPayload.findFirst({ where: { datasetKey: 'industry_graph', targetCode: 'all' }, orderBy: { fetchedAt: 'desc' }, select: { contentHash: true } })
+    if (latest?.contentHash !== contentHash) await prisma.rawPayload.create({ data: { datasetKey: 'industry_graph', targetCode: 'all', provider: 'neo4j-projection', payload, contentHash } })
+    const taxonomy = groups.flatMap((group: any) => (group.stages || []).flatMap((stage: any) => (stage.segments || []).map((segment: any) => ({ industry_id: group.id, industry_code: group.code, industry_name: group.name, segment_code: segment.code, segment_name: segment.name }))))
+    if (taxonomy.length) {
+      const taxonomyPayload = JSON.stringify(taxonomy)
+      const taxonomyHash = createHash('sha256').update(taxonomyPayload).digest('hex')
+      await prisma.rawPayload.upsert({ where: { id: 'news-taxonomy' }, create: { id: 'news-taxonomy', datasetKey: 'news_taxonomy', targetCode: 'all', provider: 'neo4j-projection', payload: taxonomyPayload, contentHash: taxonomyHash }, update: { provider: 'neo4j-projection', payload: taxonomyPayload, contentHash: taxonomyHash, fetchedAt: new Date() } })
+    }
+  }
   const etfs = new Map<string, { code: string; name: string; industryId: string; industryName: string }>()
   for (const group of groups) for (const etf of group.etfs) {
     const code = normalizeCode(etf.code || etf.ticker)

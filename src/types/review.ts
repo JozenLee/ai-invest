@@ -12,7 +12,7 @@ export interface ReviewFeedback {
   modified_data?: Record<string, any>
 }
 
-export type ReviewPhase = 'structure' | 'companies'
+export type ReviewPhase = 'structure' | 'companies' | 'unified'
 
 export interface ReviewHistory {
   task_id: string

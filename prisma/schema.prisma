@@ -27,18 +27,18 @@ model User {
 }
 
 model UserSetting {
-  id            String @id @default(cuid())
-  userId        String @unique
-  riskProfile   String @default("moderate") // conservative/moderate/aggressive
-  investHorizon String @default("medium") // short/medium/long
-  totalAssets   Float  @default(0)
-  cashRatio     Float  @default(0.2)
-  minCashRatio Float  @default(0.1)
-  maxIndustryRatio Float @default(0.2)
-  maxFundRatio Float @default(0.15)
-  maxSingleAdjustmentRatio Float @default(0.05)
-  stagedAdjustment Boolean @default(true)
-  user          User   @relation(fields: [userId], references: [id])
+  id                       String  @id @default(cuid())
+  userId                   String  @unique
+  riskProfile              String  @default("moderate") // conservative/moderate/aggressive
+  investHorizon            String  @default("medium") // short/medium/long
+  totalAssets              Float   @default(0)
+  cashRatio                Float   @default(0.2)
+  minCashRatio             Float   @default(0.1)
+  maxIndustryRatio         Float   @default(0.2)
+  maxFundRatio             Float   @default(0.15)
+  maxSingleAdjustmentRatio Float   @default(0.05)
+  stagedAdjustment         Boolean @default(true)
+  user                     User    @relation(fields: [userId], references: [id])
 }
 
 model UserPreferences {
@@ -58,57 +58,57 @@ model UserPreferences {
 // ==================== 投资组合 ====================
 
 model Portfolio {
-  id        String   @id @default(cuid())
-  userId    String
-  name      String
-  isDefault Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  cashBalance Float @default(0)
-  lastSyncedAt DateTime?
+  id            String    @id @default(cuid())
+  userId        String
+  name          String
+  isDefault     Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  cashBalance   Float     @default(0)
+  lastSyncedAt  DateTime?
   lastSyncEmail String?
 
-  user     User      @relation(fields: [userId], references: [id])
-  holdings Holding[]
+  user         User                   @relation(fields: [userId], references: [id])
+  holdings     Holding[]
   syncSchedule PortfolioSyncSchedule?
 }
 
 model PortfolioSyncSchedule {
-  id          String   @id @default(cuid())
-  portfolioId String   @unique
-  enabled     Boolean  @default(true)
-  timezone    String   @default("Asia/Shanghai")
-  syncTimes   String   @default("[\"00:00\",\"12:00\"]")
+  id          String    @id @default(cuid())
+  portfolioId String    @unique
+  enabled     Boolean   @default(true)
+  timezone    String    @default("Asia/Shanghai")
+  syncTimes   String    @default("[\"00:00\",\"12:00\"]")
   lastRunAt   DateTime?
   lastError   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
 }
 
 model Holding {
-  id           String   @id @default(cuid())
-  portfolioId  String
-  ticker       String // ETF代码
-  market       String // A（MVP仅支持A股ETF）
-  name         String // ETF名称
-  category     String? // 基金类别，如 股票型-行业指数、QDII-混合
-  industryDomain     String? // 知识图谱产业领域名称
-  industryDomainCode String? // 知识图谱产业领域代码或ID
-  industryDomainSource String? // ai/manual
+  id                       String    @id @default(cuid())
+  portfolioId              String
+  ticker                   String // ETF代码
+  market                   String // A（MVP仅支持A股ETF）
+  name                     String // ETF名称
+  category                 String? // 基金类别，如 股票型-行业指数、QDII-混合
+  industryDomain           String? // 知识图谱产业领域名称
+  industryDomainCode       String? // 知识图谱产业领域代码或ID
+  industryDomainSource     String? // ai/manual
   industryDomainConfidence Float? // AI匹配置信度 0-1
-  fundType      String? // etf/feeder/index-enhanced/active/qdii/other
-  targetEtfCode String? // 联接基金对应的场内ETF；人工或数据源核验
-  targetIndexCode String? // 基金跟踪指数代码
-  mappingSource String? // manual/provider/name-inference/domain-proxy
-  mappingConfidence Float? // 底层产品映射置信度 0-1
-  purchaseDate DateTime? // 用于估算赎回费档位
-  costNav Float? // 用户持仓成本净值
-  redemptionFeePct Float? // 当前持有期适用的赎回费率（%）
-  quantity     Float // 持有份额（基金可能包含小数份额）
-  unitNav      Float // 邮箱资产证明中的单位净值
-  updatedAt    DateTime @updatedAt
+  fundType                 String? // etf/feeder/index-enhanced/active/qdii/other
+  targetEtfCode            String? // 联接基金对应的场内ETF；人工或数据源核验
+  targetIndexCode          String? // 基金跟踪指数代码
+  mappingSource            String? // manual/provider/name-inference/domain-proxy
+  mappingConfidence        Float? // 底层产品映射置信度 0-1
+  purchaseDate             DateTime? // 用于估算赎回费档位
+  costNav                  Float? // 用户持仓成本净值
+  redemptionFeePct         Float? // 当前持有期适用的赎回费率（%）
+  quantity                 Float // 持有份额（基金可能包含小数份额）
+  unitNav                  Float // 邮箱资产证明中的单位净值
+  updatedAt                DateTime  @updatedAt
 
   portfolio Portfolio @relation(fields: [portfolioId], references: [id])
 
@@ -420,11 +420,11 @@ model NewsArticle {
   expiresAt           DateTime? // 过期时间
   createdAt           DateTime  @default(now())
 
-  categoryRef NewsCategory?    @relation(fields: [categoryId], references: [id])
-  domain      Domain?          @relation(fields: [domainId], references: [id])
-  sourceRef   DataSource?      @relation(fields: [sourceId], references: [id])
-  graphLinks  NewsGraphLink[]
-  tags        NewsArticleTag[]
+  categoryRef   NewsCategory?      @relation(fields: [categoryId], references: [id])
+  domain        Domain?            @relation(fields: [domainId], references: [id])
+  sourceRef     DataSource?        @relation(fields: [sourceId], references: [id])
+  graphLinks    NewsGraphLink[]
+  tags          NewsArticleTag[]
   impactFactors NewsImpactFactor[]
 
   @@index([publishTime])
@@ -767,17 +767,17 @@ model GraphNode {
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 
-  parent       GraphNode?         @relation("TreeNode", fields: [parentId], references: [id])
-  children     GraphNode[]        @relation("TreeNode")
-  sourceEdges  GraphEdge[]        @relation("SourceNode")
-  targetEdges  GraphEdge[]        @relation("TargetNode")
-  stocks       GraphStock[]
-  changeLogs   GraphChangeLog[]
-  newsLinks    NewsGraphLink[]
-  scoreHistory NodeScoreHistory[]
-  signals      InvestmentSignal[]
-  tags         GraphNodeTag[]
-  etfBindings  GraphNodeETF[]
+  parent        GraphNode?         @relation("TreeNode", fields: [parentId], references: [id])
+  children      GraphNode[]        @relation("TreeNode")
+  sourceEdges   GraphEdge[]        @relation("SourceNode")
+  targetEdges   GraphEdge[]        @relation("TargetNode")
+  stocks        GraphStock[]
+  changeLogs    GraphChangeLog[]
+  newsLinks     NewsGraphLink[]
+  scoreHistory  NodeScoreHistory[]
+  signals       InvestmentSignal[]
+  tags          GraphNodeTag[]
+  etfBindings   GraphNodeETF[]
   indexBindings GraphNodeIndex[]
 
   @@index([type])
@@ -930,17 +930,17 @@ model NewsGraphLink {
 }
 
 model NewsImpactFactor {
-  id           String   @id @default(cuid())
+  id           String @id @default(cuid())
   newsId       String
   industryCode String
   segmentCode  String
 
-  impactFactor Float    // 影响因子分数
-  impactType   String   // direct/upstream/downstream/indirect
-  distance     Int      @default(0)  // 传导距离
+  impactFactor Float // 影响因子分数
+  impactType   String // direct/upstream/downstream/indirect
+  distance     Int    @default(0) // 传导距离
 
-  calculation  String?  // JSON: 计算详情
-  createdAt    DateTime @default(now())
+  calculation String? // JSON: 计算详情
+  createdAt   DateTime @default(now())
 
   news NewsArticle @relation(fields: [newsId], references: [id], onDelete: Cascade)
 
@@ -1026,15 +1026,15 @@ model Analysis {
 // ==================== AI分析报告（无需登录的投研报告历史） ====================
 
 model AIAnalysisReport {
-  id          String   @id @default(cuid())
-  type        String   // market/news/comprehensive
-  industryId  String
+  id           String   @id @default(cuid())
+  type         String // market/news/comprehensive
+  industryId   String
   industryName String
-  title       String
-  summary     String?
-  content     String   // Markdown格式的完整AI报告
-  dataJson    String?  // JSON格式的分析依据和结构化数据
-  createdAt   DateTime @default(now())
+  title        String
+  summary      String?
+  content      String // Markdown格式的完整AI报告
+  dataJson     String? // JSON格式的分析依据和结构化数据
+  createdAt    DateTime @default(now())
 
   @@index([industryId, type, createdAt])
   @@index([createdAt])
@@ -1043,25 +1043,25 @@ model AIAnalysisReport {
 // ==================== 小红书发布账号 ====================
 
 model XiaohongshuAccount {
-  id                 String   @id @default(cuid())
-  displayName        String
-  accountId          String
-  authType           String   @default("oauth") // oauth/token
-  appId              String?
-  appSecret          String?
-  redirectUri        String?
-  accessToken        String?
-  refreshToken       String?
-  tokenExpiresAt     DateTime?
-  defaultVisibility  String   @default("public") // public/private
-  allowComments      Boolean  @default(true)
-  watermarkEnabled   Boolean  @default(true)
-  defaultTopics      String   @default("[]")
-  enabled            Boolean  @default(true)
-  lastVerifiedAt     DateTime?
-  lastVerifyError    String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String    @id @default(cuid())
+  displayName       String
+  accountId         String
+  authType          String    @default("oauth") // oauth/token
+  appId             String?
+  appSecret         String?
+  redirectUri       String?
+  accessToken       String?
+  refreshToken      String?
+  tokenExpiresAt    DateTime?
+  defaultVisibility String    @default("public") // public/private
+  allowComments     Boolean   @default(true)
+  watermarkEnabled  Boolean   @default(true)
+  defaultTopics     String    @default("[]")
+  enabled           Boolean   @default(true)
+  lastVerifiedAt    DateTime?
+  lastVerifyError   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@index([enabled, updatedAt])
 }
@@ -1085,17 +1085,17 @@ model Watchlist {
 // ==================== AI知识图谱审核 ====================
 
 model GraphUpdateReview {
-  id            String   @id @default(cuid())
-  industryId    String   // Neo4j中的Industry节点ID
-  industryName  String
-  oldVersion    String
-  newVersion    String
-  changesJson   String   // JSON: 完整的diff数据
-  status        String   @default("pending") // pending, approved, rejected, partial
-  createdAt     DateTime @default(now())
-  reviewedAt    DateTime?
-  reviewedBy    String?
-  reviewNotes   String?
+  id           String    @id @default(cuid())
+  industryId   String // Neo4j中的Industry节点ID
+  industryName String
+  oldVersion   String
+  newVersion   String
+  changesJson  String // JSON: 完整的diff数据
+  status       String    @default("pending") // pending, approved, rejected, partial
+  createdAt    DateTime  @default(now())
+  reviewedAt   DateTime?
+  reviewedBy   String?
+  reviewNotes  String?
 
   approvals GraphChangeApproval[]
 
@@ -1107,8 +1107,8 @@ model GraphUpdateReview {
 model GraphChangeApproval {
   id         String   @id @default(cuid())
   reviewId   String
-  changeId   String   // Change.id from diff
-  changeType String   // node_added, node_removed, etc.
+  changeId   String // Change.id from diff
+  changeType String // node_added, node_removed, etc.
   status     String   @default("pending") // approved, rejected, pending
   reason     String?
   createdAt  DateTime @default(now())
@@ -1123,13 +1123,13 @@ model GraphChangeApproval {
 // ==================== 工作流执行引擎 ====================
 
 model ExecutionRun {
-  id          String   @id @default(cuid())
-  workflowId  String   // 工作流标识，如 "comprehensive-analysis"
-  status      String   // PENDING, RUNNING, COMPLETED, FAILED, PAUSED
-  startedAt   DateTime @default(now())
+  id          String    @id @default(cuid())
+  workflowId  String // 工作流标识，如 "comprehensive-analysis"
+  status      String // PENDING, RUNNING, COMPLETED, FAILED, PAUSED
+  startedAt   DateTime  @default(now())
   completedAt DateTime?
-  error       String?  // 失败原因
-  metadata    String?  // JSON: 执行参数
+  error       String? // 失败原因
+  metadata    String? // JSON: 执行参数
 
   steps ExecutionStep[]
 
@@ -1141,14 +1141,14 @@ model ExecutionRun {
 model ExecutionStep {
   id          String    @id @default(cuid())
   runId       String
-  stepName    String    // 步骤名称
-  stepIndex   Int       // 步骤序号
-  status      String    // PENDING, RUNNING, COMPLETED, FAILED, SKIPPED
+  stepName    String // 步骤名称
+  stepIndex   Int // 步骤序号
+  status      String // PENDING, RUNNING, COMPLETED, FAILED, SKIPPED
   startedAt   DateTime?
   completedAt DateTime?
-  duration    Int?      // 执行时长(ms)
+  duration    Int? // 执行时长(ms)
   error       String?
-  progress    String?   // JSON: 进度信息
+  progress    String? // JSON: 进度信息
 
   run       ExecutionRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
   artifacts StepArtifact[]
@@ -1161,12 +1161,12 @@ model ExecutionStep {
 model StepArtifact {
   id           String   @id @default(cuid())
   stepId       String
-  artifactKey  String   // 产物键
-  artifactType String   // REFERENCE, DATA, FILE
-  dataType     String   // JSON, TEXT, BINARY
-  data         String?  // JSON或引用ID
-  fileUrl      String?  // 文件存储路径
-  size         Int?     // 数据大小(bytes)
+  artifactKey  String // 产物键
+  artifactType String // REFERENCE, DATA, FILE
+  dataType     String // JSON, TEXT, BINARY
+  data         String? // JSON或引用ID
+  fileUrl      String? // 文件存储路径
+  size         Int? // 数据大小(bytes)
   createdAt    DateTime @default(now())
 
   step ExecutionStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
@@ -1210,7 +1210,7 @@ model MarketQuote {
 
 model Instrument {
   id        String   @id @default(cuid())
-  type      String   // ETF / STOCK / INDEX
+  type      String // ETF / STOCK / INDEX
   code      String
   name      String?
   market    String   @default("CN")
@@ -1235,7 +1235,7 @@ model DataSubscription {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  instrument Instrument             @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
+  instrument Instrument            @relation(fields: [instrumentId], references: [id], onDelete: Cascade)
   datasets   SubscriptionDataset[]
 
   @@index([enabled, updatedAt])
@@ -1243,34 +1243,34 @@ model DataSubscription {
 }
 
 model DataSubscriptionSchedule {
-  id                     String   @id @default(cuid())
-  scope                  String   @unique // market_index / etf_index / company_quote
-  enabled                Boolean  @default(true)
+  id                     String    @id @default(cuid())
+  scope                  String    @unique // market_index / etf_index / company_quote
+  enabled                Boolean   @default(true)
   tradingIntervalSeconds Int
   closedIntervalSeconds  Int
   lastRunAt              DateTime?
-  updatedAt              DateTime @updatedAt
-  createdAt              DateTime @default(now())
+  updatedAt              DateTime  @updatedAt
+  createdAt              DateTime  @default(now())
 
   @@map("data_subscription_schedules")
 }
 
 model SubscriptionDataset {
-  id                     String   @id @default(cuid())
+  id                     String    @id @default(cuid())
   subscriptionId         String
   datasetKey             String
-  enabled                Boolean  @default(true)
-  tradingIntervalSeconds Int      @default(300)
-  closedIntervalSeconds  Int      @default(3600)
+  enabled                Boolean   @default(true)
+  tradingIntervalSeconds Int       @default(300)
+  closedIntervalSeconds  Int       @default(3600)
   cronExpression         String?
-  retentionDays          Int      @default(365)
+  retentionDays          Int       @default(365)
   lastStartedAt          DateTime?
   lastSuccessAt          DateTime?
   nextRunAt              DateTime?
-  status                 String   @default("pending")
+  status                 String    @default("pending")
   lastError              String?
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   subscription DataSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   runs         DataFetchRun[]
@@ -1282,18 +1282,18 @@ model SubscriptionDataset {
 }
 
 model DataFetchRun {
-  id             String   @id @default(cuid())
-  datasetId      String
-  targetCode     String
-  provider       String?
-  status         String   @default("running")
-  fetchedCount   Int      @default(0)
-  storedCount    Int      @default(0)
-  durationMs     Int?
-  qualityStatus  String?
-  error          String?
-  startedAt      DateTime @default(now())
-  completedAt    DateTime?
+  id            String    @id @default(cuid())
+  datasetId     String
+  targetCode    String
+  provider      String?
+  status        String    @default("running")
+  fetchedCount  Int       @default(0)
+  storedCount   Int       @default(0)
+  durationMs    Int?
+  qualityStatus String?
+  error         String?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
 
   dataset SubscriptionDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
 
@@ -1303,16 +1303,16 @@ model DataFetchRun {
 }
 
 model StockFinancialReport {
-  id               String   @id @default(cuid())
-  stockCode        String
-  reportType       String
-  reportPeriod     String
-  publishDate      DateTime?
-  metricsJson      String
-  source           String?
-  sourceUpdatedAt  DateTime?
-  fetchedAt        DateTime @default(now())
-  contentHash      String
+  id              String    @id @default(cuid())
+  stockCode       String
+  reportType      String
+  reportPeriod    String
+  publishDate     DateTime?
+  metricsJson     String
+  source          String?
+  sourceUpdatedAt DateTime?
+  fetchedAt       DateTime  @default(now())
+  contentHash     String
 
   @@unique([stockCode, reportType, reportPeriod])
   @@index([stockCode, publishDate])
@@ -1320,7 +1320,7 @@ model StockFinancialReport {
 }
 
 model StockAnnouncement {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   stockCode      String
   announcementId String
   title          String
@@ -1329,7 +1329,7 @@ model StockAnnouncement {
   url            String?
   content        String?
   source         String?
-  fetchedAt      DateTime @default(now())
+  fetchedAt      DateTime  @default(now())
   contentHash    String
 
   @@unique([stockCode, announcementId])
@@ -1350,15 +1350,56 @@ model RawPayload {
   @@map("raw_payloads")
 }
 
+// Neo4j remains the canonical industry graph. These SQLite tables persist the
+// orchestration/audit boundary so graph work survives data-service restarts and
+// research reports can pin an immutable graph revision.
+model IndustryGraphTask {
+  taskId       String   @id
+  industryId   String?
+  industryName String
+  status       String
+  progress     Int      @default(0)
+  currentStep  String?
+  payload      String
+  error        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, updatedAt])
+  @@index([industryId, updatedAt])
+  @@map("industry_graph_tasks")
+}
+
+model GraphRevision {
+  id               String   @id
+  industryId       String
+  industryCode     String
+  industryName     String
+  version          Int
+  parentRevisionId String?
+  contentHash      String
+  snapshotJson     String
+  evidenceJson     String?
+  status           String   @default("published")
+  reviewedBy       String?
+  createdAt        DateTime @default(now())
+
+  @@unique([industryId, version])
+  @@index([industryId, createdAt])
+  @@index([contentHash])
+  @@map("graph_revisions")
+}
+
 model PublishSchedule {
   id        String @id
   payload   String
   updatedAt String
+
   @@map("publish_schedule")
 }
 
 model PublishScheduleRun {
-  id         String @id
+  id         String  @id
   slot       String
   industryId String
   status     String
@@ -1368,6 +1409,7 @@ model PublishScheduleRun {
   error      String?
   createdAt  String
   updatedAt  String
+
   @@unique([slot, industryId])
   @@map("publish_schedule_runs")
 }

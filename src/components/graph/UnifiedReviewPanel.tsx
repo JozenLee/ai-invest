@@ -1,13 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { Check, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
+import { Check, RefreshCw, CircleHelp, ArrowRight } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ReviewFeedback } from '@/types/review'
 
 interface IndustryStructure {
@@ -29,6 +27,17 @@ interface IndustryStructure {
         description?: string
       }>
     }>
+  }>
+  relationships?: Array<{
+    from?: string
+    to?: string
+    from_segment?: string
+    to_segment?: string
+    type: string
+    direction?: string
+    confidence?: number
+    description?: string
+    evidence_urls?: string[]
   }>
 }
 
@@ -95,11 +104,32 @@ export function UnifiedReviewPanel({
       <CardContent className="space-y-6">
         {/* 简要说明 */}
         <div className="bg-blue-50 dark:bg-blue-950 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
-          <p className="text-sm text-blue-900 dark:text-blue-100">
-            💡 您可以在下方输入框中提出修改意见，AI将同时优化产业结构和企业信息。
-            例如：补充某个环节、调整阶段划分、增加龙头企业等。
-          </p>
+          <div className="flex items-start gap-2 text-sm text-blue-900 dark:text-blue-100">
+            <CircleHelp className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <p>您可以在下方输入框中提出修改意见，AI将同时优化产业结构、企业信息和传导关系。例如：补充某个环节、调整阶段划分、增加龙头企业或修正上下游关系。</p>
+          </div>
         </div>
+
+        <section aria-labelledby="graph-relations-heading" className="space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h3 id="graph-relations-heading" className="text-sm font-medium">环节传导关系</h3>
+            <span className="text-sm tabular-nums text-muted-foreground">{structure.relationships?.length || 0} 条</span>
+          </div>
+          {structure.relationships?.length ? (
+            <ul className="grid gap-2 sm:grid-cols-2">
+              {structure.relationships.slice(0, 12).map((relationship, index) => (
+                <li key={`${relationship.from || relationship.from_segment}-${relationship.type}-${relationship.to || relationship.to_segment}-${index}`} className="rounded-md border bg-muted/30 p-3 text-sm">
+                  <div className="flex items-center gap-2 font-medium">
+                    <span>{relationship.from || relationship.from_segment}</span>
+                    <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span>{relationship.to || relationship.to_segment}</span>
+                  </div>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">{relationship.type} · {relationship.direction || '方向待核验'} · 置信度 {Math.round((relationship.confidence || 0) * 100)}%{relationship.evidence_urls?.length ? ` · ${relationship.evidence_urls.length} 条来源` : ' · 暂无来源'}</p>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">尚未生成可审核的环节传导关系。图谱仍可用于分类，但不会参与事件传播。</p>}
+        </section>
 
         {/* 反馈输入 */}
         <div className="space-y-2">

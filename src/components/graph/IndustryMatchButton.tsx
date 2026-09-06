@@ -101,7 +101,7 @@ export function IndustryMatchButton({
         size="sm"
         variant="outline"
         onClick={() => setIsDialogOpen(true)}
-        className="gap-2"
+        className="min-h-11 gap-2"
       >
         <Sparkles className="h-4 w-4" />
         匹配ETF

@@ -5,7 +5,9 @@ export interface Industry {
   name: string
   code: string
   description?: string
-  version: string
+  version: number
+  revisionId?: string
+  contentHash?: string
   nodeCount: number
   edgeCount: number
   createdAt: string
@@ -45,6 +47,23 @@ export interface Segment {
   lastMatchedAt?: string
 }
 
+export interface SegmentRelation {
+  sourceId: string
+  sourceCode: string
+  sourceName: string
+  targetId: string
+  targetCode: string
+  targetName: string
+  type: 'SUPPLIES' | 'INFLUENCES' | 'CONSTRAINS' | 'SUBSTITUTES'
+  direction: 'positive' | 'negative' | 'mixed'
+  weight: number
+  confidence: number
+  lag?: string
+  description?: string
+  sourceUrls?: string[]
+  revisionId?: string
+}
+
 export interface Company {
   id: string
   name: string
@@ -60,6 +79,7 @@ export interface Company {
 export interface SwimLaneData {
   industry: Industry
   stages: Stage[]
+  relations?: SegmentRelation[]
 }
 
 export interface ExplorationTask {

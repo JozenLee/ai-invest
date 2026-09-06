@@ -75,6 +75,17 @@ export const generateReportStep: StepDefinition = {
     const validation = context.artifacts.get('portfolio-decision-validation')
     const dataQuality = context.artifacts.get('data-quality')
     const researchPreflight = context.artifacts.get('research-preflight')
+    const graphContext = context.artifacts.get('graph-context') || context.artifacts.get('research-snapshot')?.graphContext
+    const graphReportSection = graphContext ? {
+      revisionId: graphContext.revisionId,
+      version: graphContext.version,
+      contentHash: graphContext.contentHash,
+      sourceFetchedAt: graphContext.sourceFetchedAt,
+      coverage: graphContext.coverage,
+      stages: (graphContext.stages || []).map((stage: any) => ({ name: stage.name, segments: (stage.segments || []).map((segment: any) => segment.name) })),
+      eventPropagation: (graphContext.eventMappings || []).slice(0, 8),
+      limitation: '图谱关系用于界定产业范围和构造传导假设，不单独构成ETF交易信号。',
+    } : null
     const generatedAt = new Date().toISOString()
     const frozenTiming = context.artifacts.get('decision-timing') as DecisionTimingAssessment | undefined
     const decisionTiming = frozenTiming ? finalizeDecisionTiming(frozenTiming, generatedAt) : effectiveDecisionTiming(undefined, generatedAt)
@@ -100,6 +111,7 @@ export const generateReportStep: StepDefinition = {
       { title: '市场分析', value: marketAnalysis },
       { title: '产业资讯分析', value: sentimentAnalysis },
       { title: '产业链企业分析', value: companyAnalysis },
+      { title: '产业认知基线与传导', value: graphReportSection },
       { title: '行业总览', value: industryAnalysis },
       { title: '投资建议与反证', value: investmentAdvice },
     ] })
@@ -122,6 +134,7 @@ export const generateReportStep: StepDefinition = {
           etfActions: actions,
           researchEvaluation: evaluation,
           researchManifest: context.artifacts.get('research-manifest'),
+          graphContext,
           researchPreflight,
           dataQuality,
           reportQuality,
@@ -144,7 +157,8 @@ export const generateReportStep: StepDefinition = {
             runId: context.runId,
             parentRunId: context.input.parentRunId || null,
             kind: context.input.parentRunId ? 'review' : 'analysis',
-            generatedAt
+            generatedAt,
+            graphRevisionId: graphContext?.revisionId || null
           }
         })
       }

@@ -17,7 +17,8 @@ export const freezeResearchStep: StepDefinition = {
     await context.saveArtifact('decision-timing',snapshot.decisionTiming,'DATA')
     await context.saveArtifact('historical-report-context',snapshot.historicalReports||[],'DATA')
     await context.saveArtifact('historical-report-policy',snapshot.profile.historyReports||{enabled:true,lookbackTradingDays:10,mode:'latest-per-trading-day'},'DATA')
-    await context.saveArtifact('research-manifest',{id:snapshot.id,asOf:snapshot.asOf,version:snapshot.version,evidence:snapshot.evidence},'DATA')
+    await context.saveArtifact('graph-context',snapshot.graphContext||null,'DATA')
+    await context.saveArtifact('research-manifest',{id:snapshot.id,asOf:snapshot.asOf,version:snapshot.version,evidence:snapshot.evidence,graphRevision:snapshot.graphContext?{revisionId:snapshot.graphContext.revisionId,version:snapshot.graphContext.version,contentHash:snapshot.graphContext.contentHash,sourceFetchedAt:snapshot.graphContext.sourceFetchedAt}:null},'DATA')
     await context.updateProgress(2,2,`已冻结研究输入；${snapshot.decisionTiming?.label||'时效待核验'}；后续步骤与恢复不重读实时数据`)
   },
 }

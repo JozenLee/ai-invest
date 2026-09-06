@@ -2,6 +2,7 @@
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react'
 import { StageColumn } from './StageColumn'
 import type { SwimLaneData } from '@/types/industry-graph'
@@ -102,17 +103,24 @@ export function SwimLaneGraph({
       ),
     0
   )
+  const relationCount = data.relations?.length || 0
+  const evidencedRelations = data.relations?.filter(relation => relation.sourceUrls?.length).length || 0
+  const evidenceCoverage = relationCount ? Math.round(evidencedRelations / relationCount * 100) : 0
 
   return (
     <div className="space-y-6">
       {/* Summary Header */}
       <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 border border-blue-100 shadow-sm">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-bold text-slate-900 mb-2">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              <h2 className="text-2xl font-bold text-slate-900">
               {data.industry.name}
-            </h2>
-            <div className="flex gap-6 text-sm text-slate-600">
+              </h2>
+              <Badge variant="secondary" className="font-mono tabular-nums">认知版本 v{data.industry.version || 0}</Badge>
+              {data.industry.revisionId && <Badge variant="outline" className="font-mono" title={data.industry.revisionId}>版本ID {data.industry.revisionId.slice(0, 8)}</Badge>}
+            </div>
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600">
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">产业链阶段:</span>
                 <span className="font-semibold text-blue-600">{sortedStages.length}</span>
@@ -127,7 +135,16 @@ export function SwimLaneGraph({
                 <span className="text-muted-foreground">相关企业:</span>
                 <span className="font-semibold text-blue-600">{totalCompanies}</span>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">传导关系:</span>
+                <span className="font-semibold tabular-nums text-blue-600">{relationCount}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">关系证据覆盖:</span>
+                <span className="font-semibold tabular-nums text-blue-600">{evidenceCoverage}%</span>
+              </div>
             </div>
+            {!data.industry.revisionId && <p className="mt-3 text-sm text-muted-foreground" role="status">该图谱尚未发布为可追溯版本；重新审核发布后将生成版本与证据摘要。</p>}
           </div>
         </div>
       </div>
@@ -135,8 +152,7 @@ export function SwimLaneGraph({
       {/* Swim Lane Container */}
       <div className="relative">
         <div
-          className="grid gap-4 items-start"
-          style={{ gridTemplateColumns: `repeat(${sortedStages.length}, minmax(320px, 1fr))` }}
+          className="grid grid-cols-1 items-start gap-4 lg:grid-flow-col lg:auto-cols-[minmax(320px,1fr)]"
         >
           {sortedStages.map((stage) => (
             <StageColumn

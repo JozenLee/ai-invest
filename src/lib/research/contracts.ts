@@ -1,4 +1,5 @@
 import type { DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
+import type { FrozenGraphContext } from '@/lib/graph/research-context'
 
 /** Versioned, serializable boundary shared by collection, research, replay and UI. */
 export const RESEARCH_VERSION = 1 as const
@@ -34,7 +35,8 @@ export type ResearchSnapshot = {
   etfs: ETFInput[]; benchmarkBars: Bar[]; sectorFlows: Array<{ date: string; sector: string; net: number; netPct: number | null; evidenceId: string }>;
   events: ResearchEvent[];
   historicalReports?: Array<{ reportId:string; industryId:string; industryName:string; sessionDate:string; createdAt:string; title:string; summary:string; confidencePct:number|null; recommendation:unknown; stateCounts:Record<string,number>; role:'historical-context' }>;
-  companies: Array<{ code: string; name: string; segment: string; pool: 'holding' | 'leader' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; evidenceIds: string[] }>;
+  companies: Array<{ code: string; name: string; segment: string; pool: 'holding' | 'leader' | 'graph' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; evidenceIds: string[] }>;
+  graphContext?: FrozenGraphContext;
   /** Frozen projections keep the existing report steps on exactly the same input. */
   projections: Record<string, Record<string, unknown>>;
   records?: Record<string, unknown>;

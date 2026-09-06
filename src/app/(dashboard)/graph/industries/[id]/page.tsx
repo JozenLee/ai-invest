@@ -108,38 +108,41 @@ export default function IndustryDetailPage({ params }: PageProps) {
   return (
     <div className="container mx-auto py-6 space-y-6">
       {/* Header with back button and actions */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-start gap-3 sm:items-center sm:gap-4">
         <Button
           variant="ghost"
           size="sm"
           onClick={() => router.push('/graph')}
-          className="gap-2"
+          className="min-h-11 gap-2"
         >
           <ArrowLeft className="h-4 w-4" />
           返回
         </Button>
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold">产业链泳道图</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {data ? data.industry.name : '横向展示产业链各阶段、环节和企业分布'}
           </p>
         </div>
-        {data && (
-          <IndustryMatchButton
-            industryId={id}
-            industryName={data.industry.name}
-            onMatchComplete={handleMatchComplete}
-          />
-        )}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleDownloadImage}
-          disabled={isLoading || !!error || !data}
-        >
-          <Download className="mr-2 h-4 w-4" />
-          下载图片
-        </Button>
+        <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+          {data && (
+            <IndustryMatchButton
+              industryId={id}
+              industryName={data.industry.name}
+              onMatchComplete={handleMatchComplete}
+            />
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="min-h-11"
+            onClick={handleDownloadImage}
+            disabled={isLoading || !!error || !data}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            下载图片
+          </Button>
+        </div>
       </div>
 
       {/* Swim Lane Graph */}

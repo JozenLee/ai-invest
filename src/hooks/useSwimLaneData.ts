@@ -181,7 +181,7 @@ export function useSwimLaneData({
           id: taskData.industryId || 'preview',
           name: industryName || taskData.industryName || '产业链',
           code: taskData.industryId ? structure.industry?.code || 'PREVIEW' : 'PREVIEW',
-          version: '1.0',
+          version: 0,
           nodeCount,
           edgeCount,
           createdAt: new Date().toISOString(),

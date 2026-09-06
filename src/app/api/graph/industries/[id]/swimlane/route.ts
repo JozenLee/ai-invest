@@ -95,13 +95,16 @@ function transformSwimLaneData(data: any): any {
       name: data.industry.name,
       code: data.industry.code,
       description: data.industry.description,
-      version: '1.0', // 默认版本
+      version: Number(data.industry.version || 0),
+      revisionId: data.industry.revisionId,
+      contentHash: data.industry.contentHash,
       nodeCount: 0,
       edgeCount: 0,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
+      createdAt: data.industry.publishedAt || '',
+      updatedAt: data.industry.updatedAt || data.industry.publishedAt || ''
     },
-    stages
+    stages,
+    relations: data.relations || []
   }
 }
 

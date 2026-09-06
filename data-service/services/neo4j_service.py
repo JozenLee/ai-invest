@@ -7,6 +7,12 @@ from contextlib import asynccontextmanager
 from .cache_service import cache_service
 from db import db
 
+ALLOWED_NODE_LABELS = {"Stage", "Segment", "Company"}
+ALLOWED_RELATION_TYPES = {
+    "HAS_STAGE", "HAS_SEGMENT", "INCLUDES", "HAS_TAG",
+    "SUPPLIES", "INFLUENCES", "CONSTRAINS", "SUBSTITUTES",
+    "COMPETES_WITH",
+}
 
 class Neo4jService:
     """Neo4j图数据库服务"""
@@ -120,7 +126,11 @@ class Neo4jService:
         industry_id: str,
         code: str,
         name: str,
-        description: Optional[str] = None
+        description: Optional[str] = None,
+        revision_id: Optional[str] = None,
+        version: int = 1,
+        content_hash: Optional[str] = None,
+        source_urls: Optional[List[str]] = None,
     ) -> str:
         """
         创建产业节点
@@ -140,6 +150,11 @@ class Neo4jService:
             SET i.code = $code,
                 i.name = $name,
                 i.description = $description,
+                i.revision_id = $revision_id,
+                i.version = $version,
+                i.content_hash = $content_hash,
+                i.source_urls = $source_urls,
+                i.published_at = datetime(),
                 i.updated_at = datetime()
             RETURN i.id as id
             """
@@ -148,7 +163,11 @@ class Neo4jService:
                 industry_id=industry_id,
                 code=code,
                 name=name,
-                description=description
+                description=description,
+                revision_id=revision_id,
+                version=version,
+                content_hash=content_hash,
+                source_urls=source_urls or [],
             )
             record = await result.single()
             return record["id"]
@@ -170,6 +189,8 @@ class Neo4jService:
         Returns:
             str: 创建的节点ID
         """
+        if label not in ALLOWED_NODE_LABELS:
+            raise ValueError(f"Unsupported Neo4j label: {label}")
         async with self.session() as s:
             # 构建SET子句
             set_clauses = ["n.id = $node_id", "n.updated_at = datetime()"]
@@ -210,6 +231,8 @@ class Neo4jService:
         Returns:
             bool: 是否创建成功
         """
+        if rel_type not in ALLOWED_RELATION_TYPES:
+            raise ValueError(f"Unsupported Neo4j relationship: {rel_type}")
         async with self.session() as s:
             # 构建SET子句
             set_clause = "r.updated_at = datetime()"
@@ -250,11 +273,18 @@ class Neo4jService:
         async with self.session() as s:
             query = """
             MATCH (i:Industry)
-            RETURN i.id as id, i.code as code, i.name as name, i.description as description
+            RETURN i.id as id, i.code as code, i.name as name,
+                   i.description as description, COALESCE(i.version, 0) as version,
+                   i.revision_id as revision_id, i.content_hash as content_hash,
+                   i.published_at as published_at, i.updated_at as updated_at
             ORDER BY i.name
             """
             result = await s.run(query)
             records = await result.data()
+            for record in records:
+                for field in ("published_at", "updated_at"):
+                    if record.get(field) is not None:
+                        record[field] = str(record[field])
             return records
 
     async def get_industry_basic(self, industry_id: str) -> Optional[Dict[str, Any]]:
@@ -274,12 +304,20 @@ class Neo4jService:
         async with self.session() as s:
             query = """
             MATCH (i:Industry {id: $industry_id})
-            RETURN i.id as id, i.code as code, i.name as name, i.description as description
+            RETURN i.id as id, i.code as code, i.name as name,
+                   i.description as description, COALESCE(i.version, 0) as version,
+                   i.revision_id as revision_id, i.content_hash as content_hash,
+                   i.source_urls as source_urls, i.published_at as published_at,
+                   i.updated_at as updated_at
             """
             result = await s.run(query, industry_id=resolved_id)
             record = await result.single()
             if record:
-                return dict(record)
+                data = dict(record)
+                for field in ("published_at", "updated_at"):
+                    if data.get(field) is not None:
+                        data[field] = str(data[field])
+                return data
             return None
 
     async def get_industry_full_graph(self, industry_id: str) -> Optional[Dict[str, Any]]:
@@ -314,6 +352,12 @@ class Neo4jService:
                 i.code as industry_code,
                 i.name as industry_name,
                 i.description as industry_description,
+                COALESCE(i.version, 0) as industry_version,
+                i.revision_id as industry_revision_id,
+                i.content_hash as industry_content_hash,
+                i.source_urls as industry_source_urls,
+                i.published_at as industry_published_at,
+                i.updated_at as industry_updated_at,
                 stage.id as stage_id,
                 stage.code as stage_code,
                 stage.name as stage_name,
@@ -331,7 +375,8 @@ class Neo4jService:
                 company.country as company_country,
                 company.market_position as company_market_position,
                 company.key_products as company_key_products,
-                company.description as company_description
+                company.description as company_description,
+                company.source_urls as company_source_urls
             ORDER BY stage.code, segment.code, company.market_position, company.name
             """
             result = await s.run(query, industry_id=resolved_id)
@@ -348,9 +393,16 @@ class Neo4jService:
                     "id": first_record["industry_id"],
                     "code": first_record["industry_code"],
                     "name": first_record["industry_name"],
-                    "description": first_record["industry_description"]
+                    "description": first_record["industry_description"],
+                    "version": first_record["industry_version"],
+                    "revision_id": first_record["industry_revision_id"],
+                    "content_hash": first_record["industry_content_hash"],
+                    "source_urls": first_record["industry_source_urls"] or [],
+                    "published_at": str(first_record["industry_published_at"] or ""),
+                    "updated_at": str(first_record["industry_updated_at"] or ""),
                 },
-                "stages": []
+                "stages": [],
+                "relations": []
             }
 
             # 使用字典组织阶段和环节
@@ -397,7 +449,8 @@ class Neo4jService:
                         "country": record["company_country"],
                         "market_position": record["company_market_position"],
                         "key_products": record["company_key_products"] or [],
-                        "description": record["company_description"]
+                        "description": record["company_description"],
+                        "source_urls": record["company_source_urls"] or []
                     }
                     stages_dict[stage_id]["segments"][segment_id]["companies"].append(company_data)
 
@@ -405,6 +458,22 @@ class Neo4jService:
             for stage in stages_dict.values():
                 stage["segments"] = list(stage["segments"].values())
                 graph_data["stages"].append(stage)
+
+            relation_query = """
+            MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(source:Segment)
+            MATCH (source)-[rel:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES]->(target:Segment)
+            RETURN source.id AS source_id, source.code AS source_code,
+                   source.name AS source_name, target.id AS target_id,
+                   target.code AS target_code, target.name AS target_name,
+                   type(rel) AS type, rel.direction AS direction,
+                   rel.weight AS weight, rel.confidence AS confidence,
+                   rel.lag AS lag, rel.description AS description,
+                   COALESCE(rel.source_urls, []) AS source_urls,
+                   rel.revision_id AS revision_id
+            ORDER BY source.code, target.code, type(rel)
+            """
+            relation_result = await s.run(relation_query, industry_id=resolved_id)
+            graph_data["relations"] = await relation_result.data()
 
             return graph_data
 
@@ -452,6 +521,11 @@ class Neo4jService:
                 i.code as industry_code,
                 i.name as industry_name,
                 i.description as industry_description,
+                COALESCE(i.version, 0) as industry_version,
+                i.revision_id as industry_revision_id,
+                i.content_hash as industry_content_hash,
+                i.published_at as industry_published_at,
+                i.updated_at as industry_updated_at,
                 stage.id as stage_id,
                 stage.code as stage_code,
                 stage.name as stage_name,
@@ -481,7 +555,12 @@ class Neo4jService:
                     "id": first_record["industry_id"],
                     "code": first_record["industry_code"],
                     "name": first_record["industry_name"],
-                    "description": first_record["industry_description"]
+                    "description": first_record["industry_description"],
+                    "version": first_record["industry_version"],
+                    "revision_id": first_record["industry_revision_id"],
+                    "content_hash": first_record["industry_content_hash"],
+                    "published_at": str(first_record["industry_published_at"] or ""),
+                    "updated_at": str(first_record["industry_updated_at"] or ""),
                 },
                 "lanes": {}
             }
@@ -549,7 +628,64 @@ class Neo4jService:
                     }
                     swimlane_data["lanes"][stage_code]["segments"].append(segment_data)
 
+            relation_result = await s.run(
+                """MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(source:Segment)
+                   MATCH (source)-[rel:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES]->(target:Segment)
+                   RETURN source.id AS source_id, source.code AS source_code,
+                          source.name AS source_name, target.id AS target_id,
+                          target.code AS target_code, target.name AS target_name,
+                          type(rel) AS type, rel.direction AS direction,
+                          rel.weight AS weight, rel.confidence AS confidence,
+                          rel.lag AS lag, rel.description AS description,
+                          COALESCE(rel.source_urls, []) AS source_urls,
+                          rel.revision_id AS revision_id
+                   ORDER BY source.code, target.code""",
+                industry_id=resolved_id,
+            )
+            swimlane_data["relations"] = await relation_result.data()
+
             return swimlane_data
+
+    async def reconcile_industry_scope(
+        self,
+        industry_id: str,
+        expected_stage_ids: set[str],
+        expected_segment_ids: set[str],
+        expected_company_ids: set[str],
+        expected_segment_relation_keys: set[str],
+    ) -> None:
+        """Remove facts absent from the reviewed revision without deleting shared companies."""
+        async with self.session() as s:
+            await s.run(
+                """MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(seg:Segment)
+                   WHERE NOT seg.id IN $expected_ids
+                   DETACH DELETE seg""",
+                industry_id=industry_id, expected_ids=list(expected_segment_ids),
+            )
+            await s.run(
+                """MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(stage:Stage)
+                   WHERE NOT stage.id IN $expected_ids
+                   DETACH DELETE stage""",
+                industry_id=industry_id, expected_ids=list(expected_stage_ids),
+            )
+            await s.run(
+                """MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(seg:Segment)-[r:INCLUDES]->(company:Company)
+                   WHERE NOT company.id IN $expected_ids
+                   DELETE r""",
+                industry_id=industry_id, expected_ids=list(expected_company_ids),
+            )
+            await s.run(
+                """MATCH (i:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(source:Segment)
+                   MATCH (source)-[rel:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES]->(target:Segment)
+                   WITH rel, source.id + '|' + type(rel) + '|' + target.id AS relation_key
+                   WHERE NOT relation_key IN $expected_keys
+                   DELETE rel""",
+                industry_id=industry_id,
+                expected_keys=list(expected_segment_relation_keys),
+            )
+            await s.run(
+                "MATCH (company:Company) WHERE NOT (company)<-[:INCLUDES]-(:Segment) DETACH DELETE company"
+            )
 
     async def delete_industry(self, industry_id: str) -> bool:
         """
@@ -562,17 +698,21 @@ class Neo4jService:
             bool: 是否删除成功
         """
         async with self.session() as s:
-            # 删除产业及其所有关联的阶段、环节、企业节点
+            # Company nodes are canonical and can be shared by multiple industries.
+            # Delete only this industry's hierarchy, then remove truly orphaned companies.
             query = """
             MATCH (i:Industry {id: $industry_id})
             OPTIONAL MATCH (i)-[:HAS_STAGE]->(stage:Stage)
             OPTIONAL MATCH (stage)-[:HAS_SEGMENT]->(segment:Segment)
-            OPTIONAL MATCH (segment)-[:INCLUDES]->(company:Company)
-            DETACH DELETE i, stage, segment, company
+            DETACH DELETE i, stage, segment
             RETURN count(i) as deleted_count
             """
             result = await s.run(query, industry_id=industry_id)
             record = await result.single()
+
+            await s.run(
+                "MATCH (company:Company) WHERE NOT (company)<-[:INCLUDES]-(:Segment) DETACH DELETE company"
+            )
 
             if record and record["deleted_count"] > 0:
                 return True
@@ -767,7 +907,7 @@ class Neo4jService:
 
             # 2. 查询下游影响（SUPPLIES/INFLUENCES关系）
             downstream_query = """
-            MATCH path = (source:Segment {code: $segment_code})-[r:SUPPLIES|INFLUENCES*1..%d]->(target:Segment)
+            MATCH path = (source:Segment {code: $segment_code})-[r:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES*1..%d]->(target:Segment)
             WHERE ALL(rel IN relationships(path) WHERE COALESCE(rel.weight, 0.5) > 0.3)
             WITH DISTINCT target, relationships(path), length(path) AS distance
             MATCH (target)<-[:HAS_SEGMENT]-(st:Stage)<-[:HAS_STAGE]-(i:Industry)
@@ -786,7 +926,7 @@ class Neo4jService:
 
             # 3. 查询上游影响（反向遍历）
             upstream_query = """
-            MATCH path = (source:Segment)-[r:SUPPLIES|INFLUENCES*1..%d]->(target:Segment {code: $segment_code})
+            MATCH path = (source:Segment)-[r:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES*1..%d]->(target:Segment {code: $segment_code})
             WHERE ALL(rel IN relationships(path) WHERE COALESCE(rel.weight, 0.5) > 0.3)
             WITH DISTINCT source, relationships(path), length(path) AS distance
             MATCH (source)<-[:HAS_SEGMENT]-(st:Stage)<-[:HAS_STAGE]-(i:Industry)

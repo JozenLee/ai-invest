@@ -1,9 +1,33 @@
 # data-service/models/industry_models.py
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from datetime import datetime
 from .coverage_models import CoverageAssessment, ExplorationContext
 from .review_models import ReviewHistory
+
+
+class EvidenceRef(BaseModel):
+    """Source metadata carried into the published graph revision."""
+    title: str
+    url: str
+    excerpt: Optional[str] = None
+    source_type: str = "web"
+    retrieved_at: datetime = Field(default_factory=datetime.now)
+
+
+class SegmentRelationshipInfo(BaseModel):
+    """Directed, reviewable propagation relation between industry segments."""
+    type: Literal["SUPPLIES", "INFLUENCES", "CONSTRAINS", "SUBSTITUTES"]
+    from_segment: str = Field(..., alias="from")
+    to_segment: str = Field(..., alias="to")
+    direction: Literal["positive", "negative", "mixed"] = "positive"
+    weight: float = Field(0.5, ge=0, le=1)
+    confidence: float = Field(0.7, ge=0, le=1)
+    lag: Optional[str] = None
+    description: Optional[str] = None
+    evidence_urls: List[str] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class IndustryInfo(BaseModel):
@@ -45,6 +69,11 @@ class IndustryStructure(BaseModel):
     """产业链结构（第一轮探索结果）"""
     industry: IndustryInfo
     structure: List[StageInfo] = Field(default_factory=list, description="产业链阶段")
+    relationships: List[SegmentRelationshipInfo] = Field(
+        default_factory=list,
+        description="环节之间的有向传导关系"
+    )
+    evidence: List[EvidenceRef] = Field(default_factory=list)
 
 
 class CompanyInfo(BaseModel):
@@ -59,6 +88,7 @@ class CompanyInfo(BaseModel):
     description: Optional[str] = Field(None, description="企业描述")
     segment_code: Optional[str] = Field(None, description="所属环节代码")
     stage_code: Optional[str] = Field(None, description="所属阶段代码")
+    evidence_urls: List[str] = Field(default_factory=list)
 
 
 class RelationshipInfo(BaseModel):
@@ -70,6 +100,7 @@ class RelationshipInfo(BaseModel):
     to_company: str = Field(..., alias="to", description="目标企业名称")
     description: Optional[str] = Field(None, description="关系描述")
     confidence: float = Field(0.8, description="置信度 0-1")
+    evidence_urls: List[str] = Field(default_factory=list)
 
 
 class SegmentDetail(BaseModel):
@@ -101,7 +132,7 @@ class ExplorationTask(BaseModel):
     current_step: Optional[str] = None
     structure: Optional[IndustryStructure] = None
     result: Optional[ExplorationResult] = None
-    graph_stats: Optional[Dict[str, int]] = None
+    graph_stats: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.now)

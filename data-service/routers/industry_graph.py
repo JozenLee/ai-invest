@@ -51,6 +51,7 @@ async def explore_industry(
     task = task_manager.create_task(task_id, request.name)
     # 将industry_id存储在metadata中
     task.metadata['industry_id'] = industry_id
+    task_manager.save_task(task)
 
     # 后台执行探索
     background_tasks.add_task(
@@ -80,7 +81,7 @@ async def edit_industry(industry_id: str):
     4. 返回任务ID供前端使用
     """
     from services.neo4j_service import get_neo4j_service
-    from models.industry_models import IndustryStructure
+    from models.industry_models import IndustryStructure, EvidenceRef
 
     try:
         # 从Neo4j加载产业数据
@@ -90,7 +91,8 @@ async def edit_industry(industry_id: str):
             # 查询产业基本信息
             query = """
             MATCH (ind:Industry {id: $industry_id})
-            RETURN ind.name as name, ind.code as code, ind.description as description
+            RETURN ind.name as name, ind.code as code, ind.description as description,
+                   COALESCE(ind.source_urls, []) as source_urls
             """
             result = await session.run(query, industry_id=industry_id)
             records = await result.data()
@@ -121,7 +123,8 @@ async def edit_industry(industry_id: str):
                     country: c.country,
                     market_position: c.market_position,
                     key_products: c.key_products,
-                    description: c.description
+                    description: c.description,
+                    evidence_urls: COALESCE(c.source_urls, [])
                 }]
             }) as segments
             ORDER BY stage.order
@@ -135,6 +138,18 @@ async def edit_industry(industry_id: str):
 
             structure_result = await session.run(structure_query, industry_id=industry_id)
             structure_records = await structure_result.data()
+            relationship_result = await session.run(
+                """MATCH (ind:Industry {id: $industry_id})-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(source:Segment)
+                   MATCH (source)-[rel:SUPPLIES|INFLUENCES|CONSTRAINS|SUBSTITUTES]->(target:Segment)
+                   RETURN source.code AS source_code, target.code AS target_code,
+                          type(rel) AS type, COALESCE(rel.direction, 'positive') AS direction,
+                          COALESCE(rel.weight, 0.5) AS weight,
+                          COALESCE(rel.confidence, 0.5) AS confidence,
+                          rel.lag AS lag, rel.description AS description,
+                          COALESCE(rel.source_urls, []) AS evidence_urls""",
+                industry_id=industry_id,
+            )
+            relationship_records = await relationship_result.data()
 
         if not structure_records or len(structure_records) == 0:
             raise HTTPException(status_code=404, detail="产业链结构不存在")
@@ -146,6 +161,7 @@ async def edit_industry(industry_id: str):
         task = task_manager.create_task(task_id, industry_name)
         task.metadata['industry_id'] = industry_id
         task.metadata['is_edit_mode'] = True
+        task_manager.save_task(task)
 
         # 构建IndustryStructure对象
         structure = IndustryStructure(
@@ -154,7 +170,15 @@ async def edit_industry(industry_id: str):
                 "code": industry_info.get('code', ''),
                 "description": industry_info.get('description', '')
             },
-            structure=structure_data
+            structure=structure_data,
+            relationships=[{
+                "from": row["source_code"], "to": row["target_code"],
+                "type": row["type"], "direction": row["direction"],
+                "weight": row["weight"], "confidence": row["confidence"],
+                "lag": row["lag"], "description": row["description"],
+                "evidence_urls": row["evidence_urls"],
+            } for row in relationship_records],
+            evidence=[EvidenceRef(title=url, url=url, source_type="graph_revision") for url in industry_info.get("source_urls", [])]
         )
 
         # 将结构中的企业数据转换为result格式
@@ -180,7 +204,8 @@ async def edit_industry(industry_id: str):
                             key_products=comp.get('key_products', []),
                             description=comp.get('description'),
                             segment_code=segment_code,
-                            stage_code=stage.get('stage_code')
+                            stage_code=stage.get('stage_code'),
+                            evidence_urls=comp.get('evidence_urls', [])
                         ))
 
                 details[segment_code] = SegmentDetail(
@@ -413,7 +438,8 @@ async def review_structure(
                                 key_products=comp.get('key_products', []),
                                 description=comp.get('description'),
                                 segment_code=segment_code,
-                                stage_code=stage.stage_code
+                                stage_code=stage.stage_code,
+                                evidence_urls=comp.get('evidence_urls', [])
                             ))
                         else:
                             # 如果已经是CompanyInfo对象，直接使用
@@ -690,7 +716,11 @@ async def unified_review(
 
     if request.approved:
         # 批准通过，启动写入图数据库
-        result = request.modified_companies or task.result
+        from models.industry_models import ExplorationResult, IndustryStructure
+        result = ExplorationResult(**request.modified_companies) if request.modified_companies else task.result
+        if request.modified_structure:
+            structure = IndustryStructure(**request.modified_structure)
+            result = result.model_copy(update={"structure": structure}) if result else ExplorationResult(structure=structure, details={})
         background_tasks.add_task(
             run_write_to_graph_task,
             task_id=task_id,
@@ -731,7 +761,7 @@ async def run_exploration_task(
         from models.industry_models import ExplorationResult
 
         explorer = get_explorer_service()
-        structure = await explorer.explore_structure(industry_name)
+        structure = await explorer.explore_structure(industry_name, description)
 
         task_manager.update_task(
             task_id,
@@ -1096,6 +1126,31 @@ async def run_write_to_graph_task(task_id: str, result: dict):
         neo4j_service = get_neo4j_service()
         # 传递industry_id到write_graph_to_neo4j
         stats = await write_graph_to_neo4j(result, neo4j_service, industry_id)
+
+        # Publish invalidation is part of the graph lifecycle. A failed projection
+        # refresh must not roll back an already committed Neo4j revision.
+        try:
+            from services.cache_service import cache_service
+            from services.ai_service import get_global_analyzer
+            cache_service.invalidate_all_graph_cache()
+            analyzer = get_global_analyzer()
+            if analyzer:
+                analyzer.industry_segments.clear()
+                analyzer.segments_prompt = ""
+                await analyzer.load_industry_segments(max_retries=1)
+
+            import aiohttp
+            import os
+            app_url = os.getenv("APP_URL", "http://localhost:3000").rstrip("/")
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{app_url}/api/graph/projection/refresh",
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as response:
+                    if response.status >= 400:
+                        stats["projection_refresh_warning"] = f"HTTP {response.status}"
+        except Exception as refresh_error:
+            stats["projection_refresh_warning"] = str(refresh_error)
 
         task_manager.update_task(
             task_id,
