@@ -5,8 +5,8 @@ export function buildMatchingPrompt(params: {
   nodeType: string
   nodeDescription?: string
   industryContext?: string
-  etfCandidates: Array<{ ticker: string; name: string }>
-  indexCandidates: Array<{ code: string; name: string }>
+  etfCandidates: Array<{ ticker: string; name: string; evidenceScore?: number; holdingWeight?: number; holdingCount?: number; matchedCompanies?: string[] }>
+  indexCandidates: Array<{ code: string; name: string; evidenceScore?: number }>
 }): string {
   const { nodeName, nodeType, nodeDescription, industryContext, etfCandidates, indexCandidates } = params
 
@@ -21,7 +21,7 @@ ${nodeDescription ? `- 描述：${nodeDescription}` : ''}
 ${industryContext ? `- 产业链位置：${industryContext}` : ''}
 
 **候选ETF列表**（已通过关键词初筛，共${etfCandidates.length}个）：
-${etfCandidates.map(etf => `- ${etf.ticker}: ${etf.name}`).join('\n')}
+${etfCandidates.map(etf => `- ${etf.ticker}: ${etf.name}${etf.holdingCount ? `；命中${etf.holdingCount}家代表企业，合计披露权重${(etf.holdingWeight || 0).toFixed(2)}%，证据分${(etf.evidenceScore || 0).toFixed(2)}` : `；语义证据分${(etf.evidenceScore || 0).toFixed(2)}`}`).join('\n')}
 
 **候选指数列表**（已通过关键词初筛，共${indexCandidates.length}个）：
 ${indexCandidates.map(idx => `- ${idx.code}: ${idx.name}`).join('\n')}
@@ -48,7 +48,7 @@ ${indexCandidates.map(idx => `- ${idx.code}: ${idx.name}`).join('\n')}
 }
 
 **评分标准**：
-- 1.0: 直接追踪该细分领域，核心成分股高度匹配
+- 1.0: 直接追踪该细分领域，且已披露持仓覆盖多家代表企业
 - 0.8-0.9: 高度相关，该领域是主要成分（权重>30%）
 - 0.6-0.7: 中度相关，该领域是次要成分（权重10-30%）
 - 0.4-0.5: 低度相关，有间接关联但权重较小
@@ -60,6 +60,8 @@ ${indexCandidates.map(idx => `- ${idx.code}: ${idx.name}`).join('\n')}
 3. 按相关度降序排列
 4. reasoning字段简明扼要（不超过30字）
 5. 确保输出有效的JSON格式，不要包含其他文字
+6. 有持仓证据时，reasoning必须说明“持有哪类代表企业/覆盖权重”；名称相似不能覆盖持仓反证
+7. ETF持仓有披露期滞后，只能证明已披露暴露，不得表述为实时权重
 
 请直接输出JSON，不要添加任何解释文字。`
 }

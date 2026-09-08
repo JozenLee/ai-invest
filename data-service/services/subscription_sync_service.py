@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -102,9 +103,30 @@ class SubscriptionSyncService:
         self._company_requests: Dict[tuple, asyncio.Task] = {}
         self.config = json.loads(json.dumps(DEFAULTS))
         self._tasks: Dict[str, asyncio.Task] = {}
+        self._task_lanes: Dict[str, str] = {}
+        self._last_ensure_at = 0.0
         self._request_times: Dict[tuple, float] = {}
         self._realtime_fetch_semaphore = asyncio.Semaphore(4)
+        self._company_realtime_semaphore = asyncio.Semaphore(2)
         self._quote_semaphore = asyncio.Semaphore(2)
+        self._request_loop = None
+
+    def _ensure_request_loop(self):
+        # Python 3.9 binds semaphores to the constructing loop. The singleton is
+        # imported before uvicorn starts its loop, so create limits on first use.
+        loop = asyncio.get_running_loop()
+        if self._request_loop is loop:
+            return
+        self._request_loop = loop
+        self._fetch_semaphore = asyncio.Semaphore(4)
+        self._realtime_fetch_semaphore = asyncio.Semaphore(4)
+        self._company_realtime_semaphore = asyncio.Semaphore(2)
+        concurrency = self.config['requestConcurrency']
+        reserved = 1 if concurrency <= 3 else 2
+        self._company_semaphore = asyncio.Semaphore(max(1, concurrency-reserved))
+        self._quote_semaphore = self._company_semaphore if concurrency == 1 else asyncio.Semaphore(reserved)
+        self._company_requests.clear()
+        self._request_times.clear()
 
     def recover_interrupted_runs(self) -> None:
         """Called once at process startup, before any worker can claim a run."""
@@ -168,6 +190,7 @@ class SubscriptionSyncService:
                     if not task.cancelled() and task.exception():
                         logger.error('订阅任务异常结束: %s', task.exception())
                     self._tasks.pop(dataset_id, None)
+                    self._task_lanes.pop(dataset_id, None)
             if not self._tasks:
                 concurrency = self.config['requestConcurrency']
                 reserved = 1 if concurrency <= 3 else 2
@@ -175,7 +198,9 @@ class SubscriptionSyncService:
                 self._quote_semaphore = self._company_semaphore if concurrency == 1 else asyncio.Semaphore(reserved)
                 self._company_requests.clear()
                 self._request_times.clear()
-            await self._ensure_subscription_datasets()
+            if time.monotonic() - self._last_ensure_at >= 60:
+                await self._ensure_subscription_datasets()
+                self._last_ensure_at = time.monotonic()
             datasets = await self.list_due_datasets()
             def priority(dataset):
                 key = dataset['datasetKey']
@@ -187,10 +212,23 @@ class SubscriptionSyncService:
             started = 0
             for dataset in datasets:
                 dataset_id = str(dataset['id'])
-                if dataset_id not in self._tasks:
-                    self._tasks[dataset_id] = asyncio.create_task(self.run_dataset(dataset))
+                key = dataset['datasetKey']
+                lane = 'company-live' if key == 'constituent_stock_realtime' else 'market-live' if key.endswith('_realtime') else 'manual' if dataset['status'] == 'queued' else 'background'
+                counts = {name: sum(value == name for value in self._task_lanes.values()) for name in ('company-live', 'market-live', 'manual', 'background')}
+                available = (counts[lane] < (2 if lane == 'company-live' else 4)) if lane.endswith('live') else counts['manual'] + counts['background'] < 4 and (lane == 'manual' or counts['background'] < 3)
+                if dataset_id not in self._tasks and available:
+                    task = asyncio.create_task(self.run_dataset(dataset))
+                    self._tasks[dataset_id] = task
+                    self._task_lanes[dataset_id] = lane
+                    # Refill freed slots immediately; do not allocate hundreds of
+                    # waiting tasks that a later manual refresh cannot overtake.
+                    task.add_done_callback(self._refill_slots)
                     started += 1
             return started
+
+    def _refill_slots(self, task):
+        if not task.cancelled():
+            asyncio.create_task(self.run_due())
 
     async def _ensure_subscription_datasets(self) -> None:
         """Backfill datasets added after an ETF subscription was created."""
@@ -348,47 +386,25 @@ class SubscriptionSyncService:
     async def _fetch(self, key: str, code: str) -> Any:
         if key in ('research_calendar', 'etf_research'):
             from services.research_collection import collect_research
-            return await collect_research(TushareProvider(), key, code, self.config['historyPoints'])
+            return await collect_research(TushareProvider(), key, code, self.config['historyPoints'],
+                                          expected_session=await self._expected_index_close_date() if key == 'etf_research' else None)
         if key == 'sector_capital_flow':
-            # The previous snapshot-only feed could never satisfy a five-session
-            # review after a fresh install. Promax exposes the underlying DC
-            # industry history in yuan, so persist several sessions in one raw
-            # bundle and retain the public snapshot as a fallback.
-            try:
-                provider = TushareProvider()
-                end = datetime.now().strftime('%Y%m%d')
-                start = (datetime.now() - timedelta(days=21)).strftime('%Y%m%d')
-                frame = await provider.request_dataframe(
-                    'moneyflow_ind_dc', start_date=start, end_date=end, content_type='行业'
-                )
-                if 'content_type' in frame.columns:
-                    frame = frame[frame['content_type'].astype(str) == '行业']
-                required = {'trade_date', 'name', 'net_amount'}
-                if frame.empty or not required.issubset(frame.columns):
-                    raise ValueError('moneyflow_ind_dc: 行业资金历史为空或字段不完整')
-                rows = [{
-                    '日期': row.get('trade_date'),
-                    '名称': row.get('name'),
-                    '代码': row.get('ts_code'),
-                    '今日主力净流入-净额': row.get('net_amount'),
-                    '今日主力净流入-净占比': row.get('net_amount_rate'),
-                    '今日涨跌幅': row.get('pct_change'),
-                    '收盘指数': row.get('close'),
-                    '资金类型': row.get('content_type'),
-                } for row in frame.to_dict('records')]
-                return {'data': _clean_json(rows), 'source': 'Tushare/moneyflow_ind_dc',
-                        'raw': True, 'unit': '元', 'scope': '东方财富行业板块主力成交分类'}
-            except Exception as error:
-                logger.warning('Promax 行业资金历史不可用，回退公开快照: %s', error)
-                result = await data_service.get_sector_capital_flow('今日', force_refresh=True)
-                rows = result.to_dict('records') if hasattr(result, 'to_dict') else result
-                if not rows:
-                    raise ValueError('sector_capital_flow: 历史接口与公开快照均无有效数据') from error
-                source = data_service.registry.get_last_source('sector_capital_flow') or 'unknown'
-                if source in ('unavailable', 'mock', 'estimated'):
-                    raise ValueError(f'sector_capital_flow: 数据源不可用于入库: {source}') from error
-                return {'data': _clean_json(rows), 'source': source,
-                        'failures': {'history': 'Promax行业资金历史暂不可用，本次仅保留当日公开快照'}}
+            # 板块资金只允许 AKShare 单源。每次订阅执行都强制刷新，
+            # 由调度策略在交易时段持续保存最新横截面快照。
+            result = await data_service.get_sector_capital_flow('今日', force_refresh=True)
+            rows = result.to_dict('records') if hasattr(result, 'to_dict') else result
+            if not rows:
+                raise ValueError('sector_capital_flow: AKShare 未返回有效数据')
+            source = data_service.registry.get_last_source('sector_capital_flow') or 'unknown'
+            if source != 'AKShare':
+                raise ValueError(f'sector_capital_flow: 预期 AKShare，实际来源为 {source}')
+            return {
+                'data': _clean_json(rows),
+                'source': source,
+                'raw': True,
+                'unit': '元',
+                'scope': 'AKShare 行业板块主力资金横截面',
+            }
         if key in ('market_volume', 'market_main_flow', 'margin_balance'):
             provider = TushareProvider()
             end = datetime.now().strftime('%Y%m%d')
@@ -467,7 +483,18 @@ class SubscriptionSyncService:
             return self._limit_history(rows)
         if key == "etf_realtime":
             frame = await data_service.get_etf_realtime([code])
-            return frame.to_dict("records") if frame is not None else []
+            rows = frame.to_dict("records") if frame is not None else []
+            rows = [row for row in rows if _code(_value(row, '代码', 'code', 'ticker', default='')) == code]
+            if rows:
+                from services.research_collection import fetch_orderbook
+                try:
+                    book = await asyncio.to_thread(fetch_orderbook, code)
+                    rows = [{**row, 'bid': book['bid'], 'ask': book['ask'],
+                             'bookPublishedAt': book['publishedAt'], 'bookDate': book['date'],
+                             'bookSource': book['source']} for row in rows]
+                except Exception as error:
+                    rows = [{**row, 'orderbookError': type(error).__name__} for row in rows]
+            return rows
         if key == "etf_daily":
             start, end = self._history_range('ETFDaily', 'ticker', code)
             frame = await data_service.get_etf_daily(code, start.replace('-', ''), end.replace('-', ''))
@@ -561,6 +588,7 @@ class SubscriptionSyncService:
                 break
         # Leading-indicator companies are an independent pool, not a holdings intersection.
         profiles = db.execute("SELECT s.profile FROM data_subscriptions s JOIN instruments i ON i.id=s.instrumentId WHERE i.type='ETF' AND i.code=?", (code,))
+        industry_id = None
         if profiles:
             try:
                 industry_id = json.loads(profiles[0].get('profile') or '{}').get('industryId')
@@ -571,12 +599,53 @@ class SubscriptionSyncService:
                         unique[leader_code] = {'stockCode': leader_code, 'stockName': leader.get('name'), 'researchPool': 'leader'}
             except (ValueError, TypeError):
                 logger.warning('领域领先企业配置无效，保留原持仓企业池')
+        # 图谱代表企业与ETF持仓企业共享同一证券主键。把已发布图谱中的A股企业
+        # 纳入行情、财报和公告同步目标，避免“有产业归属但没有经营证据”的孤岛。
+        if industry_id:
+            try:
+                graph_rows = db.execute(
+                    "SELECT payload FROM raw_payloads WHERE datasetKey='industry_graph' ORDER BY fetchedAt DESC LIMIT 1"
+                )
+                groups = json.loads(graph_rows[0]['payload']) if graph_rows else []
+                group = next((item for item in groups if item.get('id') == industry_id), None)
+                graph_candidates = []
+                if group:
+                    graph_candidates.extend(group.get('companies') or [])
+                    for stage in group.get('stages') or []:
+                        for segment in stage.get('segments') or []:
+                            for company in segment.get('companies') or []:
+                                graph_candidates.append({**company, 'segmentName': segment.get('name')})
+                ranked = {}
+                for company in graph_candidates:
+                    graph_code = _code(_value(company, 'ticker', 'stockCode', 'stock_code', 'code'))
+                    if not graph_code or not graph_code.isdigit() or len(graph_code) != 6:
+                        continue
+                    representative_etfs = _value(company, 'representativeEtfs', 'representative_etfs', default=[]) or []
+                    current_etf = any(_code(_value(item, 'code', 'ticker')) == _code(code) for item in representative_etfs)
+                    verified = any(bool(_value(item, 'holdingVerified', 'holding_verified')) for item in representative_etfs)
+                    score = _number(_value(company, 'representativenessScore', 'representativeness_score'))
+                    rank = (1 if current_etf else 0, 1 if verified else 0, score)
+                    existing_candidate = ranked.get(graph_code)
+                    if not existing_candidate or rank > existing_candidate[0]:
+                        ranked[graph_code] = (rank, company)
+                limit = max(1, int(os.getenv('GRAPH_COMPANY_SYNC_LIMIT', '30')))
+                for graph_code, (_rank, company) in sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:limit]:
+                    if graph_code not in unique:
+                        unique[graph_code] = {
+                            'stockCode': graph_code,
+                            'stockName': _value(company, 'name', default=graph_code),
+                            'researchPool': 'graph',
+                            'segment': _value(company, 'segmentName', 'nodeName'),
+                        }
+            except (ValueError, TypeError, KeyError) as error:
+                logger.warning('图谱企业同步目标解析失败 industry=%s error=%s', industry_id, error)
         if not unique:
             raise ValueError(f'{code}: 缺少企业持仓和领先企业，请先配置并同步')
         return list(unique.values())
 
     async def _company_request(self, key, symbol, start='', end=''):
         """Deduplicate shared holdings within a worker pass, not across refreshes."""
+        self._ensure_request_loop()
         request_key = (key, symbol, start, end)
         task = self._company_requests.get(request_key)
         ttl = 30 if key.endswith('_realtime') else 300
@@ -785,7 +854,10 @@ class SubscriptionSyncService:
 
     async def _fetch_with_retry(self, key: str, code: str) -> Any:
         """Bound external API concurrency and retry transient provider failures."""
-        async with (self._realtime_fetch_semaphore if key.endswith('_realtime') else self._fetch_semaphore):
+        self._ensure_request_loop()
+        # Large constituent batches must not occupy every ETF/index live slot.
+        semaphore = self._company_realtime_semaphore if key == 'constituent_stock_realtime' else self._realtime_fetch_semaphore if key.endswith('_realtime') else self._fetch_semaphore
+        async with semaphore:
             last_error: Optional[Exception] = None
             for attempt in range(self.max_retries):
                 try:

@@ -187,7 +187,9 @@ class DataService:
 
     async def get_sector_capital_flow(self, indicator: str = "今日", force_refresh: bool = False) -> List[Dict]:
         """获取板块资金流向"""
-        cache_key = f"sector_capital_flow_{indicator}"
+        # 使用独立缓存命名空间，避免读取切换为 AKShare 单源前遗留的
+        # Tushare/混合来源文件或内存缓存。
+        cache_key = f"akshare_sector_capital_flow_{indicator}"
         result = await self.registry.fetch(
             category="sector_capital_flow",
             method="get_sector_capital_flow",

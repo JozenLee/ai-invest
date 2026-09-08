@@ -118,23 +118,19 @@ async def test_turnover_subscription_keeps_raw_rows(service, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sector_flow_uses_promax_multi_session_history_in_yuan(service, monkeypatch):
-    import pandas as pd
-    request = AsyncMock(return_value=pd.DataFrame([
-        {'trade_date': '20260904', 'content_type': '行业', 'ts_code': 'BK1036', 'name': '半导体', 'net_amount': 123.0, 'net_amount_rate': 1.2, 'pct_change': 0.5, 'close': 1000},
-        {'trade_date': '20260904', 'content_type': '概念', 'ts_code': 'BK0001', 'name': '芯片概念', 'net_amount': 999.0},
-    ]))
-    monkeypatch.setattr(module, 'TushareProvider', lambda: Mock(request_dataframe=request))
-    fallback = AsyncMock()
-    monkeypatch.setattr(module.data_service, 'get_sector_capital_flow', fallback)
+async def test_sector_flow_uses_akshare_snapshot_in_yuan(service, monkeypatch):
+    fetch = AsyncMock(return_value=[
+        {'日期': '2026-09-04', '名称': '半导体', '今日主力净流入-净额': 123.0, '今日涨跌幅': 0.5},
+    ])
+    monkeypatch.setattr(module.data_service, 'get_sector_capital_flow', fetch)
+    monkeypatch.setattr(module.data_service.registry, 'get_last_source', lambda _key: 'AKShare')
     result = await service._fetch('sector_capital_flow', 'sh000001')
-    assert result['source'] == 'Tushare/moneyflow_ind_dc'
+    assert result['source'] == 'AKShare'
     assert result['unit'] == '元'
     assert len(result['data']) == 1
     assert result['data'][0]['名称'] == '半导体'
     assert result['data'][0]['今日主力净流入-净额'] == 123.0
-    request.assert_awaited_once()
-    fallback.assert_not_awaited()
+    fetch.assert_awaited_once_with('今日', force_refresh=True)
 
 
 @pytest.mark.asyncio
@@ -260,6 +256,34 @@ async def test_holding_refresh_reuses_real_name_when_source_returns_code(service
     service.stock_provider.get_stock_info.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_company_sync_pool_includes_published_graph_companies(service):
+    module.db.update('''CREATE TABLE data_subscriptions (
+      id TEXT PRIMARY KEY, instrumentId TEXT, profile TEXT
+    )''')
+    module.db.execute_many('INSERT INTO instruments (id,type,code,name) VALUES (?,?,?,?)', [
+        ('etf', 'ETF', '159995', '芯片ETF'),
+    ])
+    module.db.execute_many('INSERT INTO data_subscriptions (id,instrumentId,profile) VALUES (?,?,?)', [
+        ('subscription', 'etf', json.dumps({'industryId': 'industry-ai'})),
+    ])
+    module.db.execute_many('INSERT INTO ETFHolding (id,etfCode,stockCode,stockName,weight) VALUES (?,?,?,?,?)', [
+        ('holding', '159995', '000001', '持仓企业', 5),
+    ])
+    graph = [{
+        'id': 'industry-ai',
+        'companies': [{'ticker': '688001', 'name': '图谱企业', 'representativeness_score': 0.9}],
+    }]
+    module.db.execute_many('INSERT INTO raw_payloads (id,datasetKey,targetCode,payload,fetchedAt) VALUES (?,?,?,?,?)', [
+        ('graph', 'industry_graph', 'all', json.dumps(graph), '2026-09-06'),
+    ])
+
+    rows = await service._company_holdings('159995')
+
+    assert {row['stockCode'] for row in rows} == {'000001', '688001'}
+    assert next(row for row in rows if row['stockCode'] == '688001')['researchPool'] == 'graph'
+
+
 def test_holding_storage_does_not_overwrite_name_with_suffixed_code(service):
     service._store('etf_holdings', '159995', [{'stock_code': '002049', 'stock_name': '紫光国微'}])
     service._store('etf_holdings', '159995', [{'stock_code': '002049', 'stock_name': '002049.SZ'}])
@@ -347,3 +371,78 @@ async def test_dispatch_does_not_block_new_quotes_behind_slow_reports(service, m
     gate.set()
     await asyncio.gather(*service._tasks.values())
     assert completed.count('slow') == 1
+
+
+@pytest.mark.asyncio
+async def test_realtime_collects_orderbook_without_waiting_for_research_bundle(service, monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr(module.data_service, 'get_etf_realtime', AsyncMock(return_value=pd.DataFrame([
+        {'代码': '159995', '最新价': 1.1}, {'代码': '159801', '最新价': 1.2},
+    ])))
+    monkeypatch.setattr('services.research_collection.fetch_orderbook', lambda code: {
+        'bid': 1.1, 'ask': 1.101, 'date': '2026-09-07',
+        'publishedAt': '2026-09-07T06:17:00Z', 'source': 'tencent/orderbook',
+    })
+    rows = await service._fetch('etf_realtime', '159995')
+    assert len(rows) == 1
+    assert rows[0]['bookSource'] == 'tencent/orderbook'
+    assert rows[0]['bookPublishedAt'] == '2026-09-07T06:17:00Z'
+
+
+@pytest.mark.asyncio
+async def test_realtime_retains_valid_price_when_both_books_fail(service, monkeypatch):
+    import pandas as pd
+    monkeypatch.setattr(module.data_service, 'get_etf_realtime', AsyncMock(return_value=pd.DataFrame([
+        {'代码': '159995', '最新价': 1.1},
+    ])))
+    monkeypatch.setattr('services.research_collection.fetch_orderbook', Mock(side_effect=ValueError('unavailable')))
+    rows = await service._fetch('etf_realtime', '159995')
+    assert rows[0]['最新价'] == 1.1
+    assert rows[0]['orderbookError'] == 'ValueError'
+    assert 'bid' not in rows[0]
+
+
+@pytest.mark.asyncio
+async def test_slow_constituent_batches_do_not_starve_etf_quotes(service, monkeypatch):
+    release = asyncio.Event()
+    started = asyncio.Event()
+    count = 0
+    async def fetch(key, code):
+        nonlocal count
+        if key == 'constituent_stock_realtime':
+            count += 1
+            if count == 2:
+                started.set()
+            await release.wait()
+        return [{'code': code}]
+    monkeypatch.setattr(service, '_fetch', fetch)
+    tasks = [asyncio.create_task(service._fetch_with_retry('constituent_stock_realtime', str(i))) for i in range(4)]
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert await asyncio.wait_for(service._fetch_with_retry('etf_realtime', '159995'), 1) == [{'code': '159995'}]
+    finally:
+        release.set()
+        await asyncio.gather(*tasks)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_bounds_background_work_and_reserves_manual_capacity(service, monkeypatch):
+    monkeypatch.setattr(module, 'get_config', lambda: service.config)
+    monkeypatch.setattr(service, '_ensure_subscription_datasets', AsyncMock())
+    monkeypatch.setattr(service, '_refill_slots', lambda task: None)
+    release = asyncio.Event()
+    async def run(dataset):
+        await release.wait()
+    monkeypatch.setattr(service, 'run_dataset', run)
+    background = [{'id': f'b{i}', 'datasetKey': 'stock_financial', 'status': 'pending'} for i in range(30)]
+    monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=background))
+    try:
+        assert await service.run_due() == 3
+        assert len(service._tasks) == 3
+        manual = {'id': 'manual', 'datasetKey': 'etf_research', 'status': 'queued'}
+        monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=[*background, manual]))
+        assert await service.run_due() == 1
+        assert service._task_lanes['manual'] == 'manual'
+    finally:
+        release.set()
+        await asyncio.gather(*service._tasks.values())

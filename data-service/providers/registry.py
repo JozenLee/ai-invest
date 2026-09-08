@@ -84,7 +84,9 @@ DEFAULT_CATEGORY_CONFIG: Dict[str, CategoryConfig] = {
         fallback_to_file=False,
     ),
     "sector_capital_flow": CategoryConfig(
-        sources=["tushare", "akshare"],
+        # 板块资金口径统一为 AKShare，避免在同一榜单混用不同平台的
+        # 行业分类、金额口径和更新时间。
+        sources=["akshare"],
         cache_ttl=30,
         fallback_to_file=False,
     ),

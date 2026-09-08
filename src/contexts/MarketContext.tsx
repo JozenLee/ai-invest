@@ -25,7 +25,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       setIndices(overview.data?.indices || [])
       setMeta(overview.data?.meta || null)
       setCapitalFlow(flow.data || null)
-      setLastUpdate(overview.data?.timestamp ? new Date(overview.data.timestamp) : null)
+      const timestamps = [overview.data?.timestamp, flow.data?.timestamp]
+        .filter(Boolean).map((value) => new Date(value).getTime()).filter(Number.isFinite)
+      setLastUpdate(timestamps.length ? new Date(Math.max(...timestamps)) : null)
       if (!overview.success || !flow.success) setError([overview.error, flow.error].filter(Boolean).join('；'))
     } catch (reason) { setError(reason instanceof Error ? reason.message : '数据库读取失败') }
     finally { setLoading(false) }

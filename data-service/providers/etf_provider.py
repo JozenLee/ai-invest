@@ -80,10 +80,9 @@ class ETFProvider:
             len(tushare_result),
             round((asyncio.get_running_loop().time() - tushare_started_at) * 1000),
         )
-        if tushare_result:
-            if len(tushare_result) < 10:
-                fallback = await asyncio.to_thread(self._get_eastmoney_holdings_direct, ticker)
-                tushare_result = self._merge_holdings(tushare_result, fallback)
+        latest_requested = self._recent_report_periods(count=1)[0]
+        latest_tushare = max((self._holding_period(row.get('report_period')) for row in tushare_result), default='')
+        if tushare_result and latest_tushare >= latest_requested and any(row.get('weight_available', True) for row in tushare_result):
             logger.info(
                 "ETF持仓请求结束: code=%s status=success source=tushare rows=%s duration_ms=%s",
                 ticker,
@@ -113,6 +112,8 @@ class ETFProvider:
             len(direct_result),
             round((asyncio.get_running_loop().time() - direct_started_at) * 1000),
         )
+        if tushare_result and (not direct_result or latest_tushare > max((row.get('report_period') or '' for row in direct_result), default='')):
+            return tushare_result
         if direct_result:
             logger.info('ETF %s 持仓来源=eastmoney_public_direct, rows=%s', ticker, len(direct_result))
             logger.info(
@@ -177,22 +178,6 @@ class ETFProvider:
             round((asyncio.get_running_loop().time() - started_at) * 1000),
         )
         return []
-
-    @staticmethod
-    def _merge_holdings(primary: List[Dict], fallback: List[Dict]) -> List[Dict]:
-        """合并不同报告期/来源的持仓，按代码去重并保留权重较高的一条。"""
-        merged: Dict[str, Dict] = {}
-        for row in [*(primary or []), *(fallback or [])]:
-            raw_code = str(row.get('stock_code') or row.get('stockCode') or '').strip()
-            code = raw_code.split('.')[0].removeprefix('sh').removeprefix('sz')
-            if not code:
-                continue
-            row = {**row, 'stock_code': code}
-            current = merged.get(code)
-            weight = float(row.get('weight') or 0)
-            if current is None or weight > float(current.get('weight') or 0):
-                merged[code] = row
-        return sorted(merged.values(), key=lambda row: float(row.get('weight') or 0), reverse=True)
 
     @staticmethod
     def _get_eastmoney_holdings_direct(ticker: str) -> List[Dict]:
@@ -263,15 +248,28 @@ class ETFProvider:
                     continue
 
                 frame = pd.concat(normalized_tables, ignore_index=True)
-                frame['占净值比例'] = pd.to_numeric(frame.get('占净值比例'), errors='coerce')
+                # Keep percent strings intact until _normalize_frame removes '%'.
+                # Coercing here loses every publicly disclosed weight.
                 frame['持股数'] = pd.to_numeric(frame.get('持股数'), errors='coerce')
                 frame['持仓市值'] = pd.to_numeric(frame.get('持仓市值'), errors='coerce')
                 result = ETFProvider._normalize_frame(frame, 'eastmoney_public_direct')
                 if result:
-                    return result
+                    latest = max((row['report_period'] for row in result if row['report_period']), default='')
+                    return [row for row in result if row['report_period'] == latest] if latest else result
         except Exception as error:
             logger.debug('ETF %s 东方财富公开持仓直连失败: %s', ticker, error)
         return []
+
+    @staticmethod
+    def _holding_period(value: Any) -> str:
+        text = str(value or '').strip()
+        # Public titles embed the actual period after 截止至; it is not ann_date.
+        match = re.search(r'(?<!\d)(\d{4})[-/](\d{2})[-/](\d{2})(?!\d)', text)
+        candidate = ''.join(match.groups()) if match else text
+        try:
+            return datetime.strptime(candidate, '%Y%m%d').strftime('%Y%m%d')
+        except ValueError:
+            return ''
 
     @staticmethod
     def _normalize_frame(frame: Any, source: str) -> List[Dict]:
@@ -293,7 +291,7 @@ class ETFProvider:
                 continue
             raw_weight = row.get(weight_column) if weight_column is not None else 0
             try:
-                weight = float(str(raw_weight).replace('%', '').strip() or 0)
+                weight = float(str(raw_weight).replace('%', '').replace(',', '').strip() or 0)
                 if weight != weight:  # NaN
                     weight = 0.0
             except (TypeError, ValueError):
@@ -317,7 +315,7 @@ class ETFProvider:
                 'weight_available': weight_column is not None and weight > 0,
                 'quantity': quantity,
                 'market_value': market_value,
-                'report_period': str(row.get(period_column) or '') if period_column is not None else '',
+                'report_period': ETFProvider._holding_period(row.get(period_column)) if period_column is not None else '',
                 'ann_date': str(row.get('ann_date') or row.get('publish_date') or ''),
                 'source': source,
             })
@@ -386,9 +384,9 @@ class ETFProvider:
                     if result:
                         for item in result:
                             item['report_period'] = item.get('report_period') or period
-                        combined = self._merge_holdings(combined, result)
-                        if len(combined) >= 10:
-                            return combined
+                        # A disclosed portfolio is a point-in-time snapshot. Never
+                        # merge a sparse current quarter with an older quarter.
+                        return result
                 except Exception as error:
                     logger.warning(
                         'ETF定期披露持仓异常: code=%s period=%s duration_ms=%s error=%s',
@@ -469,7 +467,7 @@ class ETFProvider:
                 'weight_source': 'not_provided_by_exchange_pcf',
                 'quantity': quantity,
                 'trade_date': str(row.get(date_column) or '') if date_column is not None else '',
-                'report_period': str(row.get(period_column) or '') if period_column is not None else '',
+                'report_period': ETFProvider._holding_period(row.get(period_column)) if period_column is not None else '',
                 'exchange': exchange,
                 'market': 'hk' if exchange == 'HK' else 'cn' if exchange in {'SH', 'SZ'} else 'other',
                 'source': source,

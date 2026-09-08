@@ -13,8 +13,8 @@ class TestSectorCapitalFlow:
         ]
 
     @pytest.mark.asyncio
-    async def test_success(self, data_service, mock_tushare, sample_sector_list):
-        mock_tushare.get_sector_capital_flow.return_value = sample_sector_list
+    async def test_success(self, data_service, mock_akshare, sample_sector_list):
+        mock_akshare.get_sector_capital_flow.return_value = sample_sector_list
 
         result = await data_service.get_sector_capital_flow("今日")
 
@@ -22,13 +22,13 @@ class TestSectorCapitalFlow:
         assert len(result) == 2
 
     @pytest.mark.asyncio
-    async def test_fallback(self, data_service, mock_akshare, mock_tushare, sample_sector_list):
+    async def test_does_not_fallback_to_tushare(self, data_service, mock_akshare, mock_tushare, sample_sector_list):
         mock_akshare.get_sector_capital_flow.side_effect = Exception("失败")
         mock_tushare.get_sector_capital_flow.return_value = sample_sector_list
 
-        result = await data_service.get_sector_capital_flow("今日")
-
-        assert isinstance(result, list)
+        with pytest.raises(Exception, match="失败"):
+            await data_service.get_sector_capital_flow("今日")
+        mock_tushare.get_sector_capital_flow.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_all_failed(self, registry, mock_akshare, mock_tushare):
@@ -44,29 +44,28 @@ class TestSectorCapitalFlow:
             await data_service.get_sector_capital_flow("今日")
 
     @pytest.mark.asyncio
-    async def test_uses_file_cache_when_live_sources_fail(self, registry, mock_akshare, mock_tushare, tmp_path):
+    async def test_does_not_use_file_cache_when_akshare_fails(self, registry, mock_akshare, mock_tushare, tmp_path):
         from services.data_service import DataService
 
-        registry._config["sector_capital_flow"].fallback_to_file = True
+        registry._config["sector_capital_flow"].fallback_to_file = False
         registry.cache.set_file = lambda key, data: None
         registry.cache.get_file = lambda key: [{"名称": "半导体", "今日主力净流入-净额": 100000000}]
         mock_akshare.get_sector_capital_flow.side_effect = Exception("失败")
         mock_tushare.get_sector_capital_flow.side_effect = Exception("失败")
 
-        result = await DataService(reg=registry).get_sector_capital_flow("今日")
-
-        assert result[0]["名称"] == "半导体"
+        with pytest.raises(Exception, match="失败"):
+            await DataService(reg=registry).get_sector_capital_flow("今日")
 
     @pytest.mark.asyncio
-    async def test_force_refresh_bypasses_memory_cache(self, registry, mock_tushare):
+    async def test_force_refresh_bypasses_memory_cache(self, registry, mock_akshare):
         from services.data_service import DataService
 
         service = DataService(reg=registry)
-        mock_tushare.get_sector_capital_flow.return_value = [
+        mock_akshare.get_sector_capital_flow.return_value = [
             {"名称": "半导体", "今日主力净流入-净额": 100000000}
         ]
         first = await service.get_sector_capital_flow("今日")
-        mock_tushare.get_sector_capital_flow.return_value = [
+        mock_akshare.get_sector_capital_flow.return_value = [
             {"名称": "消费电子", "今日主力净流入-净额": 200000000}
         ]
 
@@ -75,4 +74,4 @@ class TestSectorCapitalFlow:
 
         assert cached == first
         assert refreshed[0]["名称"] == "消费电子"
-        assert mock_tushare.get_sector_capital_flow.await_count == 2
+        assert mock_akshare.get_sector_capital_flow.await_count == 2

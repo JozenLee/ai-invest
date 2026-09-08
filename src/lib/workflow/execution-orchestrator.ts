@@ -268,14 +268,6 @@ export class ExecutionOrchestrator {
       }
       return
     }
-    const run = await prisma.executionRun.findUnique({ where: { id: runId }, select: { metadata: true } })
-    const metadata = run?.metadata ? JSON.parse(run.metadata) : {}
-    const source = metadata.companySource === 'graph' ? 'graph' : 'etf'
-    const stepName = source === 'graph' ? 'fetch-etf-holdings' : 'fetch-companies'
-    await prisma.executionStep.updateMany({
-      where: { runId, stepName, status: 'PENDING' },
-      data: { status: 'SKIPPED', completedAt: new Date() }
-    })
   }
 
   private async loadArtifacts(

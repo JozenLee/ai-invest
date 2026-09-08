@@ -25,7 +25,7 @@ import { generateReportStep } from '../steps/generate-report-step'
  * 综合分析工作流
  *
  * 新轮次先冻结研究快照，再执行数据投影与AI解释；动作由规则引擎决定。
- * 共20步（含冻结、私有持仓旁支和可降级的一页版），以数组定义为准。
+ * 共21个可追溯技术步骤；前端收敛为8个用户阶段。
  * 以下为旧版主干的步骤说明，仅用于理解数据依赖：
  *
  * 阶段1: 数据获取（7个步骤）
@@ -61,15 +61,16 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     calculateMarketTrendsStep,
     assessDataQualityStep,
     etfActionStep,
-    portfolioDecisionStep,
 
     // AI分析报告阶段
     marketAnalysisStep,
     newsAnalysisStep,
     companyAnalysisStep,
-    portfolioAnalysisStep,
     industryOverviewStep,
     investmentAdviceStep,
+    // 组合建议在最终综合结论之后生成；AI可以否决新增风险，但不能覆盖规则减仓与硬约束。
+    portfolioDecisionStep,
+    portfolioAnalysisStep,
     socialReportStep,
     generateReportStep
   ]

@@ -39,7 +39,7 @@ const dataTooltips = {
   consecutiveTrend: {
     title: '当日热点资金',
     description: '按主力净流入绝对值选出的当日资金最活跃的Top5板块，不代表连续多日流入。',
-    calculation: 'Tushare moneyflow_ind_ths（失败时回退 moneyflow_ind_dc）按单日板块净流入排序；展示Top5合计净流入，并按每个入选板块的平均净流入判断强弱。',
+    calculation: 'AKShare 行业资金流向按单日板块净流入排序；展示Top5合计净流入，并按每个入选板块的平均净流入判断强弱。',
   },
   volumeAmplification: {
     title: '成交量放大',
@@ -63,13 +63,13 @@ const dataTooltips = {
   },
   sectorInflow: {
     title: '板块资金流入排名',
-    description: '按单日主力净流入排序的板块排名；默认优先使用 Tushare moneyflow_ind_ths，失败时使用 moneyflow_ind_dc。',
-    calculation: '取净流入为正的板块按 net_amount 降序排列，显示前10；金额统一换算为亿元。板块口径取决于命中的 Tushare 接口，页面应以数据源标识为准。',
+    description: '按单日主力净流入排序的板块排名，仅使用 AKShare 行业资金数据。',
+    calculation: '取净流入为正的板块按净额降序排列，显示前10；金额统一换算为亿元。交易时段每30秒获取最新 AKShare 快照。',
   },
   sectorOutflow: {
     title: '板块资金流出排名',
-    description: '按单日主力净流出排序的板块排名；默认优先使用 Tushare moneyflow_ind_ths，失败时使用 moneyflow_ind_dc。',
-    calculation: '取净流入为负的板块按 net_amount 升序排列，显示前10；金额统一换算为亿元。它反映资金方向，不等同于板块基本面恶化。',
+    description: '按单日主力净流出排序的板块排名，仅使用 AKShare 行业资金数据。',
+    calculation: '取净流入为负的板块按净额升序排列，显示前10；金额统一换算为亿元。交易时段每30秒获取最新 AKShare 快照。',
   },
   dataQualityEstimated: {
     title: '数据质量：估算值',
@@ -77,9 +77,9 @@ const dataTooltips = {
     calculation: '由于部分数据源暂时不可用，系统使用可用数据源估算。建议结合其他指标综合判断。',
   },
   dataQualityCached: {
-    title: '数据质量：缓存数据',
-    description: '当前显示的资金流向数据为缓存数据，非最新数据。',
-    calculation: '所有数据源暂时不可用，系统显示最近缓存的数据。数据可能已过时，建议稍后刷新或等待数据源恢复后获取最新数据。',
+    title: '数据质量：部分缓存数据',
+    description: '板块资金可为 AKShare 实时值，其他资金指标中仍有订阅数据库缓存。',
+    calculation: '各模块独立标注来源与日期；“部分缓存”不代表板块资金已停止实时更新。',
   },
 }
 
@@ -135,7 +135,7 @@ export default function DashboardPage() {
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">市场监控</p>
             <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">数据概览</h1>
             <p className="mt-1 text-muted-foreground">
-              每30秒重读订阅数据库；趋势指标由原始数据计算，刷新不会触发外部采集。
+              每30秒更新；交易时段板块资金直读 AKShare，其他指标读取订阅数据库。
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {/* 市场状态 */}
@@ -167,7 +167,7 @@ export default function DashboardPage() {
             className="self-start"
           >
             <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            重读数据库
+            刷新数据
           </Button>
         </div>
 
@@ -220,6 +220,11 @@ export default function DashboardPage() {
                   板块资金为最新交易日统计
                 </Badge>
               )}
+              {capitalFlow.sectorRealtime === true && (
+                <Badge variant="outline" className="gap-1.5 border-emerald-500 text-emerald-700 dark:text-emerald-300">
+                  板块资金实时
+                </Badge>
+              )}
               {/* 数据质量标识 */}
               {preferences.showDataQualityBadge && capitalFlow.dataQuality === 'estimated' && (
                 <Tooltip>
@@ -245,7 +250,7 @@ export default function DashboardPage() {
                   <TooltipTrigger>
                     <Badge variant="secondary" className="gap-1.5">
                       <Archive className="size-3" aria-hidden="true" />
-                      缓存数据
+                      部分缓存数据
                     </Badge>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-xs p-3">
@@ -441,7 +446,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     {capitalFlow.topInflowSectors.map((sector, index) => (
-                      <div key={sector.sector} className="flex items-center justify-between">
+                      <div key={`${sector.sector}-${sector.dataDate || capitalFlow.sectorDataDate || 'latest'}-${index}`} className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <span className={`text-sm font-medium w-6 text-center ${index < 3 ? 'text-red-500 font-bold' : 'text-muted-foreground'}`}>
                             {index + 1}
@@ -484,7 +489,7 @@ export default function DashboardPage() {
                       </div>
                     </div>
                     {capitalFlow.topOutflowSectors.map((sector, index) => (
-                      <div key={sector.sector} className="flex items-center justify-between">
+                      <div key={`${sector.sector}-${sector.dataDate || capitalFlow.sectorDataDate || 'latest'}-${index}`} className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <span className={`text-sm font-medium w-6 text-center ${index < 3 ? 'text-green-500 font-bold' : 'text-muted-foreground'}`}>
                             {index + 1}

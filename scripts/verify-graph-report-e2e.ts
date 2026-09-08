@@ -36,17 +36,30 @@ function verifyRun(industry: Industry, run: any, report: any) {
   if (!revisionId || industry.version < 1) issues.push('产业没有已发布图谱版本')
   if (reportData.graphContext?.revisionId !== revisionId) issues.push('报告未冻结当前图谱版本')
   if (reportData.researchManifest?.graphRevision?.revisionId !== revisionId) issues.push('研究清单缺少图谱版本')
+  if (reportData.graphContext?.mappingRevisionId && reportData.researchManifest?.graphRevision?.mappingRevisionId !== reportData.graphContext.mappingRevisionId) issues.push('研究清单缺少企业与ETF匹配版本')
   if (reportData.metadata?.graphRevisionId !== revisionId) issues.push('报告元数据缺少图谱版本')
   if (!reportData.graphContext?.coverage?.segments) issues.push('报告图谱上下文没有产业环节')
   if (!reportData.graphContext?.coverage?.relations) issues.push('报告图谱上下文没有传导关系')
+  if (!reportData.graphContext?.mappingRevisionId) issues.push('报告没有冻结企业与ETF匹配版本')
+  if (!reportData.graphContext?.mappingContentHash) issues.push('报告没有冻结企业与ETF匹配哈希')
+  if (!reportData.graphContext?.coverage?.segmentEtfCoveragePct) issues.push('报告图谱上下文没有环节ETF映射')
+  if (!reportData.graphContext?.coverage?.companyEtfCoveragePct) issues.push('报告图谱上下文没有企业ETF映射')
+  if (!reportData.graphContext?.etfExposure?.some((item: any) => item.segments?.length)) issues.push('报告没有ETF到产业环节的反向暴露')
   if (!String(report.content || '').includes('产业认知基线与传导')) issues.push('报告正文缺少产业认知章节')
+  if (!String(report.content || '').includes('企业与ETF匹配版本')) issues.push('报告正文缺少匹配版本')
+  if (!String(report.content || '').includes('ETF产业暴露')) issues.push('报告正文缺少ETF产业暴露')
   if (reportData.metadata?.verificationMode !== 'graph-e2e') issues.push('报告未标记为图谱链路验证')
   if (!String(report.title || '').includes('图谱链路验证')) issues.push('验证报告标题缺少用途标识')
   for (const stepName of ['company-analysis', 'news-analysis', 'industry-overview', 'investment-advice']) {
     const step = run.steps.find((item: any) => item.stepName === stepName)
     const prompt = JSON.stringify(artifact(step, 'ai-prompt') || '')
     if (!revisionId || !prompt.includes(revisionId)) issues.push(`${stepName}提示词未包含图谱版本`)
+    if (reportData.graphContext?.mappingRevisionId && !prompt.includes(reportData.graphContext.mappingRevisionId)) issues.push(`${stepName}提示词未包含匹配版本`)
   }
+  const companyPrompt = JSON.stringify(artifact(run.steps.find((item: any) => item.stepName === 'company-analysis'), 'ai-prompt') || '')
+  if (!companyPrompt.includes('graphMapping') || !companyPrompt.includes('representativeEtfs')) issues.push('企业分析提示词没有逐企业图谱与ETF映射')
+  const advicePrompt = JSON.stringify(artifact(run.steps.find((item: any) => item.stepName === 'investment-advice'), 'ai-prompt') || '')
+  if (!advicePrompt.includes('etfExposure') || !advicePrompt.includes('matchedCompanies')) issues.push('投资建议提示词没有ETF产业暴露')
   return {
     passed: issues.length === 0,
     issues,
@@ -70,13 +83,14 @@ async function main() {
     payload = { success: true, data: JSON.parse(snapshot.payload).map((industry: any) => ({ id: industry.id, name: industry.name, version: Number(industry.version || 0), revisionId: industry.revisionId || industry.revision_id || null })) }
   }
   const requestedIds = process.argv.flatMap((arg, index, args) => arg === '--industry-id' && args[index + 1] ? [args[index + 1]] : [])
+  const requestedRunId = process.argv.flatMap((arg, index, args) => arg === '--run-id' && args[index + 1] ? [args[index + 1]] : [])[0]
   const industries = requestedIds.length ? payload.data.filter(industry => requestedIds.includes(industry.id)) : payload.data
   const results: any[] = []
   for (const industry of industries) {
     try {
-      const created = await json<{ runId: string }>('/api/analysis/comprehensive', { method: 'POST', body: JSON.stringify({ industryId: industry.id, companySource: 'graph', publicOnly: true, verificationMode: 'graph-e2e' }) })
-      await json(`/api/analysis/comprehensive/${created.runId}/execute?mode=all`, { method: 'POST', body: '{}' })
-      const run = await waitForRun(created.runId)
+      const runId = requestedRunId || (await json<{ runId: string }>('/api/analysis/comprehensive', { method: 'POST', body: JSON.stringify({ industryId: industry.id, companySource: 'graph', publicOnly: true, verificationMode: 'graph-e2e' }) })).runId
+      await json(`/api/analysis/comprehensive/${runId}/execute?mode=${requestedRunId?'resume':'all'}`, { method: 'POST', body: '{}' })
+      const run = await waitForRun(runId)
       const reportId = run.steps.flatMap((step: any) => step.artifacts || []).find((item: any) => item.artifactKey === 'report-id')?.data
       if (!reportId) throw new Error('分析完成但没有report-id')
       const report = await json<any>(`/api/analysis/reports/${encodeURIComponent(String(reportId))}`)

@@ -145,6 +145,19 @@ async def write_graph_to_neo4j(
                     "key_products": company.key_products,
                     "description": company.description,
                     "source_urls": company.evidence_urls,
+                    "representative_etfs_json": json.dumps(
+                        [item.model_dump(mode="json") for item in company.representative_etfs],
+                        ensure_ascii=False,
+                    ),
+                    "representative_indices_json": json.dumps(
+                        [item.model_dump(mode="json") for item in company.representative_indices],
+                        ensure_ascii=False,
+                    ),
+                    "match_source": company.match_source,
+                    "match_confidence": company.match_confidence,
+                    "representativeness_score": company.representativeness_score,
+                    "selection_reason": company.selection_reason,
+                    "value_signals_json": json.dumps(company.value_signals, ensure_ascii=False),
                     "last_verified_revision_id": revision_id,
                 })
                 stats["companies"] += 1
@@ -154,7 +167,19 @@ async def write_graph_to_neo4j(
                 await neo4j_service.create_relationship(
                     segment_id, company_id, "INCLUDES",
                     {"revision_id": revision_id,
-                     "source_urls": company.evidence_urls})
+                     "source_urls": company.evidence_urls,
+                     "representative_etfs_json": json.dumps(
+                         [item.model_dump(mode="json") for item in company.representative_etfs],
+                         ensure_ascii=False,
+                     ),
+                     "representative_indices_json": json.dumps(
+                         [item.model_dump(mode="json") for item in company.representative_indices],
+                         ensure_ascii=False,
+                     ),
+                     "match_source": company.match_source,
+                     "match_confidence": company.match_confidence,
+                     "representativeness_score": company.representativeness_score,
+                     "selection_reason": company.selection_reason})
                 stats["relationships"] += 1
 
             for relationship in detail.relationships:

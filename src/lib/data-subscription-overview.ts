@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto'
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 
 type GraphEtf = { code?: string; ticker?: string; name?: string; etfName?: string; relevance?: number }
-type Industry = { id: string; name: string; code?: string; version?: number; revisionId?: string; revision_id?: string; contentHash?: string; content_hash?: string; publishedAt?: string; published_at?: string }
+type Industry = { id: string; name: string; code?: string; version?: number; revisionId?: string; revision_id?: string; contentHash?: string; content_hash?: string; mappingRevisionId?: string; mapping_revision_id?: string; mappingContentHash?: string; mapping_content_hash?: string; mappingPublishedAt?: string; mapping_published_at?: string; publishedAt?: string; published_at?: string }
 
 function normalizeCode(value: unknown) {
   const normalized = String(value || '').trim().toLowerCase().replace(/^(sh|sz)/, '')
@@ -101,6 +101,9 @@ async function getGraphSnapshot(force = false) {
         relations,
         revisionId: String(graphIndustry.revisionId || graphIndustry.revision_id || industry.revisionId || industry.revision_id || '') || undefined,
         contentHash: String(graphIndustry.contentHash || graphIndustry.content_hash || industry.contentHash || industry.content_hash || '') || undefined,
+        mappingRevisionId: String(graphIndustry.mappingRevisionId || graphIndustry.mapping_revision_id || industry.mappingRevisionId || industry.mapping_revision_id || '') || undefined,
+        mappingContentHash: String(graphIndustry.mappingContentHash || graphIndustry.mapping_content_hash || industry.mappingContentHash || industry.mapping_content_hash || '') || undefined,
+        mappingPublishedAt: String(graphIndustry.mappingPublishedAt || graphIndustry.mapping_published_at || industry.mappingPublishedAt || industry.mapping_published_at || '') || undefined,
       }
     } catch {
       return { ...industry, etfs: [] as GraphEtf[] }

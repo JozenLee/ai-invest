@@ -18,7 +18,12 @@ def assess_graph_quality(result: ExplorationResult) -> Dict[str, Any]:
         if relation.from_segment not in allowed_codes or relation.to_segment not in allowed_codes
     ]
     evidenced_relations = [relation for relation in relations if relation.evidence_urls]
-    evidenced_companies = [company for company in companies if company.evidence_urls]
+    evidenced_companies = [
+        company for company in companies
+        if company.evidence_urls
+        or company.match_source == "etf_holdings"
+        or any(item.holding_verified for item in company.representative_etfs)
+    ]
     covered_segments = [
         segment.code for segment in segments
         if result.details.get(segment.code) and result.details[segment.code].companies

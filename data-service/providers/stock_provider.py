@@ -5,6 +5,7 @@ Stock Data Provider - 统一的股票数据提供者
 from typing import Optional, List, Dict, Any
 import logging
 import os
+import math
 import asyncio
 import re
 import html
@@ -395,7 +396,10 @@ class StockProvider:
                     else:
                         period = period_raw
                     key = period or f"row-{len(rows_by_period)}"
-                    rows_by_period.setdefault(key, {}).update(row)
+                    # A sparse statement must not erase a reported indicator with NaN.
+                    valid = {field: value for field, value in row.items()
+                             if value is not None and not (isinstance(value, float) and not math.isfinite(value))}
+                    rows_by_period.setdefault(key, {}).update(valid)
             return [self._normalize_financial_row(row) for row in rows_by_period.values()]
         except Exception as error:
             self.logger.warning("Tushare财报失败 %s: %s", symbol, error)

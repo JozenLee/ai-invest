@@ -1,5 +1,5 @@
+import { administrativeTitle } from '@/lib/research/event-policy'
 import type { Decision, Evaluation } from '@/lib/research/contracts'
-import { matchesResearchDomain, researchTerms } from '@/lib/research/relevance'
 import type { DecisionTimingAssessment } from './decision-timing'
 
 export type ReportQuality = { status?: string } | null | undefined
@@ -15,29 +15,40 @@ export function reportCoverage(evaluation?:Evaluation){
     if(!condition)return status==='unknown'&&omitted.has(key)
     return status?condition.status===status:condition.status!=='unknown'
   }).length
-  const dataUnknown=dataConditionKeys.reduce((sum,key)=>sum+conditionCount(key,'unknown'),0)
-  const signalTotal=total*signalConditionKeys.size
-  const signalUnmet=[...signalConditionKeys].reduce((sum,key)=>sum+conditionCount(key,'unmet'),0)
-  const signalUnknown=[...signalConditionKeys].reduce((sum,key)=>sum+conditionCount(key,'unknown'),0)
+  const activeDataKeys=dataConditionKeys.filter(key=>!omitted.has(key))
+  const dataConditions=decisions.flatMap(decision=>decision.conditions.filter(condition=>activeDataKeys.includes(condition.key)))
+  const dataUnknown=dataConditions.filter(condition=>condition.status==='unknown').length
+  // Market direction belongs to the tracked index, not to the wrapper product.
+  // Counting every ETF duplicated the same signal for funds sharing one index.
+  const indexGroups=new Map<string,Decision[]>()
+  for(const decision of decisions){const key=decision.indexCode||`product:${decision.ticker}`;indexGroups.set(key,[...(indexGroups.get(key)||[]),decision])}
+  const signalStatus=(rows:Decision[],key:string)=>{
+    const statuses=rows.map(row=>row.conditions.find(condition=>condition.key===key)?.status||'unknown')
+    const known=statuses.filter(status=>status!=='unknown')
+    if(!known.length)return 'unknown'
+    return known.every(status=>status==='met')?'met':'unmet'
+  }
+  const indexSignals=[...indexGroups.values()].flatMap(rows=>[...signalConditionKeys].map(key=>signalStatus(rows,key)))
+  const signalTotal=indexSignals.length
+  const signalMet=indexSignals.filter(status=>status==='met').length
+  const signalUnmet=indexSignals.filter(status=>status==='unmet').length
+  const signalUnknown=indexSignals.filter(status=>status==='unknown').length
   const groups=new Map<string,NonNullable<Evaluation['products']>>()
   for(const product of evaluation?.products||[]){if(product.indexCode)groups.set(product.indexCode,[...(groups.get(product.indexCode)||[]),product])}
   const currentValuation=[...groups.values()].filter(rows=>rows.some(row=>finite(row.pe)&&row.pe!>0||finite(row.pb)&&row.pb!>0)).length
-  const historicalValuation=[...groups.values()].filter(rows=>rows.some(row=>(row.valuationSampleCount||0)>=500&&(finite(row.pePercentile5y)||finite(row.pbPercentile5y)))).length
+  const field=(key:string,label:string)=>({key,label,known:conditionCount(key),total,detail:`${conditionCount(key)}/${total} 项具备可核验底层数据`})
   return {
-    dataUnknown,dataTotal:total*dataConditionKeys.length,signalUnmet,signalUnknown,signalTotal,
+    dataUnknown,dataTotal:dataConditions.length,signalMet,signalUnmet,signalUnknown,signalTotal,signalKnown:signalTotal-signalUnknown,indexCount:indexGroups.size,
     data:[
-      {key:'premium',label:'同日折溢价',known:conditionCount('premium'),total},
-      {key:'spread',label:'同日买卖价差',known:conditionCount('spread'),total},
-      {key:'holdings',label:'最新持仓权重',known:conditionCount('holdings'),total},
-      {key:'profit-growth',label:'持仓加权利润',known:conditionCount('profit-growth'),total},
-      {key:'cash-quality',label:'持仓加权现金质量',known:conditionCount('cash-quality'),total},
-      {key:'valuation-history',label:'指数历史估值分位',known:historicalValuation,total:groups.size||evaluation?.indexBreadth.mappedIndices||0,detail:`${currentValuation}个指数仅有当期估值`},
-    ],
+      field('premium','同日折溢价'),
+      field('spread','交易时段买卖价差'),
+      field('holdings','最新定期持仓权重'),
+      field('profit-growth','持仓加权利润同比'),
+      field('cash-quality','持仓加权现金质量'),
+      {key:'valuation-current',label:'指数当期估值',known:currentValuation,total:groups.size||evaluation?.indexBreadth.mappedIndices||0,detail:`${currentValuation}/${groups.size||evaluation?.indexBreadth.mappedIndices||0} 个跟踪指数具备当期估值`},
+    ].filter(item=>item.total>0&&!omitted.has(item.key)),
     signals:[
-      {key:'market',label:'基准趋势',met:conditionCount('market','met'),total},
-      {key:'trend',label:'指数趋势确认',met:conditionCount('trend','met'),total},
-      {key:'relative',label:'相对基准转强',met:conditionCount('relative','met'),total},
-      {key:'flow',label:'领域资金改善',met:conditionCount('flow','met'),total},
+      ...[...signalConditionKeys].map(key=>({key,label:{market:'基准趋势',trend:'指数趋势确认',relative:'相对基准转强',flow:'领域资金改善'}[key]||key,met:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='met').length,unmet:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='unmet').length,unknown:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='unknown').length,total:indexGroups.size})),
     ],
   }
 }
@@ -50,7 +61,8 @@ export function decisionConfidence(decision: Decision) {
     const rows=decision.conditions.filter(item=>keys.has(item.key))
     return rows.length ? rows.filter(item=>item.status!=='unknown').length/rows.length : 0
   }
-  const score=Math.round(coverage(criticalKeys)*35+coverage(signalKeys)*25+coverage(fundamentalKeys)*20+Math.min(1,decision.evidenceIds.length/12)*20)
+  const productKeys=new Set(['premium','liquidity','spread','volatility'])
+  const score=Math.round(coverage(criticalKeys)*30+coverage(signalKeys)*20+coverage(fundamentalKeys)*25+coverage(productKeys)*15+Math.min(1,decision.evidenceIds.length/12)*10)
   return Math.min(decision.state==='blocked'?35:decision.state==='watch'?75:90,Math.max(15,score))
 }
 
@@ -61,8 +73,7 @@ export function reportAdviceConfidence(evaluation?:Evaluation,quality?:ReportQua
   return Math.round(base*qualityFactor)
 }
 
-export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, _performanceApproved = false, timing?: DecisionTimingAssessment) {
-  void _performanceApproved
+export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, timing?: DecisionTimingAssessment) {
   const reasons: string[] = []
   if (!evaluation) reasons.push('缺少冻结规则评估')
   if (quality?.status === 'blocked') reasons.push('核心行情数据不足，只能给出低置信度观望建议')
@@ -72,7 +83,7 @@ export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality
   const executionReady = approved && timing?.executionReady !== false
   return {
     level: executionReady ? 'advice-ready' as const : approved ? 'reference-only' as const : 'data-limited' as const,
-    label: executionReady ? '盘中投资建议' : approved ? '投资参考已生成' : '低置信度参考',
+    label: executionReady ? '交易时段投资建议' : approved ? '投资参考已生成' : '低置信度参考',
     confidencePct: reportAdviceConfidence(evaluation,quality),
     reasons,
   }
@@ -93,12 +104,23 @@ export function safeDecisionAction(decision: Decision, _tradeReady = true) {
 
 export function guardActionLanguage(value: unknown, tradeReady = false): unknown {
   if(tradeReady)return value
-  if(typeof value==='string')return value
-    .replace(/未持有观望、已持有减仓/g,'未持有暂缓新增、已持有复核风险敞口')
-    .replace(/未持有：观望；已持有：减仓/g,'未持有：暂缓新增；已持有：复核风险敞口')
-    .replace(/程序动作为未持有观望、已持有减仓/g,'程序状态提示未持有暂缓新增、已持有复核风险敞口')
+  if(typeof value==='string'){
+    const clean=value.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'')
+    if(clean.startsWith('{')||clean.startsWith('[')){
+      try{return guardActionLanguage(JSON.parse(clean),tradeReady)}catch{/* Preserve malformed archived text for inspection. */}
+    }
+    return value
+      .replace(/未持有观望、已持有减仓/g,'未持有暂缓新增、已持有复核风险敞口')
+      .replace(/未持有：观望；已持有：减仓/g,'未持有：暂缓新增；已持有：复核风险敞口')
+      .replace(/程序动作为未持有观望、已持有减仓/g,'程序状态提示未持有暂缓新增、已持有复核风险敞口')
+  }
   if(Array.isArray(value))return value.map(item=>guardActionLanguage(item,tradeReady))
-  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,guardActionLanguage(item,tradeReady)]))
+  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>{
+    if(key==='unheld'&&typeof item==='string'&&/建仓|买入|加仓/.test(item))return [key,'待交易时段复核']
+    if(key==='held'&&typeof item==='string'&&/减仓|卖出|加仓/.test(item))return [key,'复核风险敞口']
+    if(key==='action'&&typeof item==='string'&&/建仓|买入|卖出|加仓|减仓/.test(item))return [key,'待交易时段复核']
+    return [key,guardActionLanguage(item,tradeReady)]
+  }))
   return value
 }
 
@@ -113,6 +135,7 @@ export function productGroups(evaluation?: Evaluation) {
     groups.set(key, [...(groups.get(key) || []), product])
   }
   return [...groups].map(([indexCode, products]) => {
+    const comparisonDate=products.map(product=>product.navDate).filter((value):value is string=>!!value).sort().at(-1)||null
     const ranked = products.map(product => {
       const decision = decisions.get(product.ticker)
       const navFresh = product.navDate === evaluation.expectedSession
@@ -122,24 +145,25 @@ export function productGroups(evaluation?: Evaluation) {
       const score = (navFresh ? 4 : 0) + (trackingValid ? Math.max(0, 3 - product.trackingErrorPct! / 10) : 0)
         + (finite(product.feePct) ? Math.max(0, 1 - product.feePct) : 0) + (premiumKnown ? 1 : 0)
         + (finite(decision?.metrics.amount20) && decision!.metrics.amount20! >= evaluation.profile.rules.minDailyAmount ? 1 : 0)
-      return { ...product, decision, navFresh, trackingValid, trackingAnomaly, score }
+      const exclusions=[product.navStatus==='stale'||product.navDate&&evaluation.expectedSession&&Date.parse(evaluation.expectedSession)-Date.parse(product.navDate)>7*86400000?'净值过旧，不参与当期研究比较':null,!product.navDate?'净值缺失':product.navDate!==comparisonDate?'净值日期与本组比较时点不一致':null,!trackingValid?'跟踪误差不可用或异常':null,!finite(product.feePct)?'管理费缺失':null,!finite(decision?.metrics.amount20)?'流动性缺失':decision!.metrics.amount20!<evaluation.profile.rules.minDailyAmount?'流动性低于门槛':null].filter((item):item is string=>!!item)
+      return { ...product, decision, navFresh, trackingValid, trackingAnomaly, score, exclusions }
     }).sort((a, b) => b.score - a.score || a.ticker.localeCompare(b.ticker))
-    const best = ranked[0]
-    const comparable = ranked.length > 1 && best.navFresh && best.trackingValid && finite(best.feePct)
-      && finite(best.decision?.metrics.amount20) && best.decision!.metrics.amount20! >= evaluation.profile.rules.minDailyAmount
-      && finite(best.decision?.metrics.premiumPct)
+    const eligible=ranked.filter(item=>!item.exclusions.length)
+    const best = eligible[0]
+    const comparable = products.length > 1 && !!best && !!comparisonDate
     return {
       indexCode,
       products: ranked,
       comparisonCandidate: comparable ? best.ticker : null,
+      comparisonDate,
+      status: products.length===1?'single-product':comparable?'comparable':'insufficient',
+      executionReady:!!best&&best.navFresh&&finite(best.decision?.metrics.premiumPct)&&best.decision?.state==='eligible',
+      reason:products.length===1?'本指数仅有一只已订阅产品，无同指数对照':comparable?`按${comparisonDate}净值覆盖、管理费、跟踪误差与流动性筛选；仅供产品研究，建仓仍需本轮信号与交易门禁`:'没有同时具备可比净值、管理费、有效跟踪误差及流动性的产品',
       valuation: {
         pe: ranked.find(item => finite(item.pe) && item.pe! > 0)?.pe ?? null,
         pb: ranked.find(item => finite(item.pb) && item.pb! > 0)?.pb ?? null,
         date: ranked.find(item => item.valuationDate)?.valuationDate ?? null,
         source: ranked.find(item => item.valuationSource)?.valuationSource ?? null,
-        pePercentile5y: ranked.find(item => finite(item.pePercentile5y))?.pePercentile5y ?? null,
-        pbPercentile5y: ranked.find(item => finite(item.pbPercentile5y))?.pbPercentile5y ?? null,
-        sampleCount: ranked.find(item => item.valuationSampleCount)?.valuationSampleCount ?? 0,
       },
     }
   }).sort((a, b) => a.indexCode.localeCompare(b.indexCode))
@@ -166,23 +190,23 @@ function eventFingerprint(title: string) {
 export function decisionEvents(evaluation?: Evaluation, limit = 12) {
   if (!evaluation) return []
   const seen = new Set<string>()
-  const terms=researchTerms([evaluation.profile.name,...evaluation.profile.sectors,...evaluation.profile.segments.map(item=>item.name),...evaluation.profile.leaders.map(item=>item.name)])
-  return [...evaluation.events]
-    .filter(item => {
-      if(item.status !== 'evidence' || item.category === 'administrative' || item.priority < 4)return false
-      if(item.companies.length>0)return true
-      if(!matchesResearchDomain(item.title,item.excerpt,terms))return false
-      const text=`${item.title} ${item.excerpt}`.toLowerCase()
-      return new Set(terms.filter(term=>text.includes(term.toLowerCase()))).size>=2
-    })
+  const candidates=[...evaluation.events]
+    .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && item.priority >= 4)
     .sort((a, b) => b.priority - a.priority || b.publishedAt.localeCompare(a.publishedAt))
     .filter(item => {
-      const key = eventFingerprint(item.title)
+      const key = [eventFingerprint(item.title),item.publishedAt.slice(0,10),[...item.companies].sort().join(',')].join(':')
       if (!key || seen.has(key)) return false
       seen.add(key)
       return true
     })
-    .slice(0, limit)
+
+  if(candidates.length<=limit)return candidates
+  const selected=new Map<string,typeof candidates[number]>(),buckets=new Set<string>()
+  // Reserve representation for event type / industry segment before filling the
+  // remaining budget by priority and recency. The UI can still show the full pool.
+  for(const row of candidates){const bucket=row.category+':'+(row.segments[0]||'company');if(!buckets.has(bucket)&&selected.size<Math.min(8,limit)){buckets.add(bucket);selected.set(row.id,row)}}
+  for(const row of candidates){if(selected.size>=limit)break;selected.set(row.id,row)}
+  return candidates.filter(row=>selected.has(row.id))
 }
 
 export function horizonViews(evaluation?: Evaluation) {
@@ -191,8 +215,8 @@ export function horizonViews(evaluation?: Evaluation) {
   const eligible = evaluation.decisions.filter(item => item.state === 'eligible').length
   const valuationCount = productGroups(evaluation).filter(group => group.valuation.pe !== null || group.valuation.pb !== null).length
   return {
-    tactical: `${evaluation.profile.horizonDays}个交易日：${riskOff}只风险收缩，${eligible}只满足实验条件；${evaluation.indexBreadth.aboveMA20}/${evaluation.indexBreadth.usableIndices}个有效指数位于20日均线上方。`,
-    strategic: `6—12个月：企业财务模块${evaluation.modules.company?.status === 'available' ? '可用' : '仍有限'}，${valuationCount}/${evaluation.indexBreadth.mappedIndices}个指数具备可展示估值；产业逻辑需由订单、盈利和现金流持续验证。`,
+    tactical: `${evaluation.profile.horizonDays}个交易日：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}；${evaluation.indexBreadth.aboveMA20?`${evaluation.indexBreadth.aboveMA20}/${evaluation.indexBreadth.usableIndices}个有效指数位于20日均线上方`:'有效指数均未站上20日均线'}。`,
+    strategic: `6—12个月：企业财务模块${evaluation.modules.company?.status === 'available' ? '可用' : '仍有限'}，${valuationCount?`${valuationCount}/${evaluation.indexBreadth.mappedIndices}个指数具备可展示估值`:'暂无指数具备可展示估值'}；产业逻辑需由订单、盈利和现金流持续验证。`,
   }
 }
 
@@ -204,4 +228,33 @@ export function evidenceHealth(evaluation?: Evaluation) {
     missingPublishedAt: rows.filter(item => !item.publishedAt).length,
     decisionEvents: decisionEvents(evaluation, Number.MAX_SAFE_INTEGER).length,
   }
+}
+
+/** Count one signal per index; product proliferation must not change direction. */
+export function indexRuleSummary(evaluation?: Evaluation) {
+  const grouped=new Map<string,Decision[]>()
+  for(const row of evaluation?.decisions||[]) {const key=row.indexCode||row.ticker;grouped.set(key,[...(grouped.get(key)||[]),row])}
+  const states=[...grouped.values()].map(rows=>rows.every(row=>row.state==='blocked')?'blocked':rows.filter(row=>row.state!=='blocked').every(row=>row.state==='risk-off')?'risk-off':rows.some(row=>row.state==='eligible')?'eligible':'watch')
+  const riskOff=states.filter(state=>state==='risk-off').length,eligible=states.filter(state=>state==='eligible').length
+  return {total:states.length,riskOff,eligible,signal:!states.length||states.every(state=>state==='blocked')?'blocked' as const:riskOff>=Math.ceil(states.length/2)?'risk-off' as const:eligible?'eligible' as const:'watch' as const,
+    reason:`${states.length}个唯一指数：${riskOff}个风险收缩，${eligible}个满足条件；同指数产品不重复投票。`}
+}
+
+export function consolidateWatchlist(items:string[]){
+  const normalized=(value:string)=>value.replace(/[\s、，。！？；：“”和与及]/g,'').toLowerCase()
+  const grams=(value:string)=>new Set(Array.from({length:Math.max(0,value.length-1)},(_,index)=>value.slice(index,index+2)))
+  const result:string[]=[]
+  for(const item of items){
+    const key=normalized(item),current=grams(key)
+    const index=result.findIndex(other=>{
+      const old=normalized(other),prior=grams(old)
+      const numbers=(value:string)=>(value.match(/\d+(?:\.\d+)?/g)||[]).join(',')
+      if(numbers(key)!==numbers(old))return false
+      const overlap=[...current].filter(gram=>prior.has(gram)).length
+      return key===old||current.size>=4&&prior.size>=4&&overlap/Math.min(current.size,prior.size)>=.75
+    })
+    if(index<0)result.push(item)
+    else if(item.length>result[index].length)result[index]=item
+  }
+  return result
 }

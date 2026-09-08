@@ -23,6 +23,11 @@ from models.industry_models import (
     EvidenceRef,
     SegmentRelationshipInfo,
 )
+from services.graph_cognition import assess_structure_cognition, build_cognition_repair_prompt
+from services.representative_company_resolver import (
+    RepresentativeCompanyResolver,
+    normalize_security_code,
+)
 
 class IndustryExplorerService:
     """AI驱动的产业链探索引擎"""
@@ -36,6 +41,7 @@ class IndustryExplorerService:
             api_key=os.getenv("TAVILY_API_KEY")
         )
         self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
+        self.company_resolver = RepresentativeCompanyResolver()
 
     async def explore_structure(
         self,
@@ -60,12 +66,10 @@ class IndustryExplorerService:
         # 3. 调用Claude分析
         response = await self._call_claude_for_structure(prompt)
 
-        # 4. 解析YAML响应
+        # 4. 解析YAML响应并在进入人工审核前执行确定性认知门禁。
         structure = self._parse_structure_response(response, industry_name)
         structure.evidence = evidence
-        allowed_urls = {item.url for item in evidence}
-        for relationship in structure.relationships:
-            relationship.evidence_urls = [url for url in relationship.evidence_urls if url in allowed_urls]
+        structure = await self._repair_structure_if_needed(structure)
 
         return structure
 
@@ -103,8 +107,35 @@ class IndustryExplorerService:
             current_structure.industry.name
         )
         refined_structure.evidence = current_structure.evidence
+        refined_structure = await self._repair_structure_if_needed(refined_structure, max_attempts=1)
 
         return refined_structure
+
+    async def _repair_structure_if_needed(
+        self,
+        structure: IndustryStructure,
+        max_attempts: Optional[int] = None,
+    ) -> IndustryStructure:
+        allowed_urls = {item.url for item in structure.evidence}
+        evidence = structure.evidence
+        attempts = max_attempts if max_attempts is not None else max(0, int(os.getenv("GRAPH_STRUCTURE_REPAIR_ATTEMPTS", "2")))
+        for attempt in range(attempts + 1):
+            for relationship in structure.relationships:
+                relationship.evidence_urls = [url for url in relationship.evidence_urls if url in allowed_urls]
+            assessment = assess_structure_cognition(structure)
+            if assessment["passed"] or attempt >= attempts:
+                if not assessment["passed"]:
+                    print(f"[WARNING] 产业认知门禁仍有问题，交由人工审核: {assessment['issues']}")
+                return structure
+            repair_prompt = build_cognition_repair_prompt(
+                structure.industry.name,
+                self._structure_to_yaml(structure),
+                assessment,
+            )
+            repaired = await self._call_claude_for_structure(repair_prompt)
+            structure = self._parse_structure_response(repaired, structure.industry.name)
+            structure.evidence = evidence
+        return structure
 
     def _structure_to_yaml(self, structure: IndustryStructure) -> str:
         """将IndustryStructure转换为YAML字符串"""
@@ -237,43 +268,45 @@ relationships:
         industry_name: str,
     ) -> Tuple[str, List[EvidenceRef]]:
         """搜索产业链相关信息"""
-        query = f"{industry_name} 产业链 上中下游 研究报告 结构分析"
+        queries = [
+            f"{industry_name} 产业链 上中下游 价值链 研究报告",
+            f"{industry_name} 核心产品 成本构成 供需传导 产业瓶颈",
+            f"{industry_name} 指数编制方案 成分行业分类 产业链图谱",
+        ]
 
-        try:
-            result = self.tavily.search(
-                query=query,
-                search_depth="advanced",
-                max_results=8,
-                include_answer=True
-            )
-
-            # 提取关键内容
-            context_parts = []
-            evidence: List[EvidenceRef] = []
-
-            if result.get("answer"):
-                context_parts.append(f"综述：{result['answer']}")
-
-            for item in result.get("results", [])[:5]:
-                title = item.get('title', '')
-                url = item.get('url', '')
-                excerpt = item.get('content', '')[:500]
-                context_parts.append(
-                    f"来源：{title}\n"
-                    f"链接：{url}\n"
-                    f"内容：{excerpt}"
+        context_parts = []
+        evidence: List[EvidenceRef] = []
+        seen_urls = set()
+        for query in queries:
+            try:
+                result = await asyncio.to_thread(
+                    self.tavily.search,
+                    query=query,
+                    search_depth="advanced",
+                    max_results=5,
+                    include_answer=True,
                 )
-                if title and url:
+                if result.get("answer"):
+                    context_parts.append(f"检索主题：{query}\n综述：{result['answer']}")
+                for item in result.get("results", [])[:5]:
+                    title = item.get('title', '')
+                    url = item.get('url', '')
+                    if not title or not url or url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    excerpt = item.get('content', '')[:700]
+                    context_parts.append(f"检索主题：{query}\n来源：{title}\n链接：{url}\n内容：{excerpt}")
                     evidence.append(EvidenceRef(title=title, url=url, excerpt=excerpt))
+            except Exception as error:
+                print(f"检索主题失败，继续其他认知维度: {query}: {error}")
 
+        if evidence:
             return "\n\n".join(context_parts), evidence
 
-        except Exception as e:
-            print(f"搜索失败: {e}")
-            fallback = await self._google_news_search(query, 5)
-            context_parts = [f"来源：{item['title']}\n链接：{item['url']}\n内容：{item['content']}" for item in fallback]
-            evidence = [EvidenceRef(title=item["title"], url=item["url"], excerpt=item["content"], source_type="google_news_rss") for item in fallback]
-            return "\n\n".join(context_parts), evidence
+        fallback = await self._google_news_search(queries[0], 8)
+        context_parts = [f"来源：{item['title']}\n链接：{item['url']}\n内容：{item['content']}" for item in fallback]
+        evidence = [EvidenceRef(title=item["title"], url=item["url"], excerpt=item["content"], source_type="google_news_rss") for item in fallback]
+        return "\n\n".join(context_parts), evidence
 
     async def _google_news_search(self, query: str, max_results: int = 5) -> List[Dict[str, str]]:
         """Keyless read-only fallback used when the primary search quota is exhausted."""
@@ -321,6 +354,11 @@ relationships:
 2. 列出每个阶段包含的关键环节（segment）
 3. 每个环节需包含：名称、功能描述、核心技术/产品类别
 4. 给出环节之间可用于事件传导的有向关系，必须能由参考资料支持
+5. 用统一产业认知口径建模：
+   - 节点表示稳定的价值创造角色，不把单个企业、宽泛主题或一次性事件作为环节
+   - SUPPLIES 表示产品/服务供给，INFLUENCES 表示需求/技术/价格影响，CONSTRAINS 表示产能/成本/政策约束，SUBSTITUTES 表示替代
+   - description 必须写清传导变量和兑现条件，例如“需求量→产能利用率→盈利”，不能只写“相关”
+   - 主干关系应形成上游→中游→下游的可达路径，辅以必要的跨阶段反馈关系
 
 **输出格式（YAML）：**
 ```yaml
@@ -376,6 +414,7 @@ relationships:
 - 每个阶段2-4个环节为宜
 - code使用英文小写下划线格式
 - relationships 的 from/to 必须引用本次输出的 segment code
+- 禁止自环、重复边和没有机制说明的弱关系
 - 证据不足的关系不要输出，不得用常识补全来源
 - 只输出YAML，不要其他解释
 
@@ -475,6 +514,7 @@ relationships:
                 if isinstance(segment, dict) and segment.get("code")
             }
             normalized_relationships = []
+            seen_relationships = set()
             relation_aliases = {"ENABLES": "INFLUENCES", "DRIVES_DEMAND": "INFLUENCES"}
             for raw_relation in data.get("relationships", []) or []:
                 if not isinstance(raw_relation, dict):
@@ -486,10 +526,16 @@ relationships:
                 )
                 if candidate.get("from") not in segment_codes or candidate.get("to") not in segment_codes:
                     continue
+                if candidate.get("from") == candidate.get("to"):
+                    continue
+                relation_key = (candidate.get("from"), candidate.get("to"), candidate.get("type"))
+                if relation_key in seen_relationships:
+                    continue
                 try:
                     normalized_relationships.append(
                         SegmentRelationshipInfo(**candidate).model_dump(by_alias=True)
                     )
+                    seen_relationships.add(relation_key)
                 except Exception as relation_error:
                     print(f"跳过无效环节关系: {relation_error}")
             data["relationships"] = normalized_relationships
@@ -570,7 +616,9 @@ relationships:
             details=details,
             metadata={
                 "total_companies": sum(len(d.companies) for d in details.values()),
-                "total_relationships": sum(len(d.relationships) for d in details.values())
+                "total_relationships": sum(len(d.relationships) for d in details.values()),
+                "structure_cognition": assess_structure_cognition(structure),
+                "company_selection": "etf_holdings_first_then_business_validation",
             }
         )
 
@@ -680,6 +728,7 @@ relationships:
             current_structure.industry.name
         )
         refined_structure.evidence = current_structure.evidence
+        refined_structure = await self._repair_structure_if_needed(refined_structure, max_attempts=1)
         logger.info(f"[refine_unified] 结构解析完成，阶段数: {len(refined_structure.structure)}")
 
         # 5. 如果结构发生了变化（新增或删除环节），需要相应调整企业信息
@@ -1062,7 +1111,9 @@ relationships:
         结合用户反馈增量补充环节信息（保留现有企业）
         """
         # 1. 搜索该segment的关键企业（结合反馈关键词）
-        search_query = f"{segment.name} 上市公司 龙头企业 股票代码 {industry_name} {feedback}"
+        holding_candidates = await self.company_resolver.resolve_candidates(industry_name, segment)
+        candidate_names = " ".join(item["name"] for item in holding_candidates[:12])
+        search_query = f"{segment.name} 主营业务 产业地位 {industry_name} {feedback} {candidate_names}"
         search_context = await self._search_segment_companies(search_query)
 
         # 2. 构建当前企业列表的JSON字符串（用于增量合并）
@@ -1079,7 +1130,15 @@ relationships:
                         "country": c.country,
                         "market_position": c.market_position,
                         "key_products": c.key_products,
-                        "description": c.description
+                        "description": c.description,
+                        "evidence_urls": c.evidence_urls,
+                        "representative_etfs": [item.model_dump(mode="json") for item in c.representative_etfs],
+                        "representative_indices": [item.model_dump(mode="json") for item in c.representative_indices],
+                        "match_source": c.match_source,
+                        "match_confidence": c.match_confidence,
+                        "representativeness_score": c.representativeness_score,
+                        "selection_reason": c.selection_reason,
+                        "value_signals": c.value_signals,
                     }
                     for c in current_detail.companies
                 ],
@@ -1094,7 +1153,8 @@ relationships:
             segment=segment,
             context=search_context,
             current_companies_json=current_companies_json,
-            feedback=feedback
+            feedback=feedback,
+            holding_candidates=holding_candidates,
         )
 
         # 4. 调用Claude进行增量补充
@@ -1114,8 +1174,10 @@ relationships:
     ) -> SegmentDetail:
         """填充单个segment的企业信息"""
 
-        # 1. 搜索该segment的关键企业
-        search_query = f"{segment.name} 上市公司 龙头企业 股票代码 {industry_name}"
+        # 1. 先从相关ETF的真实持仓构造可投资企业候选，再用联网资料验证主营归属。
+        holding_candidates = await self.company_resolver.resolve_candidates(industry_name, segment)
+        candidate_names = " ".join(item["name"] for item in holding_candidates[:12])
+        search_query = f"{segment.name} 主营业务 产业地位 {industry_name} {candidate_names}"
         search_context = await self._search_segment_companies(search_query)
 
         # 2. 生成填充Prompt
@@ -1123,15 +1185,20 @@ relationships:
             industry_name=industry_name,
             stage_name=stage_name,
             segment=segment,
-            context=search_context
+            context=search_context,
+            holding_candidates=holding_candidates,
         )
 
         # 3. 调用Claude提取
         response = await self._call_claude_for_companies(prompt)
 
         # 4. 解析响应
-        detail = self._parse_company_response(response, segment.code)
+        detail = self._parse_company_response(response, segment.code, holding_candidates)
         self._retain_search_evidence(detail, search_context)
+
+        # 模型异常或验证过严时仍可用持仓事实产生可审核候选，不回退到无约束编造。
+        if not detail.companies and holding_candidates:
+            detail = self.company_resolver.fallback_detail(holding_candidates, segment.code)
 
         return detail
 
@@ -1176,9 +1243,19 @@ relationships:
         industry_name: str,
         stage_name: str,
         segment: SegmentInfo,
-        context: str
+        context: str,
+        holding_candidates: Optional[List[Dict]] = None,
     ) -> str:
         """构建企业填充Prompt"""
+        holdings_section = ""
+        if holding_candidates:
+            holdings_section = f"""
+**ETF/指数持仓候选（确定性候选集）：**
+```json
+{json.dumps(holding_candidates, ensure_ascii=False)}
+```
+只能从上述候选集中选择企业；持仓仅证明可投资暴露，不等同于主营属于该环节。
+"""
         prompt = f"""你是一位专业的产业研究员。请为「{segment.name}」环节填充详细信息。
 
 **背景：**
@@ -1190,6 +1267,7 @@ relationships:
 
 **搜索到的市场信息：**
 {context}
+{holdings_section}
 
 **任务：**
 提取该环节的主要上市公司（3-8家），包括：
@@ -1210,7 +1288,9 @@ relationships:
       "market_position": "市场地位（leader/major/emerging）",
       "key_products": ["主要产品1", "主要产品2"],
       "description": "企业简介（1-2句话）",
-      "evidence_urls": ["直接支持企业归属和主营判断的搜索结果链接"]
+      "evidence_urls": ["直接支持企业归属和主营判断的搜索结果链接"],
+      "selection_reason": "为什么其能代表该环节，而不只是被ETF持有",
+      "value_signals": {{"business_fit": 0.0, "competitive_position": 0.0, "evidence_quality": 0.0}}
     }}
   ],
   "relationships": []
@@ -1220,7 +1300,9 @@ relationships:
 **要求：**
 - 优先选择A股上市公司，其次港股、美股
 - 必须包含股票代码和交易所
-- 每家企业必须提供至少一个搜索结果中的 evidence_urls；无法提供证据的企业不要输出
+- 若提供了ETF持仓候选，只能选择候选中的ticker；优先跨ETF覆盖广、权重高且主营证据充分的企业
+- 每家企业的主营归属需有搜索证据；若暂缺网页证据，可保留持仓候选但降低 evidence_quality，不得编造链接
+- value_signals 是研究优先级而非买入评分，不评估股价涨跌或收益率
 - 只输出JSON，不要其他解释
 """
         return prompt
@@ -1232,9 +1314,19 @@ relationships:
         segment: SegmentInfo,
         context: str,
         current_companies_json: str,
-        feedback: str
+        feedback: str,
+        holding_candidates: Optional[List[Dict]] = None,
     ) -> str:
         """构建企业增量补充Prompt（增量模式）"""
+        holding_section = ""
+        if holding_candidates:
+            holding_section = f"""
+**可新增的ETF持仓候选集：**
+```json
+{json.dumps(holding_candidates, ensure_ascii=False)}
+```
+新增企业只能来自该候选集；现有企业可保留，但必须维持原有来源与映射字段。
+"""
         prompt = f"""你是一位专业的产业研究员。用户对「{segment.name}」环节的企业列表提出了反馈意见，请根据反馈进行增量补充。
 
 **背景：**
@@ -1254,6 +1346,7 @@ relationships:
 
 **搜索到的补充信息：**
 {context}
+{holding_section}
 
 **任务：**
 1. 仔细阅读用户的反馈意见和当前企业列表
@@ -1345,15 +1438,37 @@ relationships:
         except asyncio.TimeoutError:
             raise Exception(f"AI调用超时（{timeout}秒），请稍后重试")
 
-    def _parse_company_response(self, json_text: str, segment_code: str) -> SegmentDetail:
+    def _parse_company_response(
+        self,
+        json_text: str,
+        segment_code: str,
+        holding_candidates: Optional[List[Dict]] = None,
+    ) -> SegmentDetail:
         """解析JSON响应"""
         try:
             data = json.loads(json_text)
+            candidate_by_code = {
+                normalize_security_code(item.get("ticker")): item
+                for item in (holding_candidates or [])
+            }
 
             companies = []
             for raw_company in data.get("companies", []):
                 try:
                     company = dict(raw_company)
+                    code = normalize_security_code(company.get("ticker"))
+                    if candidate_by_code and code not in candidate_by_code:
+                        print(f"跳过不在ETF持仓候选集的企业: {company.get('name')} {code}")
+                        continue
+                    if code:
+                        company["ticker"] = code
+                    candidate = candidate_by_code.get(code)
+                    if candidate:
+                        company["representative_etfs"] = candidate["representative_etfs"]
+                        company["match_source"] = candidate["match_source"]
+                        company["match_confidence"] = candidate["match_confidence"]
+                        company["representativeness_score"] = candidate["representativeness_score"]
+                        company["selection_reason"] = company.get("selection_reason") or candidate["selection_reason"]
                     company["segment_code"] = segment_code
                     companies.append(CompanyInfo(**company))
                 except Exception as company_error:

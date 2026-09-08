@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db'
 import { normalizeComprehensiveReportContent } from '@/lib/analysis/report-content'
 import { normalizeSocialReport, parseSocialReport } from '@/lib/analysis/social-report'
 import { reportAdviceConfidence } from '@/lib/analysis/report-insights'
-import { annotateHistoricalReports, selectHistoricalReports } from '@/lib/research/history-reports'
+import { annotateHistoricalReports, isVerificationReport, selectHistoricalReports } from '@/lib/research/history-reports'
 import { getResearchProfile } from '@/lib/research/store'
 import { sessionBoundary } from '@/lib/research/time'
 
@@ -31,7 +31,7 @@ function serializeReport(report: {
   createdAt: Date
 }) {
   const data = parseData(report.dataJson)
-  if(report.type==='comprehensive'&&data?.socialReport){
+  if(['comprehensive','verification'].includes(report.type)&&data?.socialReport){
     try{data.socialReport=normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)}catch{/* Keep the stored payload inspectable. */}
   }
   return {
@@ -41,7 +41,7 @@ function serializeReport(report: {
     industryName: report.industryName,
     title: report.title,
     summary: report.summary,
-    content: report.type === 'comprehensive' ? normalizeComprehensiveReportContent(report.content, data) : report.content,
+    content: ['comprehensive','verification'].includes(report.type) ? normalizeComprehensiveReportContent(report.content, data) : report.content,
     data,
     createdAt: report.createdAt.toISOString(),
   }
@@ -56,11 +56,14 @@ export async function GET(request: NextRequest) {
     const limit = Number.isFinite(requestedLimit)
       ? Math.min(Math.max(Math.floor(requestedLimit), 1), MAX_REPORTS)
       : 20
+    const hideVerification = type === 'comprehensive' && searchParams.get('includeVerification') !== 'true'
+    const visibleReports = <T extends { dataJson: string | null }>(reports: T[]) => (hideVerification ? reports.filter(report => !isVerificationReport(report)) : reports).slice(0, limit)
 
     if(searchParams.get('view')==='summary'){
       const contextIndustryId=searchParams.get('contextIndustryId')||undefined
       const listIndustryId=searchParams.get('scope')==='all'?undefined:industryId
-      const reports=await prisma.aIAnalysisReport.findMany({where:{...(listIndustryId?{industryId:listIndustryId}:{}),...(type?{type}:{})},orderBy:{createdAt:'desc'},take:limit,select:{id:true,type:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
+      const candidates=await prisma.aIAnalysisReport.findMany({where:{...(listIndustryId?{industryId:listIndustryId}:{}),...(type?{type}:{})},orderBy:{createdAt:'desc'},take:hideVerification?MAX_REPORTS:limit,select:{id:true,type:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
+      const reports=visibleReports(candidates)
       let includedIds=new Set<string>(),annotations=reports.map(()=>({sessionDate:null as string|null,includedInNextAnalysis:false,inclusionLabel:'不在当前回溯窗口'})),contextPolicy=null
       if(contextIndustryId){
         const [profile,calendarRow]=await Promise.all([getResearchProfile(contextIndustryId),prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'},select:{payload:true}})])
@@ -77,14 +80,15 @@ export async function GET(request: NextRequest) {
       })})
     }
 
-    const reports = await prisma.aIAnalysisReport.findMany({
+    const candidates = await prisma.aIAnalysisReport.findMany({
       where: {
         ...(industryId ? { industryId } : {}),
         ...(type ? { type } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: hideVerification ? MAX_REPORTS : limit,
     })
+    const reports = visibleReports(candidates)
 
     return NextResponse.json({
       success: true,

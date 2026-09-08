@@ -55,8 +55,9 @@ export async function POST(request: NextRequest) {
 export async function GET(request: NextRequest) {
   try {
     const limit = Math.min(100, Math.max(1, Number(request.nextUrl.searchParams.get('limit')) || 50))
-
-    const runs = await comprehensiveAnalysisWorkflow.listRuns(limit, request.nextUrl.searchParams.get('industryId') || undefined)
+    const includeVerification=request.nextUrl.searchParams.get('includeVerification')==='true'
+    const candidates = await comprehensiveAnalysisWorkflow.listRuns(includeVerification?limit:100, request.nextUrl.searchParams.get('industryId') || undefined)
+    const runs=(includeVerification?candidates:candidates.filter(run=>run.metadata?.verificationMode!=='graph-e2e')).slice(0,limit)
 
     return NextResponse.json(runs)
   } catch (error) {

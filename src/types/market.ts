@@ -88,6 +88,7 @@ export interface SectorFlow {
   sector: string
   netFlow: number       // 净流入（亿）
   changePct: number     // 涨跌幅
+  dataDate?: string | null
 }
 
 export interface MarketCapitalFlow {
@@ -281,6 +282,7 @@ export interface CapitalFlowData {
   sectorDataQuality?: DataQuality
   sectorDataDate?: string
   sectorRealtime?: boolean
+  timestamp?: string | null
 
   // 保留旧字段以兼容过渡期
   market?: {

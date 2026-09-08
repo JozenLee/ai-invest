@@ -6,8 +6,8 @@ import { decisionEvents, guardActionLanguage, productGroups, reportCoverage, rep
 describe('report investment readiness', () => {
   it('outputs a confidence-rated recommendation without a replay-history gate', () => {
     const evaluation = evaluateResearch(fixture())
-    expect(reportReadiness(evaluation, { status: 'available' }, false).level).toBe('advice-ready')
-    expect(reportReadiness(evaluation, { status: 'available' }, false).confidencePct).toBeGreaterThan(0)
+    expect(reportReadiness(evaluation, { status: 'available' }).level).toBe('advice-ready')
+    expect(reportReadiness(evaluation, { status: 'available' }).confidencePct).toBeGreaterThan(0)
     expect(safeDecisionAction(evaluation.decisions[0]).unheld).toBe('建仓')
     expect(safeDecisionAction(evaluation.decisions[0], false).unheld).toBe('待盘中复核')
   })
@@ -32,6 +32,8 @@ describe('report investment readiness', () => {
 
   it('guards direct action wording in archived AI sections',()=>{
     expect(guardActionLanguage({analysis:'未持有观望、已持有减仓'},false)).toEqual({analysis:'未持有暂缓新增、已持有复核风险敞口'})
+    expect(guardActionLanguage({recommendation:{unheld:'建仓',held:'减仓'}},false)).toEqual({recommendation:{unheld:'待交易时段复核',held:'复核风险敞口'}})
+    expect(guardActionLanguage(JSON.stringify({recommendation:{unheld:'建仓',held:'减仓'}}),false)).toEqual({recommendation:{unheld:'待交易时段复核',held:'复核风险敞口'}})
   })
   it('separates missing data from unmet market signals and deduplicates valuation indices',()=>{
     const evaluation=evaluateResearch(fixture())
@@ -45,7 +47,14 @@ describe('report investment readiness', () => {
     const coverage=reportCoverage(evaluation)
     expect(coverage.data.find(item=>item.key==='premium')?.known).toBe(0)
     expect(coverage.signalUnmet).toBe(1)
-    expect(coverage.data.find(item=>item.key==='valuation-history')).toMatchObject({known:0,total:1})
+    expect(coverage.data.find(item=>item.key==='valuation-current')).toMatchObject({known:1,total:1})
+  })
+  it('counts market signals once per tracked index',()=>{
+    const evaluation=evaluateResearch(fixture()),duplicate=structuredClone(evaluation.decisions[0])
+    duplicate.ticker='159801';evaluation.decisions.push(duplicate)
+    const coverage=reportCoverage(evaluation)
+    expect(coverage.indexCount).toBe(1)
+    expect(coverage.signalTotal).toBe(4)
   })
   it('selects one representative per exposure family and rejects anomalous tracking first',()=>{
     const evaluation=evaluateResearch(fixture()),chip=structuredClone(evaluation.decisions[0]),cloud=structuredClone(evaluation.decisions[0]),communication=structuredClone(evaluation.decisions[0])

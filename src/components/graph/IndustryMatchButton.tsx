@@ -70,7 +70,7 @@ export function IndustryMatchButton({
           targetId: industryId,
           options: {
             matchETF: true,
-            matchIndex: false,
+            matchIndex: true,
             topN: 5,
             minRelevance: 0.6,
           },
@@ -104,15 +104,15 @@ export function IndustryMatchButton({
         className="min-h-11 gap-2"
       >
         <Sparkles className="h-4 w-4" />
-        匹配ETF
+        更新投资映射
       </Button>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>智能匹配ETF</DialogTitle>
+            <DialogTitle>更新 ETF / 指数映射</DialogTitle>
             <DialogDescription>
-              为 <strong>{industryName}</strong> 的所有节点自动匹配相关的ETF
+              为 <strong>{industryName}</strong> 的所有环节更新可追溯的 ETF 与指数映射
             </DialogDescription>
           </DialogHeader>
 
@@ -120,7 +120,7 @@ export function IndustryMatchButton({
             {!result && !isMatching && (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">
-                  系统将使用AI分析每个节点的特征，自动匹配最相关的ETF。
+                  系统先用代表企业的已披露持仓校准候选，再由AI解释产业相关性。
                 </p>
                 <div className="bg-muted p-3 rounded-lg space-y-2 text-sm">
                   <div className="flex items-start gap-2">
@@ -128,8 +128,8 @@ export function IndustryMatchButton({
                     <div>
                       <p className="font-medium">匹配策略</p>
                       <ul className="list-disc list-inside text-muted-foreground mt-1 space-y-1">
-                        <li>关键词初筛：快速过滤候选ETF</li>
-                        <li>AI精准分析：评估相关度和权重</li>
+                        <li>持仓穿透：验证ETF是否持有该环节代表企业</li>
+                        <li>语义校准：结合环节定义与指数主题评估相关度</li>
                         <li>保留Top 5：每个节点最多5个ETF</li>
                         <li>结果会显示在各节点卡片上</li>
                       </ul>
@@ -258,7 +258,7 @@ export function IndustryMatchButton({
                 </Button>
                 <Button onClick={handleMatch}>
                   <Sparkles className="mr-2 h-4 w-4" />
-                  开始匹配
+                  开始更新
                 </Button>
               </>
             )}

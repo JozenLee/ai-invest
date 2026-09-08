@@ -74,6 +74,26 @@ export interface Company {
   marketPosition: 'leader' | 'major' | 'emerging'
   keyProducts?: string[]
   description?: string
+  representativeEtfs?: Array<{
+    code: string
+    name: string
+    holdingWeight?: number | null
+    relevance: number
+    reportPeriod?: string | null
+    source?: string | null
+    holdingVerified?: boolean
+  }>
+  representativeIndices?: Array<{
+    code: string
+    name: string
+    relevance: number
+    source?: string
+  }>
+  matchSource?: string
+  matchConfidence?: number
+  representativenessScore?: number
+  selectionReason?: string
+  valueSignals?: Record<string, number>
 }
 
 export interface SwimLaneData {

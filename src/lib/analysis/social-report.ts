@@ -86,11 +86,16 @@ function record(value:unknown):Record<string,unknown>{
 /** Repairs presentation metadata in archived reports without mutating their frozen evidence. */
 export function normalizeSocialReport(report:SocialReport,evaluation?:Evaluation,companyValue?:unknown):SocialReport{
   const products=evaluation?.products||[]
+  const decisions=evaluation?.decisions||[],riskOff=decisions.filter(item=>item.state==='risk-off').length,eligible=decisions.filter(item=>item.state==='eligible').length
   const valuedIndices=new Set(products.filter(item=>(typeof item.pe==='number'&&Number.isFinite(item.pe))||(typeof item.pb==='number'&&Number.isFinite(item.pb))).map(item=>item.indexCode).filter(Boolean))
-  const historicalIndices=new Set(products.filter(item=>(item.valuationSampleCount||0)>=500&&((typeof item.pePercentile5y==='number'&&Number.isFinite(item.pePercentile5y))||(typeof item.pbPercentile5y==='number'&&Number.isFinite(item.pbPercentile5y)))).map(item=>item.indexCode).filter(Boolean))
-  const takeaways=report.takeaways.map(row=>/^估值：\d+只产品有底层数据/.test(row)?`估值：${valuedIndices.size}个指数有当期值，${historicalIndices.size}个具备历史分位。`:row)
+  const takeaways=report.takeaways.map(row=>{
+    const normalized=/^估值：/.test(row)&&evaluation?`估值：${valuedIndices.size?`${valuedIndices.size}个指数有可核验当期值`:'暂无可核验当期估值'}。`:row
+    const current=/^战术：/.test(normalized)&&evaluation?`战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`:normalized
+    return current.replace(/0只风险收缩/g,'暂无产品触发风险收缩').replace(/0只满足实验条件/g,'暂无产品满足实验条件')
+  })
   const company=record(companyValue),evidence:Array<unknown>=Array.isArray(company.evidence)?company.evidence:[]
   const sections=report.sections.map(section=>{
+    if(['ETF映射','指数基金映射'].includes(section.title)&&evaluation)return {...section,body:section.body.replace(/覆盖\d+只A股(?:ETF|指数基金)、\d+个跟踪指数/u,`覆盖${decisions.length}只A股指数基金、${evaluation.indexBreadth.mappedIndices}个跟踪指数`)}
     if(!section.body.startsWith('【来源待核验】'))return section
     const name=section.body.slice('【来源待核验】'.length).split('：')[0]
     const match=evidence.find(item=>item&&typeof item==='object'&&String((item as Record<string,unknown>).claim||'').includes(name))

@@ -1,6 +1,7 @@
 # data-service/services/neo4j_service.py
 """Neo4j服务：管理图数据库连接和操作"""
 import os
+import json
 from typing import Optional, Dict, Any, List
 from neo4j import AsyncGraphDatabase, AsyncDriver, AsyncSession
 from contextlib import asynccontextmanager
@@ -13,6 +14,18 @@ ALLOWED_RELATION_TYPES = {
     "SUPPLIES", "INFLUENCES", "CONSTRAINS", "SUBSTITUTES",
     "COMPETES_WITH",
 }
+
+
+def _json_property(value: Any, fallback: Any) -> Any:
+    """Parse JSON-backed Neo4j properties without shadowing the json module."""
+    if value is None or value == "":
+        return fallback
+    if isinstance(value, (list, dict)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return fallback
 
 class Neo4jService:
     """Neo4j图数据库服务"""
@@ -153,6 +166,9 @@ class Neo4jService:
                 i.revision_id = $revision_id,
                 i.version = $version,
                 i.content_hash = $content_hash,
+                i.mapping_revision_id = $revision_id,
+                i.mapping_content_hash = $content_hash,
+                i.mapping_published_at = datetime(),
                 i.source_urls = $source_urls,
                 i.published_at = datetime(),
                 i.updated_at = datetime()
@@ -276,13 +292,16 @@ class Neo4jService:
             RETURN i.id as id, i.code as code, i.name as name,
                    i.description as description, COALESCE(i.version, 0) as version,
                    i.revision_id as revision_id, i.content_hash as content_hash,
+                   i.mapping_revision_id as mapping_revision_id,
+                   i.mapping_content_hash as mapping_content_hash,
+                   i.mapping_published_at as mapping_published_at,
                    i.published_at as published_at, i.updated_at as updated_at
             ORDER BY i.name
             """
             result = await s.run(query)
             records = await result.data()
             for record in records:
-                for field in ("published_at", "updated_at"):
+                for field in ("published_at", "updated_at", "mapping_published_at"):
                     if record.get(field) is not None:
                         record[field] = str(record[field])
             return records
@@ -307,6 +326,9 @@ class Neo4jService:
             RETURN i.id as id, i.code as code, i.name as name,
                    i.description as description, COALESCE(i.version, 0) as version,
                    i.revision_id as revision_id, i.content_hash as content_hash,
+                   i.mapping_revision_id as mapping_revision_id,
+                   i.mapping_content_hash as mapping_content_hash,
+                   i.mapping_published_at as mapping_published_at,
                    i.source_urls as source_urls, i.published_at as published_at,
                    i.updated_at as updated_at
             """
@@ -314,7 +336,7 @@ class Neo4jService:
             record = await result.single()
             if record:
                 data = dict(record)
-                for field in ("published_at", "updated_at"):
+                for field in ("published_at", "updated_at", "mapping_published_at"):
                     if data.get(field) is not None:
                         data[field] = str(data[field])
                 return data
@@ -346,7 +368,7 @@ class Neo4jService:
             MATCH (i:Industry {id: $industry_id})
             OPTIONAL MATCH (i)-[:HAS_STAGE]->(stage:Stage)
             OPTIONAL MATCH (stage)-[:HAS_SEGMENT]->(segment:Segment)
-            OPTIONAL MATCH (segment)-[:INCLUDES]->(company:Company)
+            OPTIONAL MATCH (segment)-[membership:INCLUDES]->(company:Company)
             RETURN
                 i.id as industry_id,
                 i.code as industry_code,
@@ -355,6 +377,9 @@ class Neo4jService:
                 COALESCE(i.version, 0) as industry_version,
                 i.revision_id as industry_revision_id,
                 i.content_hash as industry_content_hash,
+                i.mapping_revision_id as industry_mapping_revision_id,
+                i.mapping_content_hash as industry_mapping_content_hash,
+                i.mapping_published_at as industry_mapping_published_at,
                 i.source_urls as industry_source_urls,
                 i.published_at as industry_published_at,
                 i.updated_at as industry_updated_at,
@@ -376,7 +401,20 @@ class Neo4jService:
                 company.market_position as company_market_position,
                 company.key_products as company_key_products,
                 company.description as company_description,
-                company.source_urls as company_source_urls
+                company.source_urls as company_source_urls,
+                company.representative_etfs_json as company_representative_etfs_json,
+                company.representative_indices_json as company_representative_indices_json,
+                company.match_source as company_match_source,
+                company.match_confidence as company_match_confidence,
+                company.representativeness_score as company_representativeness_score,
+                company.selection_reason as company_selection_reason,
+                company.value_signals_json as company_value_signals_json,
+                membership.representative_etfs_json as membership_representative_etfs_json,
+                membership.representative_indices_json as membership_representative_indices_json,
+                membership.match_source as membership_match_source,
+                membership.match_confidence as membership_match_confidence,
+                membership.representativeness_score as membership_representativeness_score,
+                membership.selection_reason as membership_selection_reason
             ORDER BY stage.code, segment.code, company.market_position, company.name
             """
             result = await s.run(query, industry_id=resolved_id)
@@ -397,6 +435,9 @@ class Neo4jService:
                     "version": first_record["industry_version"],
                     "revision_id": first_record["industry_revision_id"],
                     "content_hash": first_record["industry_content_hash"],
+                    "mapping_revision_id": first_record["industry_mapping_revision_id"],
+                    "mapping_content_hash": first_record["industry_mapping_content_hash"],
+                    "mapping_published_at": str(first_record["industry_mapping_published_at"] or ""),
                     "source_urls": first_record["industry_source_urls"] or [],
                     "published_at": str(first_record["industry_published_at"] or ""),
                     "updated_at": str(first_record["industry_updated_at"] or ""),
@@ -440,6 +481,8 @@ class Neo4jService:
 
                 # 添加企业
                 if company_id and segment_id:
+                    membership_etfs = record["membership_representative_etfs_json"]
+                    membership_indices = record["membership_representative_indices_json"]
                     company_data = {
                         "id": company_id,
                         "name": record["company_name"],
@@ -450,7 +493,14 @@ class Neo4jService:
                         "market_position": record["company_market_position"],
                         "key_products": record["company_key_products"] or [],
                         "description": record["company_description"],
-                        "source_urls": record["company_source_urls"] or []
+                        "source_urls": record["company_source_urls"] or [],
+                        "representative_etfs": _json_property(membership_etfs, []) if membership_etfs is not None else _json_property(record["company_representative_etfs_json"], []),
+                        "representative_indices": _json_property(membership_indices, []) if membership_indices is not None else _json_property(record["company_representative_indices_json"], []),
+                        "match_source": record["membership_match_source"] or record["company_match_source"] or "web_search",
+                        "match_confidence": record["membership_match_confidence"] or record["company_match_confidence"] or 0.5,
+                        "representativeness_score": record["membership_representativeness_score"] or record["company_representativeness_score"] or 0.0,
+                        "selection_reason": record["membership_selection_reason"] or record["company_selection_reason"],
+                        "value_signals": _json_property(record["company_value_signals_json"], {})
                     }
                     stages_dict[stage_id]["segments"][segment_id]["companies"].append(company_data)
 
@@ -514,7 +564,14 @@ class Neo4jService:
                      country: company.country,
                      market_position: company.market_position,
                      key_products: company.key_products,
-                     description: company.description
+                     description: company.description,
+                     representative_etfs_json: company.representative_etfs_json,
+                     representative_indices_json: company.representative_indices_json,
+                     match_source: company.match_source,
+                     match_confidence: company.match_confidence,
+                     representativeness_score: company.representativeness_score,
+                     selection_reason: company.selection_reason,
+                     value_signals_json: company.value_signals_json
                  }) as companies
             RETURN
                 i.id as industry_id,
@@ -590,21 +647,29 @@ class Neo4jService:
                 if segment_id:
                     # 过滤掉空企业
                     companies = [c for c in record["companies"] if c.get("id")]
+                    for company in companies:
+                        try:
+                            company["representative_etfs"] = _json_property(company.pop("representative_etfs_json", None), [])
+                            company["representative_indices"] = _json_property(company.pop("representative_indices_json", None), [])
+                            company["value_signals"] = _json_property(company.pop("value_signals_json", None), {})
+                        except (TypeError, ValueError):
+                            company["representative_etfs"] = []
+                            company["representative_indices"] = []
+                            company["value_signals"] = {}
 
                     # 解析JSON字符串格式的匹配结果
-                    import json
                     matched_etfs = []
                     matched_indices = []
 
                     if record.get("matched_etfs"):
                         try:
-                            matched_etfs = json.loads(record["matched_etfs"]) if isinstance(record["matched_etfs"], str) else record["matched_etfs"]
+                            matched_etfs = _json_property(record["matched_etfs"], [])
                         except:
                             matched_etfs = []
 
                     if record.get("matched_indices"):
                         try:
-                            matched_indices = json.loads(record["matched_indices"]) if isinstance(record["matched_indices"], str) else record["matched_indices"]
+                            matched_indices = _json_property(record["matched_indices"], [])
                         except:
                             matched_indices = []
 

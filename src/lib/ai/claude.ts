@@ -57,14 +57,21 @@ export class ClaudeClient {
       messages?: Array<{ role: string; content: string }>
       timeoutMs?: number
     }) => {
-      const prompt = params.prompt || params.messages?.map((message) => message.content).join('\n') || ''
-      const text = await this.complete({
-        prompt,
+      if (!this.client) throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
+      const message = await this.client.messages.create({
+        model: params.model || this.model,
+        max_tokens: params.max_tokens || this.maxTokens,
+        messages: params.messages?.length ? params.messages.map(item=>({role:item.role==='assistant'?'assistant' as const:'user' as const,content:item.content})) : [{role:'user',content:params.prompt||''}],
         system: params.system,
-        maxTokens: params.max_tokens,
-        timeoutMs: params.timeoutMs,
-      })
-      return { content: [{ type: 'text' as const, text }] }
+        ...(params.temperature===undefined?{}:{temperature:params.temperature}),
+      }, { signal: AbortSignal.timeout(Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS||360000)))) })
+      // Preserve termination/usage diagnostics, and collect ALL visible text
+      // blocks. Thinking/tool blocks are not an answer and are not persisted.
+      return {
+        id:message.id, model:message.model, stop_reason:message.stop_reason, usage:message.usage,
+        contentTypes:message.content.map(block=>block.type),
+        content:[{type:'text' as const,text:message.content.filter(block=>block.type==='text').map(block=>block.text).join('\n').trim()}],
+      }
     }
   }
 
@@ -175,24 +182,9 @@ export class ClaudeClient {
       throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
     }
 
-    const message = await this.client.messages.create({
-      model: this.model,
-      max_tokens: params.maxTokens || this.maxTokens,
-      messages: [
-        {
-          role: 'user',
-          content: params.prompt
-        }
-      ],
-      system: params.system,
-    }, { signal: AbortSignal.timeout(Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS || 360000)))) })
-
-    const content = message.content[0]
-    if (content.type === 'text') {
-      return content.text
-    }
-
-    throw new Error('Claude API 返回格式异常')
+    const response=await this.messages.create({prompt:params.prompt,system:params.system,max_tokens:params.maxTokens,timeoutMs:params.timeoutMs})
+    if(!response.content[0].text)throw new Error(`AI返回空内容（终止原因：${response.stop_reason||'unknown'}）`)
+    return response.content[0].text
   }
 }
 

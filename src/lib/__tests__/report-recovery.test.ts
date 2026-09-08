@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { prompt, db } = vi.hoisted(() => ({ prompt: vi.fn(), db: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() } }))
-vi.mock('@/lib/workflow/analysis-prompt', () => ({ runAnalysisPrompt: prompt }))
+vi.mock('@/lib/workflow/analysis-prompt', () => ({ runAnalysisPrompt: prompt, recoverableAnalysisError: (error:unknown) => /aborted|timed out|timeout/i.test(error instanceof Error ? error.message : String(error)) }))
 vi.mock('@/lib/db', () => ({ prisma: { aIAnalysisReport: db } }))
 import { socialReportStep } from '../workflow/steps/social-report-step'
+import { industryOverviewStep } from '../workflow/steps/industry-overview-step'
+import { marketAnalysisStep } from '../workflow/steps/market-analysis-step'
+import { newsAnalysisStep } from '../workflow/steps/news-analysis-step'
+import { companyAnalysisStep } from '../workflow/steps/company-analysis-step'
 import { generateReportStep } from '../workflow/steps/generate-report-step'
 import { normalizeSocialReport, parseSocialReport, REPORT_SECTIONS } from '../analysis/social-report'
 import type { StepContext } from '../workflow/types'
@@ -17,6 +21,31 @@ function context(): StepContext {
 }
 beforeEach(() => { vi.clearAllMocks(); prompt.mockReset(); db.findFirst.mockResolvedValue(null); db.create.mockResolvedValue({id:'saved'}); db.update.mockResolvedValue({id:'saved'}) })
 describe('report recovery', () => {
+  it('keeps the report chain running when early analysis requests are aborted',async()=>{
+    prompt.mockRejectedValue(new Error('Request was aborted.'))
+    const ctx=context()
+    const event={id:'event-1',title:'算力项目进展',category:'technology',publishedAt:'2026-09-07T08:00:00Z',expiresAt:'2026-09-10T08:00:00Z',companies:['公司甲'],segments:['服务器'],evidenceIds:['event-evidence'],sources:['公司公告'],urls:['https://example.com'],excerpt:'项目进展材料',status:'evidence',priority:5,verification:'source-linked-not-independently-verified'}
+    ctx.artifacts.set('research-evaluation',{decisions:[],events:[event],evidence:[],modules:{},profile:{name:'AI硬件',rules:{}},products:[]})
+    ctx.artifacts.set('etf-market-data',[{ticker:'159001',name:'测试ETF',date:'2026-09-07',source:'交易所',evidenceIds:['market-evidence']}])
+    ctx.artifacts.set('company-market-data',[{stockCode:'600001',stockName:'公司甲',stage:'中游',segment:'服务器',financials:[{evidenceId:'financial-evidence',reportType:'income',period:'2026-06-30',publishDate:'2026-08-01',source:'公司财报',currency:'CNY',metrics:[]}],announcements:[]}])
+    await marketAnalysisStep.execute(ctx)
+    await newsAnalysisStep.execute(ctx)
+    await companyAnalysisStep.execute(ctx)
+    expect(ctx.artifacts.get('market-analysis-ai-status')).toMatchObject({status:'fallback'})
+    expect(ctx.artifacts.get('news-analysis-ai-status')).toMatchObject({status:'fallback'})
+    expect(ctx.artifacts.get('company-analysis-ai-status')).toMatchObject({status:'fallback'})
+    expect(JSON.parse(ctx.artifacts.get('news-analysis'))).toMatchObject({sentiment:'未知',catalysts:[{event:'算力项目进展'}]})
+  })
+  it('degrades an industry overview timeout to a traceable structured synthesis',async()=>{
+    prompt.mockRejectedValue(new Error('Request timed out.'))
+    const ctx=context()
+    ctx.artifacts.set('graph-context',{revisionId:'r1',version:1,contentHash:'h1',mappingRevisionId:'m1',mappingContentHash:'mh1',industry:{id:'i',code:'ai',name:'AI'},coverage:{},stages:[{name:'上游',segments:[{name:'芯片',companies:[],etfs:[],indices:[]}]}],relations:[],etfExposure:[],eventMappings:[]})
+    ctx.artifacts.set('news-analysis',{analysis:'事件结论',catalysts:[],evidence:[],counterEvidence:[],watchlist:[]})
+    ctx.artifacts.set('company-analysis',{analysis:'企业结论',key_companies:[],evidence:[],counterEvidence:[],watchlist:[]})
+    await industryOverviewStep.execute(ctx)
+    expect(ctx.artifacts.get('industry-overview-ai-status')).toMatchObject({status:'fallback'})
+    expect(JSON.parse(ctx.artifacts.get('industry-overview'))).toMatchObject({stage:'未知',segmentSignals:[{segment:'芯片'}]})
+  })
   it('reports exact overflow paths and lengths, invalid JSON and section order', () => {
     expect(() => parseSocialReport(JSON.stringify({...valid,title:'字'.repeat(21)}))).toThrow('title：实际21字，最多20字')
     expect(() => parseSocialReport(JSON.stringify({...valid,sections:[...valid.sections].reverse()}))).toThrow('sections[0].title')
@@ -27,9 +56,11 @@ describe('report recovery', () => {
     expect(parseSocialReport(JSON.stringify({...valid,version:undefined})).title).toBe(valid.title)
   })
   it('repairs archived social valuation counts and resolvable company sources',()=>{
-    const archived={...valid,takeaways:['需求','盈利','估值：18只产品有底层数据，仍为观察级。'],sections:valid.sections.map((section,index)=>index===1?{...section,body:'【来源待核验】澜起科技：现金流改善。'}:section)}
-    const normalized=normalizeSocialReport(archived as SocialReport,{products:[{ticker:'A',indexCode:'IDX',feePct:null,navDate:null,shareChangePct:null,trackingErrorPct:null,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]}]} as unknown as Evaluation,JSON.stringify({evidence:[{claim:'澜起科技现金流改善',source:'公司公告',date:'2026-09-03'}]}))
-    expect(normalized.takeaways[2]).toContain('1个指数有当期值')
+    const archived={...valid,takeaways:['战术：7只风险收缩，0只满足实验条件。','盈利','估值：18只产品有底层数据，仍为观察级。'],sections:valid.sections.map((section,index)=>index===1?{...section,body:'【来源待核验】澜起科技：现金流改善。'}:index===3?{...section,body:'覆盖18只A股ETF、11个跟踪指数；同指数产品按数据质量比较。'}:section)}
+    const normalized=normalizeSocialReport(archived as SocialReport,{decisions:[{state:'risk-off'},{state:'eligible'}],indexBreadth:{mappedIndices:1},products:[{ticker:'A',indexCode:'IDX',feePct:null,navDate:null,shareChangePct:null,trackingErrorPct:null,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]}]} as unknown as Evaluation,JSON.stringify({evidence:[{claim:'澜起科技现金流改善',source:'公司公告',date:'2026-09-03'}]}))
+    expect(normalized.takeaways[2]).toContain('1个指数有可核验当期值')
+    expect(normalized.takeaways[0]).toBe('战术：1只风险收缩，1只满足实验条件。')
+    expect(normalized.sections[3].body).toContain('覆盖2只A股指数基金、1个跟踪指数')
     expect(normalized.sections[1].body).toContain('2026-09-03｜公司公告')
   })
   it('builds the one-page report deterministically without another AI call', async () => {
@@ -52,7 +83,7 @@ describe('report recovery', () => {
     await socialReportStep.execute(ctx)
     const report=ctx.artifacts.get('social-report')
     expect(report.sections[1].body).toContain('2026-09-03｜公司公告')
-    expect(report.takeaways[2]).toContain('1个指数有当期值')
+    expect(report.takeaways[2]).toContain('1个指数有可核验当期值')
     expect(report.takeaways[2]).not.toContain('来源待核验')
   })
   it('saves full research when optional source analyses are sparse', async () => {
@@ -79,6 +110,12 @@ describe('report recovery', () => {
     await generateReportStep.execute(ctx)
     expect(db.update).toHaveBeenCalledOnce()
     expect(db.create).not.toHaveBeenCalled()
+  })
+  it('archives graph end-to-end checks as verification reports',async()=>{
+    const ctx=context();ctx.input={verificationMode:'graph-e2e'}
+    await generateReportStep.execute(ctx)
+    expect(db.create.mock.calls[0][0].data).toMatchObject({type:'verification'})
+    expect(db.create.mock.calls[0][0].data.title).toContain('图谱链路验证')
   })
   it('inherits the nearest full-analysis narrative and stores an explicit review delta', async () => {
     const ctx=context()

@@ -1,97 +1,1013 @@
-'use client'
+"use client";
 
-import { useEffect, useMemo, useState } from 'react'
-import Link from 'next/link'
-import { useParams, useRouter } from 'next/navigation'
-import { Activity, AlertTriangle, ArrowLeft, BarChart3, Building2, CheckCircle2, Clock3, Database, FileDown, FileText, FlaskConical, GitCompareArrows, History, Layers3, Loader2, Newspaper, Printer, Scale, ShieldCheck, Target } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { SocialReportView } from '@/components/analysis/SocialReportView'
-import { AnalysisResultView } from '@/components/analysis/AnalysisResultView'
-import { cn } from '@/lib/utils'
-import type { Evaluation } from '@/lib/research/contracts'
-import { chineseNarrative, chineseSource } from '@/lib/analysis/chinese-labels'
-import { decisionEvents, evidenceHealth, guardActionLanguage, horizonViews, productGroups, reportCoverage, reportReadiness, safeDecisionAction } from '@/lib/analysis/report-insights'
-import type { SocialReport } from '@/lib/analysis/social-report'
-import { PortfolioDecisionPanel } from '@/components/analysis/PortfolioDecisionPanel'
-import type { PortfolioDecisionSupport } from '@/lib/portfolio/decision-support'
-import type { ReportQualityAssessment, ReportReviewDelta } from '@/lib/analysis/report-quality'
-import { effectiveDecisionTiming, type DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import {
+  ArrowLeft,
+  BarChart3,
+  BookOpenCheck,
+  BriefcaseBusiness,
+  CircleGauge,
+  DatabaseZap,
+  Loader2,
+  Megaphone,
+  Printer,
+  WalletCards,
+} from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { ReportAnalysisView } from "@/components/analysis/ReportAnalysisView";
+import {
+  MarketResearchView,
+  parseAnalysis,
+} from "@/components/analysis/MarketResearchView";
+import { ReportEvidenceView } from "@/components/analysis/ReportEvidenceView";
+import { PortfolioDecisionPanel } from "@/components/analysis/PortfolioDecisionPanel";
+import { SocialReportView } from "@/components/analysis/SocialReportView";
+import type { Evaluation } from "@/lib/research/contracts";
+import { chineseNarrative, chineseSource } from "@/lib/analysis/chinese-labels";
+import {
+  consolidateWatchlist,
+  decisionConfidence,
+  guardActionLanguage,
+  productGroups,
+  reportCoverage,
+  reportReadiness,
+  safeDecisionAction,
+} from "@/lib/analysis/report-insights";
+import {
+  normalizeSocialReport,
+  type SocialReport,
+} from "@/lib/analysis/social-report";
+import {
+  applyDecisionTimingGate,
+  type PortfolioDecisionSupport,
+} from "@/lib/portfolio/decision-support";
+import {
+  buildReportQuality,
+  type ReportQualityAssessment,
+} from "@/lib/analysis/report-quality";
+import {
+  effectiveDecisionTiming,
+  type DecisionTimingAssessment,
+} from "@/lib/analysis/decision-timing";
+import { cleanClaim } from "@/lib/analysis/evidence-references";
 
-type Report={id:string;type:string;industryId:string;industryName:string;title:string;summary:string;content:string;dataJson?:string;createdAt:string}
-type Structured={socialReport?:SocialReport;socialReportStatus?:{status?:string;message?:string};researchEvaluation?:Evaluation;researchPreflight?:{status?:string;queued?:number;completed?:number;partial?:number;failed?:number;warnings?:string[]};dataQuality?:{status?:string};reportQuality?:ReportQualityAssessment;decisionTiming?:DecisionTimingAssessment;reviewDelta?:ReportReviewDelta|null;inheritedFromReportId?:string|null;historicalReportContext?:Array<{reportId:string;title:string;sessionDate:string;createdAt:string;confidencePct:number|null;summary:string}>;historicalReportPolicy?:{enabled:boolean;lookbackTradingDays:number}|null;marketAnalysis?:unknown;industryAnalysis?:unknown;companyAnalysis?:unknown;sentimentAnalysis?:unknown;investmentAdvice?:unknown;privatePortfolioAnalysis?:unknown;portfolioDecisionSupport?:PortfolioDecisionSupport;metadata?:{runId?:string;parentRunId?:string|null;kind?:string;generatedAt?:string}}
-type Performance={status:string;tradeApproved:boolean;snapshotCount:number;usableSnapshotCount?:number;duplicateSnapshotCount?:number;sessionCount:number;spanDays:number;totalTrades:number;meanExcessReturnPct:number|null;medianExcessReturnPct?:number|null;worstExcessReturnPct?:number|null;costStressMeanExcessReturnPct?:number|null;hitRatePct:number|null;maxDrawdownPct:number|null;lookAheadViolations?:number;replayStatus:string;costs:{commissionBps:number;slippageBps:number};requirements:Array<{key:string;label:string;met:boolean;current:number|null;target:number}>}
-const stateLabels:Record<string,string>={blocked:'证据受限',watch:'持续观察',eligible:'满足实验条件','risk-off':'风险收缩'}
-const moduleLabels:Record<string,string>={market:'市场行情',flow:'领域资金',company:'企业财务',events:'产业事件'}
-const statusLabels:Record<string,string>={available:'可用',limited:'有限',missing:'缺失'}
-const statusStyles:Record<string,string>={available:'border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-700 dark:text-emerald-300',limited:'border-amber-500/25 bg-amber-500/[0.08] text-amber-800 dark:text-amber-300',missing:'border-destructive/25 bg-destructive/[0.06] text-destructive'}
-function safeJson(value?:string):Structured{try{return value?JSON.parse(value):{}}catch{return {}}}
-function date(value?:string|null){if(!value)return '未标注';const parsed=new Date(value);return Number.isFinite(parsed.getTime())?parsed.toLocaleString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}):String(value)}
-const localize=chineseNarrative
-
-export default function ComprehensiveReportPage(){
-  const params=useParams(),router=useRouter(),reportId=String(params.id||'')
-  const [report,setReport]=useState<Report|null>(null),[performance,setPerformance]=useState<Performance|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState(''),[clock,setClock]=useState(()=>new Date().toISOString())
-  useEffect(()=>{const controller=new AbortController();fetch(`/api/analysis/reports/${reportId}`,{signal:controller.signal}).then(async response=>{const payload=await response.json();if(!response.ok)throw new Error(payload.error||'报告读取失败');setReport(payload)}).catch(reason=>{if(reason.name!=='AbortError')setError(reason instanceof Error?reason.message:'报告读取失败')}).finally(()=>{if(!controller.signal.aborted)setLoading(false)});return()=>controller.abort()},[reportId])
-  useEffect(()=>{const controller=new AbortController();fetch(`/api/analysis/reports/${reportId}/performance`,{signal:controller.signal}).then(async response=>{if(response.ok)setPerformance(await response.json())}).catch(()=>undefined);return()=>controller.abort()},[reportId])
-  useEffect(()=>{const timer=window.setInterval(()=>setClock(new Date().toISOString()),30000);return()=>window.clearInterval(timer)},[])
-  const structured=useMemo(()=>safeJson(report?.dataJson),[report?.dataJson]),evaluation=structured.researchEvaluation
-  if(loading)return <div className="flex min-h-[60vh] items-center justify-center gap-3 text-muted-foreground"><Loader2 className="size-5 animate-spin motion-reduce:animate-none"/><span>正在读取综合报告…</span></div>
-  if(error||!report)return <div className="mx-auto max-w-3xl p-6"><div className="rounded-2xl border border-destructive/25 bg-destructive/[0.05] p-8 text-center"><AlertTriangle className="mx-auto size-7 text-destructive"/><p className="mt-3 font-medium">{error||'报告不存在或已被删除'}</p><Button variant="outline" className="mt-5" onClick={()=>router.push('/comprehensive-analysis')}>返回综合分析</Button></div></div>
-
-  const decisions=(evaluation?.decisions||[]).map(item=>({...item,name:localize(item.name)})),events=decisionEvents(evaluation),evidence=[...new Map((evaluation?.evidence||[]).map(item=>[item.id,item])).values()]
-  const modules=evaluation?.modules||{},timing=effectiveDecisionTiming(structured.decisionTiming,clock,{asOf:evaluation?.asOf||report.createdAt,closeDataSession:evaluation?.expectedSession})
-  const readiness=reportReadiness(evaluation,structured.dataQuality,!!performance?.tradeApproved,timing),coverage=reportCoverage(evaluation),groups=productGroups(evaluation),horizons=horizonViews(evaluation),evidenceStatus=evidenceHealth(evaluation)
-  const stateCounts=Object.entries(stateLabels).map(([key,label])=>({key,label,count:decisions.filter(item=>item.state===key).length})).filter(item=>item.count)
-  const sections=[
-    {id:'market-analysis',title:'市场与资金分析',description:'价格趋势、市场广度与资金证据',icon:BarChart3,analysis:structured.marketAnalysis},
-    {id:'event-analysis',title:'产业事件分析',description:'催化剂、传导路径与反向证据',icon:Newspaper,analysis:structured.sentimentAnalysis},
-    {id:'company-analysis',title:'企业景气分析',description:'盈利质量、现金流与产业链位置',icon:Building2,analysis:structured.companyAnalysis},
-    {id:'industry-analysis',title:'行业综合研判',description:'跨模块结论、冲突与情景边界',icon:Layers3,analysis:structured.industryAnalysis},
-    {id:'investment-analysis',title:'指数基金研究结论',description:'研究论点、情景条件与观察清单',icon:ShieldCheck,analysis:structured.investmentAdvice},
-  ].filter(section=>section.analysis).map(section=>({...section,analysis:guardActionLanguage(section.analysis,timing.executionReady&&readiness.level==='advice-ready')}))
-
-  return <div className="min-h-screen bg-muted/20 print:bg-white"><header className="border-b bg-background print:border-0"><div className="mx-auto max-w-[1500px] px-4 py-5 sm:px-6 lg:px-8"><div className="flex flex-wrap items-center justify-between gap-3 print:hidden"><Button variant="ghost" className="-ml-3" onClick={()=>router.push('/comprehensive-analysis')}><ArrowLeft className="size-4"/>返回综合分析</Button><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={()=>window.print()}><Printer className="size-4"/>打印或保存</Button><Button disabled={!structured.socialReport} onClick={()=>router.push('/publish?reportId='+report.id)}><FileDown className="size-4"/>制作发布图文</Button></div></div>
-    <div className="relative mt-4 overflow-hidden rounded-3xl bg-slate-950 px-6 py-8 text-white shadow-xl sm:px-9 sm:py-10"><div aria-hidden className="absolute -right-24 -top-28 size-80 rounded-full border border-white/10"/><div aria-hidden className="absolute -right-6 -top-12 size-48 rounded-full border border-white/10"/><div className="relative max-w-4xl"><div className="flex flex-wrap items-center gap-2 text-xs text-slate-300"><Badge className="border-white/15 bg-white/10 text-white">综合研究报告</Badge><Badge className={timing.executionReady?'border-emerald-300/30 bg-emerald-300/15 text-emerald-100':'border-amber-300/30 bg-amber-300/15 text-amber-100'}>{timing.label}</Badge><Badge className="border-sky-300/30 bg-sky-300/15 text-sky-100">置信度 {readiness.confidencePct}%</Badge><span>{localize(report.industryName)}</span><span aria-hidden>·</span><span>{date(report.createdAt)}</span></div><h1 className="mt-5 text-3xl font-semibold tracking-tight sm:text-4xl">{localize(report.title)}</h1><p className="mt-4 max-w-3xl text-sm leading-7 text-slate-300 sm:text-base">{localize(report.summary)}</p><div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-xs text-slate-400"><span>报告编号：<span className="font-mono text-slate-200">{report.id}</span></span>{structured.metadata?.runId&&<span>分析轮次：<span className="font-mono text-slate-200">{structured.metadata.runId}</span></span>}<span>证据冻结：{date(timing.asOf)}</span><span>收盘基准：{timing.closeDataSession||'未核验'}</span></div></div></div>
-    <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4"><Stat icon={Layers3} label="关联指数基金" value={decisions.length||'—'} detail={stateCounts.map(item=>`${item.label} ${item.count} 只`).join(' · ')||'尚无规则结果'}/><Stat icon={Activity} label="指数有效覆盖" value={evaluation?`${evaluation.indexBreadth.usableIndices}/${evaluation.indexBreadth.mappedIndices}`:'—'} detail="同一跟踪指数只计算一次"/><Stat icon={Database} label="投资建议置信度" value={`${readiness.confidencePct}%`} detail={structured.reportQuality?`${structured.reportQuality.grade}级质量 · ${structured.reportQuality.overallScore}分`:structured.dataQuality?.status==='available'?'数据完整':'仍有数据缺口'}/><Stat icon={FileText} label="决策级证据" value={evidenceStatus.decisionEvents||'—'} detail={`${evidenceStatus.total} 条冻结记录，${evidenceStatus.missingDataDate} 条缺数据日期`}/></div></div></header>
-
-      <div className="mx-auto grid max-w-[1500px] gap-7 px-4 py-7 sm:px-6 lg:grid-cols-[220px_minmax(0,1fr)] lg:px-8"><aside className="hidden lg:block print:hidden"><nav className="sticky top-20 space-y-1 rounded-2xl border bg-card p-3 text-sm shadow-sm" aria-label="报告章节导航"><p className="px-3 pb-2 pt-1 text-xs font-semibold text-muted-foreground">报告目录</p>{[['timing','执行时效'],['summary','执行摘要'],...(structured.historicalReportContext?.length?[['history-context','历史报告上下文']]:[]),['validation','建议与复盘'],['readiness','数据准备度'],...(structured.portfolioDecisionSupport?[['portfolio-decision','个人组合建议']]:[]),['decisions','指数基金建议'],['products','产品比较'],['analysis','综合研判'],['changes','版本变化'],['evidence','事件与证据']].map(([id,label])=><a key={id} href={`#${id}`} className="block min-h-10 rounded-lg px-3 py-2.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">{label}</a>)}</nav></aside><main className="min-w-0 space-y-8">
-      <section id="timing" className={cn('scroll-mt-20 rounded-2xl border p-5 shadow-sm',timing.executionReady?'border-emerald-500/30 bg-emerald-500/[0.05]':'border-amber-500/30 bg-amber-500/[0.06]')} role="status"><div className="flex flex-wrap items-start justify-between gap-4"><div className="flex max-w-3xl items-start gap-3">{timing.executionReady?<CheckCircle2 aria-hidden className="mt-0.5 size-5 shrink-0 text-emerald-600"/>:<AlertTriangle aria-hidden className="mt-0.5 size-5 shrink-0 text-amber-700 dark:text-amber-300"/>}<div><h2 className="font-semibold">{timing.executionReady?'盘中执行时效已通过':'仅供投资参考，不应据此直接下单'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{timing.executionReady?`行情、公告检查与冻结时点已对齐；仅在 ${date(timing.validUntil)} 前有效，操作前仍需核对盘口。`:timing.reasons.join('；')||'当前报告未通过盘中执行时效门禁。'}</p></div></div><Badge variant="outline" className={timing.executionReady?'border-emerald-600/30 text-emerald-700 dark:text-emerald-300':'border-amber-600/30 text-amber-800 dark:text-amber-300'}>{timing.phase==='decision-window'?'收盘前窗口':'参考模式'}</Badge></div><div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4"><TimingFact label="证据冻结" value={date(timing.asOf)} detail="事件只纳入此刻前可见内容"/><TimingFact label="完整收盘基准" value={timing.closeDataSession||'未核验'} detail="趋势与技术指标不使用未收盘K线"/><TimingFact label="ETF盘中行情" value={`${timing.quoteCoverage.fresh}/${timing.quoteCoverage.total}`} detail={timing.quoteAsOf?`最早更新时间 ${date(timing.quoteAsOf)}`:'没有通过时效的盘中报价'}/><TimingFact label="公告检查" value={`${timing.eventCheckCoverage.fresh}/${timing.eventCheckCoverage.total}`} detail={timing.eventCheckAsOf?`最早检查时间 ${date(timing.eventCheckAsOf)}`:'没有通过时效的公告检查'}/></div><p className="mt-4 flex gap-2 text-xs leading-5 text-muted-foreground"><Clock3 aria-hidden className="mt-0.5 size-4 shrink-0"/>{timing.basis}</p></section>
-      {structured.socialReport&&<section id="summary" className="scroll-mt-20"><SectionTitle icon={CheckCircle2} title="执行摘要" description="先看结论，再进入数据门禁与详细证据"/><SocialReportView report={structured.socialReport} date={report.createdAt} industry={report.industryName}/></section>}
-      {!!structured.historicalReportContext?.length&&<section id="history-context" className="scroll-mt-20"><SectionTitle icon={History} title="本轮纳入的历史报告" description={`最近 ${structured.historicalReportPolicy?.lookbackTradingDays||10} 个交易日，每个交易日仅纳入当前产业最新一份报告`}/><div className="grid gap-3 md:grid-cols-2">{structured.historicalReportContext.map(item=><Link key={item.reportId} href={`/comprehensive-analysis/report/${item.reportId}`} className="rounded-xl border border-emerald-500/25 bg-emerald-500/[0.03] p-4 transition-colors hover:border-emerald-500/45 focus-visible:outline-2 focus-visible:outline-ring"><div className="flex items-start justify-between gap-3"><Badge variant="outline" className="border-emerald-500/30 text-emerald-700 dark:text-emerald-300">本轮已纳入</Badge><span className="font-mono text-xs text-muted-foreground">{item.sessionDate}</span></div><h3 className="mt-3 text-sm font-semibold leading-6">{localize(item.title)}</h3><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{localize(item.summary||'暂无摘要')}</p><p className="mt-3 text-xs text-muted-foreground">历史建议置信度 {item.confidencePct??'—'}%</p></Link>)}</div></section>}
-      <section id="validation" className="scroll-mt-20"><SectionTitle icon={FlaskConical} title="投资建议与复盘统计" description="每轮直接输出建议与置信度；历史模拟只用于复盘，不作为建议门槛"/>
-        <div className={cn('rounded-2xl border p-5 shadow-sm',readiness.level==='advice-ready'?'border-emerald-500/25 bg-emerald-500/[0.05]':'border-amber-500/25 bg-amber-500/[0.05]')}>
-          <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{readiness.label}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">本轮建议根据冻结行情、基本面、估值、事件与产品数据生成；置信度反映证据完整性和信号一致性。</p></div><Badge variant="outline" className="border-current/20">建议置信度 {readiness.confidencePct}%</Badge></div>
-          {!!readiness.reasons.length&&<ul className="mt-4 grid gap-2 text-sm sm:grid-cols-2">{readiness.reasons.map(reason=><li key={reason} className="flex gap-2"><AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-700 dark:text-amber-300"/><span>{reason}</span></li>)}</ul>}
-          {performance&&<div className="mt-5 grid gap-3 border-t pt-4 sm:grid-cols-2 xl:grid-cols-4"><Stat icon={History} label="独立复盘交易日" value={performance.sessionCount} detail="重复运行按同一交易日去重"/><Stat icon={Activity} label="模拟交易" value={performance.totalTrades} detail="计入佣金与滑点"/><Stat icon={Target} label="平均超额收益" value={performance.meanExcessReturnPct==null?'—':`${performance.meanExcessReturnPct.toFixed(2)}%`} detail="历史统计，不作为本轮门槛"/><Stat icon={ShieldCheck} label="最大回撤" value={performance.maxDrawdownPct==null?'—':`${performance.maxDrawdownPct.toFixed(2)}%`} detail="历史模拟结果"/></div>}
-          {performance&&<div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground"><span>重复交易日快照已剔除 {performance.duplicateSnapshotCount||0} 个</span><span>成本翻倍后平均超额 {performance.costStressMeanExcessReturnPct==null?'—':`${performance.costStressMeanExcessReturnPct.toFixed(2)}%`}</span><span>前视违规 {performance.lookAheadViolations??0} 次</span></div>}
-          <p className="mt-3 text-xs leading-5 text-muted-foreground">回放采用下一交易日开盘价，并计入佣金 {performance?.costs.commissionBps??3}bp 与滑点 {performance?.costs.slippageBps??5}bp；它用于检验历史表现，但不会阻止当前报告给出投资建议。</p>
-        </div>
-        {horizons&&<div className="mt-4 grid gap-4 md:grid-cols-2"><article className="rounded-2xl border bg-card p-5"><div className="flex items-center gap-2"><Activity className="size-4 text-primary"/><h3 className="font-semibold">战术观点</h3></div><p className="mt-3 text-sm leading-7 text-muted-foreground">{horizons.tactical}</p></article><article className="rounded-2xl border bg-card p-5"><div className="flex items-center gap-2"><Target className="size-4 text-primary"/><h3 className="font-semibold">产业观点</h3></div><p className="mt-3 text-sm leading-7 text-muted-foreground">{horizons.strategic}</p></article></div>}
-      </section>
-      <section id="readiness" className="scroll-mt-20"><SectionTitle icon={Database} title="数据准备度" description="数据未知、市场未满足和建议置信度分别计量，避免把弱势行情误判为采集故障"/>
-        {structured.reportQuality&&<div className="mb-4 rounded-2xl border bg-card p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">报告质量评分</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">质量分衡量证据与验证成熟度，不代表预期收益。</p></div><div className="text-right"><p className="font-mono text-2xl font-semibold">{structured.reportQuality.overallScore}<span className="text-sm text-muted-foreground"> / 100</span></p><p className="text-xs text-muted-foreground">{structured.reportQuality.grade}级 · 置信度 {structured.reportQuality.confidenceScore}</p></div></div><div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{structured.reportQuality.dimensions.map(item=><div key={item.key} className="rounded-xl border bg-muted/20 p-3"><div className="flex items-center justify-between gap-2 text-sm"><span className="font-medium">{item.label}</span><span className="font-mono">{item.score}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted"><span className="block h-full rounded-full bg-primary" style={{width:`${item.score}%`}}/></div><p className="mt-2 text-xs leading-5 text-muted-foreground">{item.detail}</p></div>)}</div>{structured.reportQuality.blockers.length>0&&<div className="mt-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3"><p className="text-xs font-medium">阻断交易级使用的条件</p><ul className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">{structured.reportQuality.blockers.map(item=><li key={item}>· {item}</li>)}</ul></div>}</div>}
-        <div className="mb-4 grid gap-3 lg:grid-cols-3">
-          <article className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.05] p-4"><div className="flex items-center justify-between gap-2"><h3 className="font-semibold">底层数据未知</h3><Badge variant="outline" className="border-amber-600/25 text-amber-800 dark:text-amber-300">{coverage.dataUnknown}/{coverage.dataTotal}</Badge></div><p className="mt-2 text-xs leading-5 text-muted-foreground">未知值不补零，也不自动视为利空；先补齐产品、持仓、财务和估值证据。</p></article>
-          <article className="rounded-2xl border border-rose-500/25 bg-rose-500/[0.05] p-4"><div className="flex items-center justify-between gap-2"><h3 className="font-semibold">市场条件未满足</h3><Badge variant="outline" className="border-rose-600/25 text-rose-800 dark:text-rose-300">{coverage.signalUnmet}/{coverage.signalTotal}</Badge></div><p className="mt-2 text-xs leading-5 text-muted-foreground">这是已核验行情产生的弱势信号，不属于数据缺失；另有 {coverage.signalUnknown} 项信号未知。</p></article>
-          <article className="rounded-2xl border border-sky-500/25 bg-sky-500/[0.05] p-4"><div className="flex items-center justify-between gap-2"><h3 className="font-semibold">本轮建议置信度</h3><Badge variant="outline" className="border-sky-600/25 text-sky-800 dark:text-sky-300">{readiness.confidencePct}%</Badge></div><p className="mt-2 text-xs leading-5 text-muted-foreground">由关键行情、信号、基本面与证据覆盖计算；数据缺失会降低置信度，但每轮仍输出明确建议。</p></article>
-        </div>
-        <div className="mb-4 grid gap-4 xl:grid-cols-2"><article className="rounded-2xl border bg-card p-4"><h3 className="font-semibold">关键字段覆盖</h3><div className="mt-3 grid gap-2 sm:grid-cols-2">{coverage.data.map(item=><div key={item.key} className="rounded-xl border bg-muted/20 px-3 py-2.5 text-xs"><div className="flex items-center justify-between gap-2"><span>{item.label}</span><span className="font-mono font-semibold">{item.known}/{item.total}</span></div>{item.detail&&<p className="mt-1 text-muted-foreground">{item.detail}</p>}</div>)}</div></article><article className="rounded-2xl border bg-card p-4"><h3 className="font-semibold">已满足的市场信号</h3><div className="mt-3 grid gap-2 sm:grid-cols-2">{coverage.signals.map(item=><div key={item.key} className="rounded-xl border bg-muted/20 px-3 py-2.5 text-xs"><div className="flex items-center justify-between gap-2"><span>{item.label}</span><span className="font-mono font-semibold">{item.met}/{item.total}</span></div></div>)}</div><p className="mt-3 text-xs leading-5 text-muted-foreground">信号未满足表示市场条件偏弱；只有“未知”才表示无法计算。</p></article></div>
-        {structured.researchPreflight&&<div className={cn('mb-3 rounded-xl border px-4 py-3 text-sm',structured.researchPreflight.status==='fresh'?'border-emerald-500/20 bg-emerald-500/[0.05]':'border-amber-500/20 bg-amber-500/[0.05]')}><p className="font-medium">分析前同步：{structured.researchPreflight.status==='fresh'?'本轮排队任务已完成':'部分受限'}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">本轮排队 {structured.researchPreflight.queued||0} 项 · 完成 {structured.researchPreflight.completed||0} 项 · 部分完成 {structured.researchPreflight.partial||0} 项 · 失败 {structured.researchPreflight.failed||0} 项；未排队的近期数据集仍按其质量状态展示。</p>{!!structured.researchPreflight.warnings?.length&&<p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">{structured.researchPreflight.warnings.join('；')}</p>}</div>}<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{Object.entries(modules).map(([key,item])=><article key={key} className={cn('rounded-2xl border p-4',statusStyles[item.status]||'bg-card')}><div className="flex items-center justify-between gap-2"><h3 className="font-medium">{moduleLabels[key]||'研究模块'}</h3><Badge variant="outline" className="border-current/20 text-current">{statusLabels[item.status]||'待核验'}</Badge></div><p className="mt-3 text-xs leading-5 opacity-80">{item.detail}</p></article>)}</div>{!!evaluation?.omittedConditions?.length&&<div className="mt-3 rounded-xl border bg-card px-4 py-3 text-sm"><p className="font-medium">本轮已移除无底层数据的复核项</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{evaluation.omittedConditions.map(item=>item.label).join('、')}。这些项目不填零，也不视为满足条件。</p></div>}{structured.dataQuality?.status==='limited'&&<p className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] px-4 py-3 text-sm text-amber-900 dark:text-amber-200">部分辅助指标仍有限，报告只使用已核验数据形成结论；缺失项集中保留在证据边界中。</p>}</section>
-      {structured.portfolioDecisionSupport&&<PortfolioDecisionPanel support={structured.portfolioDecisionSupport} executionReady={timing.executionReady}/>}
-      <section id="decisions" className="scroll-mt-20"><SectionTitle icon={ShieldCheck} title="指数基金投资建议" description={timing.executionReady?'每只产品分别给出未持有、已持有建议及置信度':'保留条件方向用于投资参考，直接操作措辞已降级'}/><div className="overflow-hidden rounded-2xl border bg-card shadow-sm"><div className="hidden grid-cols-[1.4fr_1fr_.8fr_.8fr_.8fr] gap-3 border-b bg-muted/40 px-5 py-3 text-xs text-muted-foreground md:grid"><span>指数基金</span><span>跟踪指数</span><span>置信度</span><span>未持有</span><span>已持有</span></div>{decisions.map((decision,index)=>{const action=safeDecisionAction(decision,timing.executionReady),confidence=Math.min(action.confidencePct,readiness.confidencePct);return <details key={`${decision.ticker}-${index}`} className="group border-b last:border-0"><summary className="grid min-h-16 cursor-pointer list-none grid-cols-[1fr_auto] items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30 md:grid-cols-[1.4fr_1fr_.8fr_.8fr_.8fr] md:px-5"><span><span className="block text-sm font-medium">{decision.name}</span><span className="font-mono text-xs text-muted-foreground">{decision.ticker} · {stateLabels[decision.state]||'待核验'}</span></span><span className="hidden font-mono text-xs md:block">{decision.indexCode||'待核验'}</span><Badge variant="outline" className="w-fit">{confidence}%</Badge><span className="hidden text-sm md:block">{action.unheld}</span><span className="hidden text-sm md:block">{action.held}</span></summary><div className="border-t bg-muted/15 px-4 py-4 md:px-5"><p className="text-sm font-medium leading-6">{action.intent}</p><p className="mt-2 text-xs leading-5 text-muted-foreground">{timing.executionReady?'建议结合个人持仓、成本和风险预算执行；触发条件失效或关键数据更新后应重新计算。':'本报告仅保留条件方向供研究参考；请在下一次收盘前窗口重新生成并复核后再操作。'}</p><div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{decision.conditions.map((condition,conditionIndex)=><div key={`${condition.key}-${conditionIndex}`} className="rounded-xl border bg-background p-3 text-xs"><div className="flex justify-between gap-2"><span className="font-medium">{condition.label}</span><span className={condition.status==='met'?'text-emerald-700 dark:text-emerald-300':condition.status==='unmet'?'text-rose-700 dark:text-rose-300':'text-amber-700 dark:text-amber-300'}>{condition.status==='met'?'已满足':condition.status==='unmet'?'未满足':'未知'}</span></div><p className="mt-2 text-muted-foreground">当前 {condition.value==null?'—':String(condition.value)} · 条件 {condition.operator} {String(condition.threshold)}</p></div>)}</div></div></details>})}</div></section>
-      <section id="products" className="scroll-mt-20"><SectionTitle icon={Scale} title="同指数产品比较与估值" description="先比较跟踪指数，再用产品数据筛选；异常指标不参与排序"/>
-        <div className="grid gap-4">{groups.map(group=><article key={group.indexCode} className="overflow-hidden rounded-2xl border bg-card shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3 border-b bg-muted/30 px-5 py-4"><div><h3 className="font-mono font-semibold">{group.indexCode}</h3><p className="mt-1 text-xs text-muted-foreground">{group.products.length}只产品 · PE {group.valuation.pe==null?'缺失':group.valuation.pe.toFixed(2)}{group.valuation.pePercentile5y==null?'':`（5年${group.valuation.pePercentile5y.toFixed(0)}%分位）`} · PB {group.valuation.pb==null?'缺失':group.valuation.pb.toFixed(2)}{group.valuation.pbPercentile5y==null?'':`（5年${group.valuation.pbPercentile5y.toFixed(0)}%分位）`}{group.valuation.date?` · ${group.valuation.date}`:''}{group.valuation.source?` · ${chineseSource(group.valuation.source)}`:''}{group.valuation.sampleCount?` · ${group.valuation.sampleCount}个估值样本`:''}</p></div>{group.comparisonCandidate?<Badge variant="outline">数据完整度较优：{group.comparisonCandidate}</Badge>:<Badge variant="outline" className="text-amber-700 dark:text-amber-300">数据不足，不选优</Badge>}</div><div className="divide-y">{group.products.map(product=><div key={product.ticker} className="grid gap-2 px-5 py-4 text-sm sm:grid-cols-[1.3fr_repeat(4,1fr)]"><span><span className="font-medium">{decisions.find(item=>item.ticker===product.ticker)?.name||product.ticker}</span><span className="ml-2 font-mono text-xs text-muted-foreground">{product.ticker}</span></span><span>费率 {product.feePct==null?'—':`${product.feePct}%`}</span><span className={product.navFresh?'':'text-amber-700 dark:text-amber-300'}>净值 {product.navDate||'缺失'}</span><span className={product.trackingAnomaly?'text-destructive':''}>跟踪误差 {product.trackingErrorPct==null?'—':`${product.trackingErrorPct.toFixed(2)}%`}{product.trackingAnomaly?'（异常）':''}</span><span>20日成交额 {product.decision?.metrics.amount20==null?'—':`${(product.decision.metrics.amount20/100000000).toFixed(2)}亿`}</span></div>)}</div></article>)}{!groups.length&&<div className="rounded-2xl border bg-card p-8 text-center text-sm text-muted-foreground">暂无可比较的产品数据</div>}</div>
-        <p className="mt-3 text-xs leading-5 text-muted-foreground">“数据完整度较优”仅表示同指数产品的费率、净值时点、跟踪误差和流动性更可比较，不代表预期收益更高。估值缺失时不判断贵贱。</p>
-      </section>
-      <section id="analysis" className="scroll-mt-20"><SectionTitle icon={BarChart3} title="综合研判" description="按市场、事件、企业与情景分层阅读"/><div className="grid gap-5">{sections.map(({id,title,description,icon:Icon,analysis})=><article key={id} id={id} className="scroll-mt-20 rounded-2xl border bg-card p-5 shadow-sm sm:p-6"><div className="mb-5 flex items-start gap-3 border-b pb-4"><span className="rounded-xl bg-primary/10 p-2 text-primary"><Icon className="size-5"/></span><div><h3 className="font-semibold">{title}</h3><p className="mt-1 text-xs text-muted-foreground">{description}</p></div></div><AnalysisResultView value={analysis}/></article>)}</div></section>
-      <section id="changes" className="scroll-mt-20"><SectionTitle icon={GitCompareArrows} title="相对上一轮的变化" description="复核继承母报告研究正文，只把本轮冻结数据与规则变化标记为新增结论"/>{structured.reviewDelta?<div className="rounded-2xl border bg-card p-5 shadow-sm"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold">{structured.reviewDelta.status==='changed'?'发现实质变化':structured.reviewDelta.status==='unchanged'?'本轮无实质变化':'缺少可比基线'}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">{structured.reviewDelta.summary}</p></div>{structured.inheritedFromReportId&&<Badge variant="outline">正文继承：{structured.inheritedFromReportId.slice(-8).toUpperCase()}</Badge>}</div><div className="mt-4 grid gap-3">{structured.reviewDelta.changedDecisions.slice(0,18).map(change=><details key={change.ticker} className="rounded-xl border bg-muted/10"><summary className="flex min-h-12 cursor-pointer list-none flex-wrap items-center justify-between gap-2 px-4 py-3"><span><span className="font-medium">{localize(change.name)}</span><span className="ml-2 font-mono text-xs text-muted-foreground">{change.ticker}</span></span><span className="text-xs">{stateLabels[change.beforeState]||change.beforeState} → {stateLabels[change.afterState]||change.afterState}</span></summary><div className="grid gap-2 border-t p-3 sm:grid-cols-2">{change.conditions.map(condition=><div key={condition.key} className="rounded-lg border bg-background p-3 text-xs"><p className="font-medium">{condition.label}</p><p className="mt-2 text-muted-foreground">{condition.before==null?'—':String(condition.before)}（{condition.beforeStatus}） → {condition.after==null?'—':String(condition.after)}（{condition.afterStatus}）</p></div>)}</div></details>)}{structured.reviewDelta.changedDecisions.length===0&&<p className="rounded-xl border bg-muted/20 p-6 text-center text-sm text-muted-foreground">所有产品状态与关键条件保持一致，无需重复阅读整份正文。</p>}</div></div>:<div className="overflow-hidden rounded-2xl border bg-card shadow-sm">{(evaluation?.changes||[]).slice(0,18).map(change=><div key={change.ticker} className="grid gap-2 border-b px-5 py-4 last:border-0 sm:grid-cols-[.7fr_1fr_2fr]"><span className="font-mono text-sm font-medium">{change.ticker}</span><span className="text-sm">{stateLabels[change.from]||change.from} → {stateLabels[change.to]||change.to}</span><span className="text-xs leading-5 text-muted-foreground">变化条件：{change.changedConditions.length?change.changedConditions.join('、'):'首次纳入'}</span></div>)}{!evaluation?.changes?.length&&<p className="p-8 text-center text-sm text-muted-foreground">与上一轮相比暂无规则条件变化</p>}</div>}</section>
-      <section id="evidence" className="scroll-mt-20"><SectionTitle icon={FileText} title="事件与证据" description="优先展示高相关、具正文的决策级事件；原始档案仅用于追溯"/><div className="mb-4 grid gap-3 sm:grid-cols-3"><Stat icon={Newspaper} label="决策级事件" value={events.length} detail="已排除线索与治理类公告"/><Stat icon={Database} label="冻结记录" value={evidenceStatus.total} detail="数量不代表证据强度"/><Stat icon={AlertTriangle} label="日期不完整" value={evidenceStatus.missingDataDate} detail="缺数据日期的记录不用于时点比较"/></div><div className="grid gap-5 xl:grid-cols-2"><article className="rounded-2xl border bg-card p-5 shadow-sm"><h3 className="font-semibold">高相关事件</h3><div className="mt-3 divide-y">{events.map((event,index)=><div key={`${event.id}-${index}`} className="py-3"><div className="flex items-start justify-between gap-2"><p className="text-sm font-medium leading-6">{chineseNarrative(event.title)}</p><Badge variant="outline" className="shrink-0 text-[10px]">优先级 {event.priority}</Badge></div><p className="mt-1 text-xs text-muted-foreground">{date(event.publishedAt)} · {event.sources.map(chineseSource).join(' / ')}</p><p className="mt-2 line-clamp-3 text-sm leading-6 text-muted-foreground">{chineseNarrative(event.excerpt)}</p></div>)}{!events.length&&<p className="py-8 text-center text-sm text-muted-foreground">暂无达到决策级门槛的事件证据</p>}</div></article><article className="rounded-2xl border bg-card p-5 shadow-sm"><h3 className="font-semibold">代表性冻结来源</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">显示前 30 条；原始数量不再作为报告可信度指标。</p><div className="mt-3 max-h-[720px] divide-y overflow-y-auto">{evidence.filter(item=>item.dataDate||item.publishedAt).slice(0,30).map((item,index)=><a key={`${item.id}-${index}`} href={`/api/research/${encodeURIComponent(evaluation?.profile.industryId||report.industryId)}?snapshot=${encodeURIComponent(evaluation?.snapshotId||'')}&evidence=${encodeURIComponent(item.id)}`} target="_blank" rel="noreferrer" className="block py-3 text-sm transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"><span className="block truncate font-medium">{chineseSource(item.source)}</span><span className="mt-1 block text-xs text-muted-foreground">数据日期 {item.dataDate||item.publishedAt?.slice(0,10)} · 编号 {item.id}</span></a>)}</div></article></div></section>
-      <details className="rounded-2xl border bg-card print:hidden"><summary className="min-h-12 cursor-pointer px-5 py-4 text-sm font-medium">查看归档版完整正文</summary><div className="border-t p-5 text-sm leading-7"><p className="mb-4 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-3 text-amber-900 dark:text-amber-200">归档正文保留生成时的原始规则措辞，其中“建仓/减仓”仅代表规则意图；请以上方验证状态和安全动作显示为准。</p><pre className="max-h-[640px] overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted/40 p-4 font-sans">{localize(report.content)}</pre></div></details>
-      {structured.privatePortfolioAnalysis!=null&&<details className="rounded-2xl border border-amber-500/20 bg-amber-500/[0.04] print:hidden"><summary className="min-h-12 cursor-pointer px-5 py-4 text-sm font-medium">私有持仓分析（不进入公开报告）</summary><div className="border-t p-5"><AnalysisResultView value={structured.privatePortfolioAnalysis}/></div></details>}<p className="pb-6 text-center text-xs leading-6 text-muted-foreground">实验性研究工具，不构成投资建议，不自动执行交易。</p>
-    </main></div></div>
+type Report = {
+  id: string;
+  type: string;
+  industryId: string;
+  industryName: string;
+  title: string;
+  summary: string;
+  content: string;
+  dataJson?: string;
+  createdAt: string;
+};
+type Structured = {
+  socialReport?: SocialReport;
+  researchEvaluation?: Evaluation;
+  researchPreflight?: {
+    status?: string;
+    queued?: number;
+    completed?: number;
+    partial?: number;
+    failed?: number;
+    warnings?: string[];
+    publicationNotes?: string[];
+  };
+  dataQuality?: { status?: string };
+  reportQuality?: ReportQualityAssessment;
+  decisionTiming?: DecisionTimingAssessment;
+  inheritedFromReportId?: string | null;
+  historicalReportContext?: Array<{
+    reportId: string;
+    title: string;
+    sessionDate: string;
+    createdAt: string;
+    summary: string;
+  }>;
+  marketAnalysis?: unknown;
+  industryAnalysis?: unknown;
+  companyAnalysis?: unknown;
+  sentimentAnalysis?: unknown;
+  investmentAdvice?: unknown;
+  analysisStatuses?: Record<string, { status?: string; reason?: string } | null>;
+  privatePortfolioAnalysis?: unknown;
+  portfolioDecisionSupport?: PortfolioDecisionSupport;
+  metadata?: { runId?: string; kind?: string };
+};
+const stateLabels: Record<string, string> = {
+  blocked: "证据受限",
+  watch: "持续观察",
+  eligible: "满足条件",
+  "risk-off": "风险收缩",
+};
+const statusLabels: Record<string, string> = {
+  met: "满足",
+  unmet: "未满足",
+  unknown: "未知",
+};
+const availabilityLabels: Record<string, string> = {
+  failed: "最近请求失败",
+  missing: "数据缺失",
+  stale: "日期落后",
+  "pending-publication": "待发布",
+  "not-applicable": "口径不适用",
+};
+function safeJson(value?: string): Structured {
+  try {
+    return JSON.parse(value || "{}");
+  } catch {
+    return {};
+  }
+}
+function date(value?: string | null) {
+  return value
+    ? new Date(value).toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "未标注";
+}
+function title(text: string) {
+  return <h2 className="text-xl font-semibold tracking-tight">{text}</h2>;
 }
 
-function Stat({icon:Icon,label,value,detail}:{icon:typeof Activity;label:string;value:string|number;detail:string}){return <div className="rounded-2xl border bg-card p-4 shadow-sm"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Icon className="size-4 text-primary"/>{label}</div><p className="mt-3 font-mono text-2xl font-semibold tracking-tight">{value}</p><p className="mt-2 line-clamp-2 text-xs leading-5 text-muted-foreground">{detail}</p></div>}
-function TimingFact({label,value,detail}:{label:string;value:string;detail:string}){return <div className="rounded-xl border bg-background/80 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 font-mono text-sm font-semibold">{value}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</p></div>}
-function SectionTitle({icon:Icon,title,description}:{icon:typeof Activity;title:string;description:string}){return <div className="mb-4 flex items-start gap-3"><span className="rounded-xl border bg-card p-2 text-primary shadow-sm"><Icon className="size-5"/></span><div><h2 className="text-xl font-semibold tracking-tight">{title}</h2><p className="mt-1 text-sm text-muted-foreground">{description}</p></div></div>}
+const reportPages = [
+  {
+    id: "summary",
+    label: "综合结论",
+    description: "AI综合研判与配置立场",
+    icon: CircleGauge,
+  },
+  {
+    id: "analysis",
+    label: "研究分析",
+    description: "模块结论与相关数据依据",
+    icon: BookOpenCheck,
+  },
+  {
+    id: "decisions",
+    label: "投资决策",
+    description: "指数规则、产品选择与行动条件",
+    icon: BriefcaseBusiness,
+  },
+  {
+    id: "portfolio",
+    label: "组合调整",
+    description: "真实持仓与调整路径",
+    icon: WalletCards,
+    requiresPortfolio: true,
+  },
+  {
+    id: "readiness",
+    label: "数据附录",
+    description: "时效、质量、来源与版本",
+    icon: DatabaseZap,
+  },
+  {
+    id: "publish",
+    label: "发布概览",
+    description: "对外图文与长图预览",
+    icon: Megaphone,
+  },
+] as const;
+type ReportPageId = (typeof reportPages)[number]["id"];
+
+export default function ComprehensiveReportPage() {
+  const params = useParams(),
+    router = useRouter(),
+    searchParams = useSearchParams(),
+    reportId = String(params.id || "");
+  const [report, setReport] = useState<Report | null>(null),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [clock, setClock] = useState(() => new Date().toISOString());
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/analysis/reports/${reportId}`, { signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "报告读取失败");
+        setReport(data);
+        setError("");
+      })
+      .catch((reason) => {
+        if (reason.name !== "AbortError")
+          setError(String(reason.message || reason));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [reportId]);
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setClock(new Date().toISOString()),
+      30000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+  const structured = useMemo(
+      () => safeJson(report?.dataJson),
+      [report?.dataJson],
+    ),
+    evaluation = structured.researchEvaluation;
+  if (loading || (report && report.id !== reportId))
+    return (
+      <div className="flex min-h-80 items-center justify-center gap-3">
+        <Loader2 className="size-5 animate-spin" />
+        正在读取报告…
+      </div>
+    );
+  if (error || !report)
+    return (
+      <div className="p-8">
+        {error || "报告不存在"}
+        <Button onClick={() => router.push("/comprehensive-analysis")}>
+          返回
+        </Button>
+      </div>
+    );
+  const timing = effectiveDecisionTiming(structured.decisionTiming, clock, {
+    asOf: evaluation?.asOf || report.createdAt,
+    closeDataSession: evaluation?.expectedSession,
+  });
+  const readiness = reportReadiness(evaluation, structured.dataQuality, timing),
+    coverage = reportCoverage(evaluation),
+    groups = productGroups(evaluation);
+  const quality = evaluation
+    ? buildReportQuality({
+        evaluation,
+        dataQuality: structured.dataQuality,
+        preflight: structured.researchPreflight,
+        decisionTiming: timing,
+      })
+    : structured.reportQuality;
+  const decisions = evaluation?.decisions || [],
+    sources = evaluation?.evidence || [];
+  const baseUrl = `/api/research/${report.industryId}?snapshot=${evaluation?.snapshotId || ""}`;
+  const advice = parseAnalysis(
+      guardActionLanguage(structured.investmentAdvice, timing.executionReady),
+    ),
+    industry = parseAnalysis(structured.industryAnalysis);
+  const watchlist = [
+    ...new Set(
+      [
+        structured.investmentAdvice,
+        structured.industryAnalysis,
+        structured.marketAnalysis,
+        structured.companyAnalysis,
+        structured.sentimentAnalysis,
+      ].flatMap((value) => {
+        const row = parseAnalysis(value);
+        return Array.isArray(row.watchlist)
+          ? row.watchlist.filter(
+              (item): item is string => typeof item === "string",
+            )
+          : [];
+      }),
+    ),
+  ];
+  const summary = cleanClaim(
+    String(parseAnalysis(advice.executiveSummary).conclusion || advice.thesis || industry.analysis || report.summary || ""),
+  );
+  const executive = parseAnalysis(advice.executiveSummary);
+  const recommendation = parseAnalysis(advice.recommendation);
+  const executiveDrivers = Array.isArray(executive.keyDrivers) ? executive.keyDrivers.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
+  const executiveRisks = Array.isArray(executive.mainRisks) ? executive.mainRisks.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
+  const executiveActions = parseAnalysis(executive.actionPlan);
+  const investmentFallback = structured.analysisStatuses?.investment?.status === "fallback" || JSON.stringify(advice).includes("智能投资建议请求超时");
+  const portfolio = applyDecisionTimingGate(
+    structured.portfolioDecisionSupport,
+    timing,
+  );
+  const preflight = structured.researchPreflight;
+  const preflightWarnings = preflight?.warnings || [],
+    publicationNotes = preflight?.publicationNotes || [];
+  const unknowns = decisions.flatMap((decision) =>
+    decision.conditions
+      .filter((condition) => condition.status === "unknown")
+      .map((condition) => ({
+        ticker: decision.ticker,
+        name: decision.name,
+        ...condition,
+      })),
+  );
+  const dataGroups = [...new Set(unknowns.map((item) => item.key))].map(
+    (key) => ({ key, items: unknowns.filter((item) => item.key === key) }),
+  );
+  const sections = [
+    ["event-analysis", "产业事件分析", structured.sentimentAnalysis],
+    ["company-analysis", "企业景气分析", structured.companyAnalysis],
+    ["industry-analysis", "综合判断与情景", structured.industryAnalysis],
+  ] as const;
+  const visiblePages = reportPages.filter(
+    (page) => !("requiresPortfolio" in page) || Boolean(portfolio),
+  );
+  const requestedPage = searchParams.get("page");
+  const normalizedRequestedPage = requestedPage === "products" ? "decisions" : requestedPage === "evidence" ? "readiness" : requestedPage;
+  const activePage = visiblePages.some((page) => page.id === normalizedRequestedPage)
+    ? normalizedRequestedPage as ReportPageId
+    : "summary";
+  return (
+    <main
+      id="main-content"
+      className="mx-auto w-full max-w-7xl space-y-8 px-4 py-6 sm:px-6 [overflow-wrap:anywhere]"
+    >
+      <header className="space-y-4">
+        <div className="flex flex-wrap gap-2 print:hidden">
+          <Button
+            variant="ghost"
+            onClick={() => router.push("/comprehensive-analysis")}
+          >
+            <ArrowLeft className="mr-2 size-4" />
+            返回综合分析
+          </Button>
+          <Button variant="outline" onClick={() => window.print()}>
+            <Printer className="mr-2 size-4" />
+            打印或保存
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => router.push(`/publish?reportId=${report.id}`)}
+          >
+            制作发布图文
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Badge variant="outline">{timing.label}</Badge>
+          <Badge variant="outline">研究置信度 {readiness.confidencePct}%</Badge>
+          <Badge variant="outline">{quality?.grade || "—"}级数据质量</Badge>
+        </div>
+        <h1 className="text-2xl font-semibold sm:text-3xl">
+          {chineseNarrative(report.title)}
+        </h1>
+        <p className="text-xs leading-6 text-muted-foreground">
+          生成 {date(report.createdAt)} · 证据冻结 {date(evaluation?.asOf)} ·
+          收盘基准 {evaluation?.expectedSession || "未核验"} ·{" "}
+          {decisions.length}只产品 / {coverage.indexCount}个指数
+        </p>
+      </header>
+      <div className="grid items-start gap-6 print:grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
+        <nav
+          aria-label="报告子页面"
+          className="grid grid-cols-2 gap-2 rounded-2xl border bg-card p-2 shadow-sm print:hidden sm:grid-cols-4 lg:sticky lg:top-6 lg:z-10 lg:max-h-[calc(100dvh-7rem)] lg:grid-cols-1 lg:overflow-y-auto lg:overscroll-contain"
+        >
+          {visiblePages.map((page) => {
+            const Icon = page.icon,
+              active = page.id === activePage;
+            return (
+              <Link
+                aria-current={active ? "page" : undefined}
+                className={`group flex min-h-14 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${active ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
+                key={page.id}
+                href={`/comprehensive-analysis/report/${report.id}?page=${page.id}`}
+              >
+                <Icon aria-hidden className="size-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">
+                    {page.label}
+                  </span>
+                  <span
+                    className={`hidden truncate text-[11px] leading-5 lg:block ${active ? "text-primary-foreground/75" : "text-muted-foreground"}`}
+                  >
+                    {page.description}
+                  </span>
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="min-w-0 space-y-6" key={activePage}>
+          {activePage === "summary" && (
+            <section
+              id="summary"
+              className="scroll-mt-20 rounded-2xl border bg-card p-5 sm:p-6"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                {title("综合投资结论")}
+                <div className="flex flex-wrap gap-2"><Badge variant={investmentFallback ? "outline" : "default"}>{investmentFallback ? "超时降级汇编" : "AI 综合研判"}</Badge><Badge variant="outline">{chineseNarrative(String(advice.rating || "未评级"))}</Badge></div>
+              </div>
+              {investmentFallback && <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">综合模型请求未在时限内完成；本结论由已完成的市场、事件、企业、行业总览和冻结规则结构化汇编，不新增模型推断。</p>}
+              <p className="mt-5 text-base leading-8">
+                {chineseNarrative(summary)}
+              </p>
+              <div className="mt-5 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
+                <h3 className="text-sm font-medium">配置立场</h3>
+                <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executive.allocationStance || recommendation.reason || "配置立场待生成"))}</p>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">未持有</h3>
+                  <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executiveActions.unheld || recommendation.unheld || "观望"))}</p>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">已持有</h3>
+                  <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executiveActions.held || recommendation.held || "按风险预算复核"))}</p>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">20个交易日</h3>
+                  <p className="mt-2 text-sm leading-6">
+                    {chineseNarrative(
+                      String(
+                        parseAnalysis(advice.tacticalView).signal ||
+                          `${decisions.filter((item) => item.state === "risk-off").length}只产品风险收缩，${decisions.filter((item) => item.state === "eligible").length}只满足条件。`,
+                      ),
+                    )}
+                  </p>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">6—12个月</h3>
+                  <p className="mt-2 text-sm leading-6">
+                    {chineseNarrative(
+                      String(
+                        parseAnalysis(advice.strategicView).thesis ||
+                          industry.outlook ||
+                          "长期观点待生成",
+                      ),
+                    )}
+                  </p>
+                </div>
+              </div>
+              {(executiveDrivers.length > 0 || executiveRisks.length > 0) && <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border p-4"><h3 className="text-sm font-medium">结论成立的关键驱动</h3><ul className="mt-3 space-y-2">{executiveDrivers.map(item => <li key={item} className="flex gap-2 text-sm leading-6"><span aria-hidden className="mt-2.5 size-1.5 shrink-0 rounded-full bg-emerald-500"/>{chineseNarrative(item)}</li>)}</ul>{!executiveDrivers.length && <p className="mt-2 text-sm text-muted-foreground">旧报告未保存结构化驱动因素。</p>}</div>
+                <div className="rounded-xl border p-4"><h3 className="text-sm font-medium">主要风险与反证</h3><ul className="mt-3 space-y-2">{executiveRisks.map(item => <li key={item} className="flex gap-2 text-sm leading-6"><span aria-hidden className="mt-2.5 size-1.5 shrink-0 rounded-full bg-amber-500"/>{chineseNarrative(item)}</li>)}</ul>{!executiveRisks.length && <p className="mt-2 text-sm text-muted-foreground">旧报告未保存结构化主要风险。</p>}</div>
+              </div>}
+              {structured.inheritedFromReportId && (
+                <p className="mt-4 text-xs text-amber-700">
+                  本轮为规则复核，研究正文继承自{" "}
+                  <Link
+                    className="underline"
+                    href={`/comprehensive-analysis/report/${structured.inheritedFromReportId}`}
+                  >
+                    母报告
+                  </Link>
+                  ；未重新调用模型。
+                </p>
+              )}
+              {evaluation?.baselineReport &&
+                evaluation.changes.some(
+                  (change) => change.from !== change.to,
+                ) && (
+                  <p className="mt-4 text-sm text-primary">
+                    相对 {date(evaluation.baselineReport.createdAt)} 的报告，
+                    {
+                      evaluation.changes.filter(
+                        (change) => change.from !== change.to,
+                      ).length
+                    }
+                    只产品规则状态改变。详见数据附录中的版本记录。
+                  </p>
+                )}
+            </section>
+          )}
+          {activePage === "analysis" && (
+            <section id="analysis" className="scroll-mt-20 space-y-5">
+              {title("研究分析与依据")}
+              <article
+                id="market-analysis"
+                className="rounded-2xl border bg-card p-5 sm:p-6"
+              >
+                <h3 className="mb-4 text-lg font-semibold">市场与资金分析</h3>
+                <MarketResearchView
+                  value={structured.marketAnalysis}
+                  evaluation={evaluation}
+                  baseUrl={baseUrl}
+                />
+              </article>
+              {sections
+                .filter(([, , value]) => value)
+                .map(([id, label, value]) => {
+                  const row = parseAnalysis(
+                    guardActionLanguage(value, timing.executionReady),
+                  );
+                  return (
+                    <article
+                      id={id}
+                      key={id}
+                      className="rounded-2xl border bg-card p-5 sm:p-6"
+                    >
+                      <h3 className="mb-4 text-lg font-semibold">{label}</h3>
+                      <ReportAnalysisView
+                        value={Object.fromEntries(
+                          Object.entries(row).filter(
+                            ([key]) => key !== "watchlist",
+                          ),
+                        )}
+                        sources={sources}
+                        evidenceBaseUrl={baseUrl}
+                      />
+                    </article>
+                  );
+                })}
+              <div className="rounded-2xl border bg-muted/10 p-5 sm:p-6"><ReportEvidenceView evaluation={evaluation} baseUrl={baseUrl} mode="related" /></div>
+            </section>
+          )}
+          {activePage === "decisions" && (
+            <section id="decisions" className="scroll-mt-20 space-y-4">
+              {title("指数基金规则与行动建议")}
+              <p className="text-sm text-muted-foreground">
+                以下动作来自逐产品规则；模型研究观点另列。相同状态可以对应相同动作，每只产品的触发依据与数据覆盖独立展示。
+              </p>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {decisions.map((decision) => {
+                  const action = safeDecisionAction(
+                    decision,
+                    timing.executionReady && readiness.level === "advice-ready",
+                  );
+                  return (
+                    <details
+                      key={decision.ticker}
+                      className="rounded-xl border bg-card"
+                    >
+                      <summary className="cursor-pointer p-4">
+                        <span className="font-medium">
+                          {chineseNarrative(decision.name)}
+                        </span>
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {decision.ticker} · {stateLabels[decision.state]}
+                        </span>
+                        <span className="mt-2 block text-sm">
+                          未持有：{action.unheld} · 已持有：{action.held}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          产品证据覆盖评分 {decisionConfidence(decision)}% ·
+                          指数 {decision.indexCode || "待映射"}
+                        </span>
+                      </summary>
+                      <div className="space-y-3 border-t p-4">
+                        <p className="text-sm leading-6">
+                          {chineseNarrative(decision.reason)}
+                        </p>
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          相对基准{" "}
+                          {decision.metrics.relative20Pct?.toFixed(2) ?? "未知"}{" "}
+                          个百分点 · 20日平均成交额{" "}
+                          {decision.metrics.amount20 == null
+                            ? "未知"
+                            : (decision.metrics.amount20 / 1e8).toFixed(2) +
+                              "亿元"}
+                        </p>
+                        <dl className="space-y-2">
+                          {decision.conditions.map((condition) => (
+                            <div
+                              key={condition.key}
+                              className="flex flex-wrap justify-between gap-2 border-b pb-2 text-xs"
+                            >
+                              <dt>{condition.label}</dt>
+                              <dd>
+                                {condition.value ?? "未知"} ·{" "}
+                                {statusLabels[condition.status]}
+                              </dd>
+                              {condition.detail && (
+                                <dd className="w-full text-muted-foreground">
+                                  {condition.detail}
+                                </dd>
+                              )}
+                            </div>
+                          ))}
+                        </dl>
+                      </div>
+                    </details>
+                  );
+                })}
+              </div>
+              <details className="rounded-xl border bg-card p-5">
+                <summary className="cursor-pointer font-medium">
+                  模型研究观点与逐产品说明
+                </summary>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  模型观点用于解释产业机会、风险和情景；规则动作及组合预算单独计算。旧报告中建议方向可能曾被程序覆盖。
+                </p>
+                <div className="mt-4">
+                  <ReportAnalysisView
+                    value={Object.fromEntries(
+                      Object.entries(advice).filter(
+                        ([key]) =>
+                          ![
+                            "thesis",
+                            "tacticalView",
+                            "strategicView",
+                            "watchlist",
+                            "scenarios",
+                            "productSelection",
+                            "ruleAssessment",
+                          ].includes(key),
+                      ),
+                    )}
+                    sources={sources}
+                    evidenceBaseUrl={baseUrl}
+                  />
+                </div>
+              </details>
+            </section>
+          )}
+          {activePage === "decisions" && (
+            <section id="products" className="scroll-mt-20 space-y-4">
+              {title("产品选择：同指数比较与估值")}
+              <p className="text-sm text-muted-foreground">
+                这一比较结果已经进入上方模型投资观点，并用于个人组合加仓时的候选筛选。先比较同一指数的产品成本与流动性，再检查建仓条件；选出更合适的产品不等于已经满足建仓条件。费率为年管理费，不含托管费和交易费用。
+              </p>
+              {groups.map((group) => {
+                const frozen = evaluation?.productComparisons?.find(
+                    (item) => item.indexCode === group.indexCode,
+                  ),
+                  candidate = frozen
+                    ? frozen.candidate
+                    : group.comparisonCandidate;
+                return (
+                  <article
+                    key={group.indexCode}
+                    className="overflow-hidden rounded-xl border bg-card"
+                  >
+                    <div className="border-b bg-muted/25 p-4">
+                      <h3 className="font-medium">
+                        {group.indexCode} · {group.products.length}只产品
+                      </h3>
+                      <p className="mt-2 text-sm">
+                        {candidate
+                          ? `研究比较候选：${candidate}`
+                          : group.status === "single-product"
+                            ? "无同指数对照产品"
+                            : "可比数据不足，暂不选优"}
+                        {!frozen && "（按归档数据重算，未参与原报告决策）"}
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                        {frozen?.reason || group.reason}
+                      </p>
+                      <p className="mt-2 text-xs">
+                        当期市盈率 {group.valuation.pe?.toFixed(2) ?? "缺失"} ·
+                        市净率 {group.valuation.pb?.toFixed(2) ?? "缺失"} ·{" "}
+                        {group.valuation.date || "日期未标注"} ·{" "}
+                        {chineseSource(group.valuation.source || "来源未标注")}
+                      </p>
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[680px] text-left text-sm">
+                        <thead className="text-xs text-muted-foreground">
+                          <tr>
+                            {[
+                              "产品",
+                              "年管理费",
+                              "单位净值 / 日期",
+                              "年化跟踪误差",
+                              "20日平均成交额",
+                            ].map((label) => (
+                              <th key={label} className="p-3 font-medium">
+                                {label}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.products.map((product) => (
+                            <tr key={product.ticker} className="border-t">
+                              <td className="p-3">
+                                {chineseNarrative(
+                                  product.decision?.name || product.ticker,
+                                )}
+                                <span className="block text-xs text-muted-foreground">
+                                  {product.ticker}
+                                </span>
+                                {product.exclusions.length > 0 && (
+                                  <span className="block max-w-64 text-xs text-amber-700">
+                                    {product.exclusions.join("；")}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-3">
+                                {product.feePct == null
+                                  ? "未知"
+                                  : product.feePct + "%"}
+                              </td>
+                              <td className="p-3">
+                                {product.nav?.toFixed(4) ?? "旧报告未保存数值"}
+                                <span className="block text-xs text-muted-foreground">
+                                  {product.navDate || "日期缺失"}
+                                </span>
+                              </td>
+                              <td className="p-3">
+                                {product.trackingAnomaly
+                                  ? "异常，不参与比较"
+                                  : product.trackingErrorPct == null
+                                    ? "未知"
+                                    : product.trackingErrorPct.toFixed(2) + "%"}
+                              </td>
+                              <td className="p-3">
+                                {product.decision?.metrics.amount20 == null
+                                  ? "未知"
+                                  : (
+                                      product.decision.metrics.amount20 / 1e8
+                                    ).toFixed(2) + "亿元"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                );
+              })}
+            </section>
+          )}
+          {activePage === "portfolio" && portfolio && (
+            <PortfolioDecisionPanel
+              support={portfolio}
+              analysis={structured.privatePortfolioAnalysis}
+              executionReady={
+                timing.executionReady && readiness.level === "advice-ready"
+              }
+            />
+          )}
+          {activePage === "summary" && (
+            <section className="space-y-4 rounded-2xl border bg-card p-5 sm:p-6">
+              {title("后续观察")}
+              <p className="text-sm text-muted-foreground">
+                跨模块观察项集中展示；出现变化后再复核对应研究判断。
+              </p>
+              <ul className="grid gap-2 md:grid-cols-2">
+                {consolidateWatchlist(watchlist).map((item) => (
+                  <li
+                    key={item}
+                    className="rounded-lg border p-3 text-sm leading-6"
+                  >
+                    {chineseNarrative(item)}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {activePage === "readiness" && (
+            <section id="readiness" className="scroll-mt-20 space-y-4">
+              {title("数据、时效与复盘附录")}
+              <p className="text-sm leading-6 text-muted-foreground">这里集中保留数据健康度、字段限制、完整来源目录和版本链，供核对与复盘；用于形成结论的模块数据已放回对应研究页面。</p>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border p-4">
+                  <h3 className="font-medium">数据完整性</h3>
+                  <p className="mt-2 text-xl">
+                    {coverage.dataTotal - coverage.dataUnknown}/
+                    {coverage.dataTotal}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    底层字段可计算；{coverage.dataUnknown}项未知，不填零
+                  </p>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="font-medium">
+                    {coverage.signalUnmet
+                      ? "市场信号存在弱项"
+                      : coverage.signalUnknown
+                        ? "市场信号待核验"
+                        : "市场信号满足条件"}
+                  </h3>
+                  <p className="mt-2 text-sm">
+                    满足 {coverage.signalMet} · 未满足 {coverage.signalUnmet} ·
+                    未知 {coverage.signalUnknown}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    未知不表示利空；已知未满足不属于采集失败
+                  </p>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="font-medium">{timing.label}</h3>
+                  <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                    {timing.reasons.join("；") || "实时数据符合时效要求"}
+                    。非交易时间不要求实时报价，不降低收盘研究的完整性。
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {coverage.data.map((item) => (
+                  <div key={item.key} className="rounded-xl border p-4">
+                    <h3 className="text-sm font-medium">
+                      {item.label}{" "}
+                      <span className="float-right">
+                        {item.known}/{item.total}
+                      </span>
+                    </h3>
+                    <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                      {item.key === "premium" && item.known < item.total
+                        ? `收盘价基准 ${evaluation?.expectedSession}；部分净值日期落后，无法配对计算同日折溢价。历史净值见产品比较。`
+                        : item.detail}
+                    </p>
+                  </div>
+                ))}
+              </div>
+              <details className="rounded-xl border p-4">
+                <summary className="cursor-pointer text-sm font-medium">
+                  字段限制与补齐原因（{unknowns.length}项）
+                </summary>
+                <div className="mt-3 space-y-3">
+                  {dataGroups.map((group) => (
+                    <div key={group.key}>
+                      <h3 className="text-sm font-medium">
+                        {group.items[0].label} · {group.items.length}只产品
+                      </h3>
+                      {group.items.map((item) => (
+                        <p
+                          key={item.ticker}
+                          className="mt-1 text-xs leading-6 text-muted-foreground"
+                        >
+                          {item.ticker} ·{" "}
+                          {availabilityLabels[item.availability || "missing"]}：
+                          {item.detail ||
+                            "旧快照未保存字段级原因，下一轮分析将重新核验"}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </details>
+              {preflight && (
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">
+                    分析前同步：
+                    {preflight.status === "fresh"
+                      ? publicationNotes.length
+                        ? "可发布数据已同步，部分字段待发布"
+                        : "任务已完成"
+                      : preflight.status === "blocked"
+                        ? "同步受阻"
+                        : "存在待发布或受限字段"}
+                  </h3>
+                  <p className="mt-2 text-xs leading-6 text-muted-foreground">
+                    排队 {preflight.queued || 0} 项 · 完整返回{" "}
+                    {preflight.completed || 0} 项 · 部分返回{" "}
+                    {preflight.partial || 0} 项 · 请求失败{" "}
+                    {preflight.failed || 0} 项。任务状态不等于全部字段的可用性。
+                  </p>
+                  {publicationNotes.map((note) => (
+                    <p
+                      className="mt-2 text-xs leading-6 text-muted-foreground"
+                      key={note}
+                    >
+                      {note}
+                    </p>
+                  ))}
+                  {preflightWarnings.some(
+                    (item) =>
+                      item.includes("shares") ||
+                      item.includes("etf_share_size"),
+                  ) && (
+                    <p className="mt-2 text-sm leading-6">
+                      ETF份额通常次日约08:30分批更新；当天盘后缺少当天份额可能尚未发布。请求异常另行保留，不将待发布计为市场利空。
+                    </p>
+                  )}
+                  {preflightWarnings.length > 0 && (
+                    <details className="mt-2">
+                      <summary className="cursor-pointer text-xs text-primary">
+                        查看同步诊断
+                      </summary>
+                      {preflightWarnings.map((warning, index) => (
+                        <p className="mt-1 text-xs leading-6" key={index}>
+                          {warning}
+                        </p>
+                      ))}
+                    </details>
+                  )}
+                </div>
+              )}
+              {quality && (
+                <details className="rounded-xl border p-4">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    质量评分：{quality.overallScore}分 · {quality.grade}级
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {quality.dimensions.map((item) => (
+                      <div key={item.key} className="text-sm">
+                        {item.label} {item.score}分
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {item.detail}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              <details className="rounded-xl border p-4">
+                <summary className="cursor-pointer text-sm font-medium">
+                  历史上下文与版本记录
+                </summary>
+                {evaluation?.baselineReport ? (
+                  <div className="mt-3">
+                    <Link
+                      className="text-sm text-primary underline"
+                      href={`/comprehensive-analysis/report/${evaluation.baselineReport.id}`}
+                    >
+                      比较基线：{evaluation.baselineReport.title} ·{" "}
+                      {date(evaluation.baselineReport.createdAt)}
+                    </Link>
+                    {evaluation.changes.length ? (
+                      evaluation.changes.map((change) => (
+                        <p key={change.ticker} className="mt-2 text-xs">
+                          {change.ticker}：
+                          {stateLabels[change.from] || change.from} →{" "}
+                          {stateLabels[change.to] || change.to}；
+                          {change.changedConditions
+                            .map(
+                              (key) =>
+                                decisions
+                                  .find((item) => item.ticker === change.ticker)
+                                  ?.conditions.find((item) => item.key === key)
+                                  ?.label || key,
+                            )
+                            .join("、")}
+                        </p>
+                      ))
+                    ) : (
+                      <p className="mt-2 text-sm">
+                        相对基线报告，规则状态没有变化。
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    本报告未保存可核验的完整报告比较基线；不展示中间快照差异。
+                  </p>
+                )}
+                {structured.historicalReportContext?.map((item) => (
+                  <Link
+                    key={item.reportId}
+                    className="mt-3 block text-xs text-primary"
+                    href={`/comprehensive-analysis/report/${item.reportId}`}
+                  >
+                    纳入上下文：{item.title} · {date(item.createdAt)}
+                  </Link>
+                ))}
+              </details>
+              <details className="rounded-xl border p-5 print:hidden">
+                <summary className="cursor-pointer text-sm font-medium">
+                  归档正文（与研究模块同源）
+                </summary>
+                <p className="mt-3 text-xs text-muted-foreground">
+                  保留生成时内容用于追溯；旧格式与历史措辞不代表当前交易状态。
+                </p>
+                <div className="mt-4 max-h-[640px] overflow-auto text-sm leading-7 [&_ul]:ml-5 [&_ul]:list-disc [&_h2]:my-4 [&_h2]:font-semibold">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {report.content}
+                  </ReactMarkdown>
+                </div>
+              </details>
+              <div className="border-t pt-6"><ReportEvidenceView evaluation={evaluation} baseUrl={baseUrl} mode="appendix" /></div>
+            </section>
+          )}
+          {activePage === "publish" && (
+            <section id="publish" className="space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border bg-card p-5 sm:p-6">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="rounded-xl bg-primary/10 p-2.5 text-primary">
+                    <BarChart3 aria-hidden className="size-5" />
+                  </span>
+                  <div>
+                    {title("发布概览")}
+                    <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                      核对准备公开的核心判断、指标、风险提示与长图效果；此页面仅用于预览，不会自动发布。
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => router.push(`/publish?reportId=${report.id}`)}
+                >
+                  制作发布图文
+                </Button>
+              </div>
+              {structured.socialReport ? (
+                <SocialReportView
+                  date={report.createdAt}
+                  industry={report.industryName}
+                  report={normalizeSocialReport(
+                    structured.socialReport,
+                    evaluation,
+                    structured.companyAnalysis,
+                  )}
+                />
+              ) : (
+                <div className="rounded-2xl border border-dashed bg-muted/20 p-10 text-center">
+                  <Megaphone
+                    aria-hidden
+                    className="mx-auto size-6 text-muted-foreground"
+                  />
+                  <h2 className="mt-4 font-semibold">暂无发布版内容</h2>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    这份历史报告没有保存发布摘要，可进入发布工作台重新制作。
+                  </p>
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+      </div>
+      <p className="pb-6 text-center text-xs text-muted-foreground">
+        研究结果仅供参考，不构成投资建议，不自动执行交易。
+      </p>
+    </main>
+  );
+}

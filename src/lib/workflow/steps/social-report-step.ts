@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Persisted analysis artifacts are runtime-validated heterogeneous JSON. */
 import { compactSocialReport, REPORT_SECTIONS, type SocialReport } from '@/lib/analysis/social-report'
 import { representativeProducts } from '@/lib/analysis/report-insights'
 import type { StepContext, StepDefinition } from '../types'
@@ -37,11 +38,10 @@ function buildSocialReport(context:StepContext):SocialReport{
   const evaluation=context.artifacts.get('research-evaluation'),decisions=evaluation?.decisions||[],riskOff=decisions.filter((item:any)=>item.state==='risk-off').length,eligible=decisions.filter((item:any)=>item.state==='eligible').length
   const scenarios=investment.scenarios||{},valuationProducts=(evaluation?.products||[]).filter((item:any)=>Number.isFinite(item.pe)||Number.isFinite(item.pb))
   const valuationCount=new Set(valuationProducts.map((item:any)=>item.indexCode).filter(Boolean)).size
-  const historicalValuationCount=new Set(valuationProducts.filter((item:any)=>item.valuationSampleCount>=500&&(Number.isFinite(item.pePercentile5y)||Number.isFinite(item.pbPercentile5y))).map((item:any)=>item.indexCode).filter(Boolean)).size
   const draft={version:2 as const,title:`${industry.name||'产业'}ETF观察`,subtitle:first(overview.analysis||investment.thesis,'产业与市场证据已完成交叉复核。'),takeaways:[
     `产业：${overview.stage||'阶段待核验'}，盈利质量仍需持续验证。`,
-    `战术：${riskOff}只风险收缩，${eligible}只满足实验条件。`,
-    `估值：${valuationCount}个指数有当期值，${historicalValuationCount}个具备历史分位。`,
+    `战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`,
+    `估值：${valuationCount?`${valuationCount}个指数有可核验当期值`:'暂无可核验当期估值'}。`,
   ],sections:[
     {title:REPORT_SECTIONS[0],body:cited(news,first(overview.drivers||overview.analysis,'产业驱动证据不足。'))},
     {title:REPORT_SECTIONS[1],body:companyHighlight(company)},
@@ -50,7 +50,7 @@ function buildSocialReport(context:StepContext):SocialReport{
     {title:REPORT_SECTIONS[4],body:`基准：${scenario(scenarios.base?.conditions||scenarios.base)}；上行：${scenario(scenarios.bull?.conditions||scenarios.bull)}；下行：${scenario(scenarios.bear?.conditions||scenarios.bear)}。`},
     {title:REPORT_SECTIONS[5],body:first(investment.watchlist||news.watchlist,'跟踪订单、盈利、现金流、资金和趋势条件。')},
   ],risks:(Array.isArray(investment.risks)?investment.risks:[]).map(prose).filter(Boolean).slice(0,3)}
-  while(draft.risks.length<3)draft.risks.push(['数据缺失不补零，未验证规则不形成交易指令。','历史持仓披露与实时指数暴露可能存在偏差。','历史研究和模拟回放不保证未来收益。'][draft.risks.length])
+  while(draft.risks.length<3)draft.risks.push(['数据缺失不补零，未验证规则不形成交易指令。','定期持仓披露与当前指数暴露可能存在偏差。','市场、产业与企业证据可能在报告生成后发生变化。'][draft.risks.length])
   return compactSocialReport(JSON.stringify(draft))
 }
 

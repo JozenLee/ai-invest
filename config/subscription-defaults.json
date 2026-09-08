@@ -8,7 +8,7 @@
     "etf_research": {"scope":"etf_index","label":"ETF复权、指数映射与产品研究","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00","19:00"],"weekdaysOnly":true},
     "market_main_flow": {"scope":"market_index","label":"大盘主力资金原始明细","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:00"],"weekdaysOnly":true},
     "margin_balance": {"scope":"market_index","label":"交易所融资融券余额","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00"],"weekdaysOnly":true},
-    "sector_capital_flow": {"scope":"market_index","label":"板块资金原始行情","enabled":true,"mode":"interval","tradingIntervalSeconds":300,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},
+    "sector_capital_flow": {"scope":"market_index","label":"板块资金原始行情（AKShare）","enabled":true,"mode":"interval","tradingIntervalSeconds":30,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},
     "northbound_flow": {"scope":"market_index","label":"北向资金","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:00"],"weekdaysOnly":true},
     "market_volume": {"scope":"market_index","label":"指数成交额原始历史","enabled":true,"mode":"interval","tradingIntervalSeconds":300,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},
     "dragon_tiger": {"scope":"market_index","label":"龙虎榜","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:30"],"weekdaysOnly":true},

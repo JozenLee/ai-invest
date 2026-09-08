@@ -2,7 +2,7 @@ import { describe,expect,it } from 'vitest'
 import { defaultProfile,validateProfile } from '../profile'
 import { annotateHistoricalReports,selectHistoricalReports } from '../history-reports'
 
-const report=(id:string,industryId:string,session:string,createdAt:string)=>({id,industryId,industryName:industryId,title:id,summary:id,dataJson:JSON.stringify({researchEvaluation:{expectedSession:session,decisions:[{state:'watch'}]},investmentAdvice:{confidencePct:66,recommendation:{unheld:'观望'}}}),createdAt})
+const report=(id:string,industryId:string,session:string,createdAt:string,verificationMode?:string)=>({id,industryId,industryName:industryId,title:id,summary:id,dataJson:JSON.stringify({researchEvaluation:{expectedSession:session,decisions:[{state:'watch'}]},investmentAdvice:{confidencePct:66,recommendation:{unheld:'观望'}},metadata:{verificationMode}}),createdAt})
 
 describe('historical report context',()=>{
   it('defaults legacy and new profiles to ten trading days',()=>{
@@ -20,5 +20,12 @@ describe('historical report context',()=>{
     expect(selected[0]).toMatchObject({confidencePct:66,role:'historical-context'})
     const tags=annotateHistoricalReports(candidates,selected,'ai')
     expect(tags.map(item=>item.inclusionLabel)).toEqual(['同交易日较早版本','纳入下一轮分析','纳入下一轮分析','其他产业领域'])
+  })
+  it('never lets a graph verification report replace the latest investable research context',()=>{
+    const profile=defaultProfile('ai','AI')
+    const candidates=[report('normal','ai','2026-09-04','2026-09-04T10:00:00Z'),report('verification','ai','2026-09-04','2026-09-04T12:00:00Z','graph-e2e')]
+    const selected=selectHistoricalReports({candidates,profile,tradingSessions:['2026-09-04'],cutoff:'2026-09-04',asOf:'2026-09-05T00:00:00Z'})
+    expect(selected.map(item=>item.reportId)).toEqual(['normal'])
+    expect(annotateHistoricalReports(candidates,selected,'ai')[1].inclusionLabel).toBe('链路验证报告，不纳入分析')
   })
 })

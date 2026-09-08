@@ -23,7 +23,7 @@ beforeEach(()=>{
   const raw=(id:string,datasetKey:string,targetCode:string,payload:any)=>({id,datasetKey,targetCode,provider:'test-source',payload:JSON.stringify(payload),fetchedAt:stamp,contentHash:digest(payload)})
   state.raw=[raw('calendar','research_calendar','sh000001',{source:'Tushare/trade_cal',data:f.calendar.map(d=>({cal_date:d.date,is_open:d.open?1:0}))}),raw('profile','research_profile','ai',f.profile),raw('etf','etf_research',e.ticker,{data:{daily:e.bars.map(b=>({...b,trade_date:b.date,amount:b.amount/1000})),info:[{index_code:e.indexCode}],factors:e.factors.map(r=>({trade_date:r.date,adj_factor:r.factor})),indexDaily:e.indexBars,nav:[{nav_date:'20260904',ann_date:'20260904',unit_nav:e.product.nav,adj_nav:e.product.nav}]}}),raw('holdings','etf_holdings',e.ticker,[{stock_code:'600000',weight:60,report_period:'20260630',ann_date:'20260820',source:'Tushare/fund_portfolio'}])]
   state.raw.push(raw('graph','industry_graph','all',[{id:'ai',name:'测试领域',code:'test',version:1,revisionId:'revision-test',contentHash:'graph-hash',sourceUrls:['https://example.com/industry'],etfs:[{code:e.ticker}],stages:[{code:'upstream',name:'上游',segments:[{code:'a',name:'环节A',companies:[]},{code:'b',name:'环节B',companies:[]}]},{code:'midstream',name:'中游',segments:[{code:'c',name:'环节C',companies:[]},{code:'d',name:'环节D',companies:[]}]},{code:'downstream',name:'下游',segments:[{code:'e',name:'环节E',companies:[]},{code:'f',name:'环节F',companies:[]}]}],relations:[{sourceCode:'a',sourceName:'环节A',targetCode:'c',targetName:'环节C',type:'SUPPLIES',direction:'positive',weight:0.8,confidence:0.9,sourceUrls:['https://example.com/r1']},{sourceCode:'c',sourceName:'环节C',targetCode:'e',targetName:'环节E',type:'INFLUENCES',direction:'positive',weight:0.7,confidence:0.8,sourceUrls:['https://example.com/r2']}]}]))
-  state.daily=e.bars.map(b=>({...b,ticker:e.ticker,date:new Date(b.date),id:b.date,amount:b.amount/1000}))
+  state.daily=e.bars.map(b=>({...b,ticker:e.ticker,date:new Date(b.date),id:b.date,amount:b.amount}))
   state.index=f.benchmarkBars.map(b=>({...b,code:'sh000300',date:new Date(b.date)}))
   state.holdings=[{id:'holding-one',etfCode:e.ticker,stockCode:'600000',stockName:'测试企业',weight:60,updateDate:stamp}]
   state.subscriptions=[{profile:JSON.stringify({industryId:'ai',industryName:'测试领域'}),instrument:{code:e.ticker,name:e.name}}]
@@ -72,6 +72,20 @@ describe('P0→P2 frozen workflow integration',()=>{
     expect(snapshot.etfs[0].bars).toHaveLength(oldPayload.data.daily.length)
     expect(snapshot.etfs[0].bars.at(-1)?.date).toBe('2026-09-04')
   })
+  it('keeps normalized database amount units when research daily falls back to ETFDaily',async()=>{
+    const raw=state.raw.find(r=>r.id==='etf'),payload=JSON.parse(raw.payload)
+    payload.data.daily=[];raw.payload=JSON.stringify(payload)
+    const snapshot=await captureResearchSnapshot('ai')
+    expect(snapshot.etfs[0].bars[0].amount).toBe(50000000)
+  })
+  it('uses the latest current index valuation without inventing a historical percentile',async()=>{
+    const current=state.raw.find(r=>r.id==='etf'),payload=JSON.parse(current.payload)
+    payload.data.indexValuation=[{trade_date:'20260904',pe_ttm:20,pb:2}];current.payload=JSON.stringify(payload)
+    state.raw.push({...current,id:'etf-valuation-older',fetchedAt:new Date('2026-09-03T08:00:00Z'),payload:JSON.stringify({data:{indexValuation:[{trade_date:'20260903',pe_ttm:19,pb:1.9}]}})})
+    const snapshot=await captureResearchSnapshot('ai')
+    expect(snapshot.etfs[0].product.pe).toBe(20)
+    expect(snapshot.etfs[0].product.pePercentile5y).toBeUndefined()
+  })
   it('runs freeze, all data projections and ETF decision steps without AI or collection',async()=>{
     const artifacts=new Map<string,any>()
     const ctx:StepContext={runId:'run',stepId:'step',input:{industryId:'ai'},artifacts,updateProgress:vi.fn(),saveArtifact:async(k,v)=>{artifacts.set(k,v)}}
@@ -92,4 +106,68 @@ describe('P0→P2 frozen workflow integration',()=>{
     const snapshot=await captureResearchSnapshot('ai')
     expect(snapshot.historicalReports?.map(item=>item.reportId)).toEqual(['latest'])
   })
+})
+
+it('uses fresh realtime books even when the research bundle has no book',async()=>{
+  vi.setSystemTime(new Date('2026-09-07T06:17:00Z'))
+  const base=state.raw.find(row=>row.id==='etf')
+  state.raw.unshift({...base,id:'live-book',datasetKey:'etf_realtime',fetchedAt:new Date('2026-09-07T06:16:30Z'),payload:JSON.stringify([
+    {'代码':'159995',bid:1,ask:1.001,bookDate:'2026-09-07',bookPublishedAt:'2026-09-07T06:16:00Z',bookSource:'tencent/orderbook'},
+  ])})
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.etfs[0].product.bookDate).toBe('2026-09-07')
+  expect(snapshot.etfs[0].product.spreadBps).toBeCloseTo(9.995)
+  expect(snapshot.etfs[0].product.evidenceIds).toContain('live-book')
+  expect(evaluateResearch(snapshot).decisions[0].conditions.find(item=>item.key==='spread')?.status).toBe('met')
+})
+
+it('preserves actual public observation time without inventing publication dates',async()=>{
+  const raw=state.raw.find(row=>row.id==='holdings')
+  raw.payload=JSON.stringify([{stock_code:'600000',weight:60,weight_available:true,report_period:'2026年2季度 截止至：2026-06-30',source:'eastmoney_public_direct'}])
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.etfs[0].holdings[0]).toMatchObject({period:'2026-06-30',publishedAt:null,observedAt:'2026-09-04T08:00:00.000Z'})
+  expect(evaluateResearch(snapshot).decisions[0].conditions.find(item=>item.key==='holdings')?.value).toBe(60)
+})
+
+it('deduplicates legacy Hong Kong holdings and retains financial explanations',async()=>{
+  const raw=state.raw.find(row=>row.id==='holdings')
+  raw.payload=JSON.stringify(['00700.HK','0700.HK'].map(stock_code=>({stock_code,weight:10,report_period:'20260630',ann_date:'20260820'})))
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.companies.filter(company=>company.code==='700.hk')).toHaveLength(1)
+  expect(snapshot.companies.find(company=>company.code==='700.hk')?.financialGaps).toContain('缺少利润表')
+})
+
+it('combines a newly fetched session with existing history and factors',async()=>{
+  vi.setSystemTime(new Date('2026-09-07T09:00:00Z'))
+  const prior=state.raw.find(row=>row.id==='etf'),data=JSON.parse(prior.payload).data
+  const last=data.daily.at(-1)
+  state.raw.unshift({...prior,id:'current-session',fetchedAt:new Date('2026-09-07T08:00:00Z'),payload:JSON.stringify({data:{
+    daily:[{...last,date:'2026-09-07',trade_date:'20260907'}],
+    factors:[{trade_date:'20260907',adj_factor:1}],
+    indexDaily:[{...data.indexDaily.at(-1),date:'2026-09-07',trade_date:'20260907'}],
+  }})})
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.etfs[0].bars.length).toBeGreaterThan(120)
+  expect(snapshot.etfs[0].bars.at(-1)?.date).toBe('2026-09-07')
+  expect(snapshot.etfs[0].factors.at(-1)?.date).toBe('2026-09-07')
+  expect(snapshot.etfs[0].evidenceIds).toEqual(expect.arrayContaining(['current-session','etf']))
+})
+
+it('does not count the same Hong Kong holding twice under legacy codes',async()=>{
+  const raw=state.raw.find(row=>row.id==='holdings')
+  raw.payload=JSON.stringify(['00700.HK','0700.HK'].map(stock_code=>({stock_code,weight:10,report_period:'20260630',ann_date:'20260820'})))
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.etfs[0].holdings).toHaveLength(1)
+  expect(evaluateResearch(snapshot).decisions[0].metrics.disclosedWeightPct).toBe(10)
+})
+
+it('chooses a completed report baseline instead of a newer intermediate evaluation',async()=>{
+  const {latestReportEvaluation}=await import('../store')
+  const completed=evaluateResearch(fixture())
+  completed.asOf='2026-09-04T07:00:00Z'
+  state.historicalReports=[{id:'completed-report',title:'完整报告',createdAt:new Date('2026-09-04T08:00:00Z'),dataJson:JSON.stringify({researchEvaluation:completed,metadata:{kind:'analysis'}})}]
+  const intermediate={...completed,snapshotId:'unfinished',asOf:'2026-09-04T08:30:00Z'}
+  state.raw.push({id:'unfinished:evaluation',datasetKey:'research_evaluation',targetCode:'ai',payload:JSON.stringify(intermediate),fetchedAt:new Date('2026-09-04T08:30:00Z')})
+  expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z')).toMatchObject({snapshotId:completed.snapshotId,baselineReport:{id:'completed-report'}})
+  expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z','unfinished')).toBeNull()
 })

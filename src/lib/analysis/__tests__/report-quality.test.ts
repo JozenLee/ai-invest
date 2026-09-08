@@ -4,18 +4,23 @@ import { evaluateResearch } from '@/lib/research/engine'
 import { buildReportQuality, buildReportReviewDelta } from '../report-quality'
 
 describe('report quality and review lineage', () => {
-  it('keeps replay history informational instead of blocking current advice', () => {
+  it('scores only current report evidence and excludes replay history', () => {
     const evaluation = evaluateResearch(fixture())
     const quality = buildReportQuality({
       evaluation,
       dataQuality: { status: 'available' },
       preflight: { status: 'fresh', failed: 0 },
-      validation: { tradeApproved: false, sessionCount: 1, spanDays: 0, totalTrades: 0, meanExcessReturnPct: null, maxDrawdownPct: null },
     })
-    expect(quality.dimensions).toHaveLength(6)
+    expect(quality.dimensions).toHaveLength(5)
+    expect(quality.dimensions.map(item=>item.key)).not.toContain('replay')
     expect(quality.confidenceScore).toBeGreaterThan(69)
     expect(quality.usability).toBe('advice-grade')
     expect(quality.blockers).not.toContain('样本外验证尚未通过')
+  })
+  it('does not call an intentionally skipped verification refresh a failed sync',()=>{
+    const evaluation=evaluateResearch(fixture())
+    const quality=buildReportQuality({evaluation,dataQuality:{status:'limited'},preflight:{status:'warning',queued:0,completed:0,failed:0,warnings:['本轮未触发外部同步，使用当前本地订阅快照']}})
+    expect(quality.blockers).not.toContain('分析前同步未完全成功')
   })
 
   it('reports numeric condition changes even when the state is unchanged', () => {
@@ -35,4 +40,33 @@ describe('report quality and review lineage', () => {
     expect(delta.status).toBe('unchanged')
     expect(delta.changedDecisions).toEqual([])
   })
+})
+
+it('counts omitted missing fields in the quality denominator',()=>{
+  const snapshot=fixture()
+  snapshot.etfs[0].product.spreadBps=null
+  const evaluation=evaluateResearch(snapshot)
+  expect(evaluation.omittedConditions?.some(item=>item.key==='spread')).toBe(true)
+  const quality=buildReportQuality({evaluation,dataQuality:{status:'available'}})
+  expect(quality.dimensions.find(item=>item.key==='product')?.score).toBe(75)
+  expect(quality.blockers.some(item=>item.includes('仍计入质量覆盖率'))).toBe(true)
+})
+
+it('cannot rate stale intraday data A even with complete close prices',async()=>{
+  const { assessDecisionTiming }=await import('../decision-timing')
+  const snapshot=fixture()
+  const timing=assessDecisionTiming({asOf:'2026-09-04T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
+  const quality=buildReportQuality({evaluation:evaluateResearch(snapshot),dataQuality:{status:'available'},decisionTiming:timing})
+  expect(quality.overallScore).toBeLessThanOrEqual(69)
+  expect(quality.grade).not.toBe('A')
+  expect(quality.usability).toBe('limited-advice')
+})
+
+it('does not count a previous-session valuation as current evidence',()=>{
+  const evaluation=evaluateResearch(fixture())
+  evaluation.products![0].valuationDate='2026-09-03'
+  const quality=buildReportQuality({evaluation,dataQuality:{status:'available'}})
+  expect(quality.dimensions.find(item=>item.key==='valuation')?.score).toBe(0)
+  evaluation.products![0].valuationDate=evaluation.expectedSession
+  expect(buildReportQuality({evaluation,dataQuality:{status:'available'}}).dimensions.find(item=>item.key==='valuation')?.score).toBe(100)
 })

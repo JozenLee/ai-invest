@@ -1,13 +1,14 @@
 'use client'
 
-import { use, useEffect } from 'react'
+import { use, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, Download } from 'lucide-react'
-import { SwimLaneGraph } from '@/components/graph/SwimLaneGraph'
+import { ArrowLeft, Download, Edit3, Network, RefreshCw } from 'lucide-react'
 import { useSwimLaneData } from '@/hooks/useSwimLaneData'
 import { IndustryMatchButton } from '@/components/graph/IndustryMatchButton'
-import { useRef, useState } from 'react'
+import { IndustryGraphWorkspace } from '@/components/graph/IndustryGraphWorkspace'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Skeleton } from '@/components/ui/skeleton'
 import html2canvas from 'html2canvas'
 
 interface PageProps {
@@ -41,33 +42,8 @@ export default function IndustryDetailPage({ params }: PageProps) {
   const graphRef = useRef<HTMLDivElement>(null)
   const [matchResults, setMatchResults] = useState<Record<string, MatchDetail>>({})
 
-  // 当数据加载完成时，从segment数据中提取已有的匹配结果
-  useEffect(() => {
-    if (data?.stages) {
-      const results: Record<string, MatchDetail> = {}
-      data.stages.forEach((stage: any) => {
-        stage.segments?.forEach((segment: any) => {
-          if (segment.matchedEtfs?.length > 0 || segment.matchedIndices?.length > 0) {
-            results[segment.id] = {
-              nodeId: segment.id,
-              nodeName: segment.name,
-              etfCount: segment.matchedEtfs?.length || 0,
-              indexCount: segment.matchedIndices?.length || 0,
-              success: true,
-              etfs: segment.matchedEtfs || [],
-              indices: segment.matchedIndices || []
-            }
-          }
-        })
-      })
-      setMatchResults(results)
-    }
-  }, [data])
-
   const handleCompanyClick = (companyId: string) => {
-    // Navigate to company detail or show company modal
-    console.log('Company clicked:', companyId)
-    // TODO: Implement company detail navigation
+    console.debug('Company selected:', companyId)
   }
 
   const handleDownloadImage = async () => {
@@ -106,25 +82,47 @@ export default function IndustryDetailPage({ params }: PageProps) {
   }
 
   return (
-    <div className="container mx-auto py-6 space-y-6">
-      {/* Header with back button and actions */}
-      <div className="flex flex-wrap items-start gap-3 sm:items-center sm:gap-4">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => router.push('/graph')}
-          className="min-h-11 gap-2"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          返回
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-bold">产业链泳道图</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {data ? data.industry.name : '横向展示产业链各阶段、环节和企业分布'}
+    <div className="space-y-5">
+      <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+        <div className="min-w-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push('/graph')}
+            className="-ml-2 mb-2 min-h-10 gap-2"
+          >
+            <ArrowLeft className="size-4" />
+            返回图谱列表
+          </Button>
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-primary">
+            <Network className="size-3.5" aria-hidden="true" />
+            Industry knowledge graph
+          </div>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">产业链泳道图</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {data ? `${data.industry.name} · 按阶段、环节、企业与投资映射逐层探索` : '按产业链层级加载结构与关系'}
           </p>
         </div>
-        <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            className="min-h-10 gap-2"
+            onClick={refetch}
+            disabled={isLoading}
+          >
+            <RefreshCw className={`size-4 ${isLoading ? 'animate-spin' : ''}`} />
+            刷新数据
+          </Button>
+          <Button
+            variant="outline"
+            className="min-h-10 gap-2"
+            onClick={() => router.push(`/graph/edit/${id}`)}
+            disabled={isLoading || !!error || !data}
+          >
+            <Edit3 className="size-4" />
+            编辑图谱
+          </Button>
           {data && (
             <IndustryMatchButton
               industryId={id}
@@ -134,28 +132,49 @@ export default function IndustryDetailPage({ params }: PageProps) {
           )}
           <Button
             variant="outline"
-            size="sm"
-            className="min-h-11"
+            className="min-h-10 gap-2"
             onClick={handleDownloadImage}
             disabled={isLoading || !!error || !data}
           >
-            <Download className="mr-2 h-4 w-4" />
+            <Download className="size-4" />
             下载图片
           </Button>
         </div>
-      </div>
+      </header>
 
-      {/* Swim Lane Graph */}
-      <div ref={graphRef}>
-        <SwimLaneGraph
-          data={data}
-          isLoading={isLoading}
-          error={error}
-          onRefetch={refetch}
-          onCompanyClick={handleCompanyClick}
-          matchResults={matchResults}
-        />
-      </div>
+      {isLoading && (
+        <div className="space-y-4" role="status" aria-label="正在加载知识图谱">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-28 rounded-xl" />)}
+          </div>
+          <Skeleton className="h-[620px] rounded-xl" />
+        </div>
+      )}
+
+      {error && (
+        <Alert variant="destructive" role="alert">
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={refetch}>重试</Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {!isLoading && !error && !data && (
+        <Alert>
+          <AlertDescription>暂无可展示的产业图谱数据。</AlertDescription>
+        </Alert>
+      )}
+
+      {!isLoading && !error && data && (
+        <div ref={graphRef}>
+          <IndustryGraphWorkspace
+            data={data}
+            onCompanyClick={handleCompanyClick}
+            matchResults={matchResults}
+          />
+        </div>
+      )}
     </div>
   )
 }

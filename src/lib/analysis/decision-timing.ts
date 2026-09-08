@@ -2,13 +2,13 @@ import type { CalendarDay } from '@/lib/research/contracts'
 import { chinaDate, sessionBoundary } from '@/lib/research/time'
 
 export type DecisionTimingStatus = 'execution-ready' | 'reference-only'
-export type MarketSessionPhase = 'decision-window' | 'trading' | 'midday-break' | 'pre-market' | 'post-market' | 'non-trading' | 'calendar-unverified'
+export type MarketSessionPhase = 'trading' | 'non-trading'
 
 export type DecisionTimingAssessment = {
   version: 1
   status: DecisionTimingStatus
   executionReady: boolean
-  label: '盘中执行时效已通过' | '仅供投资参考'
+  label: '交易时段时效已通过' | '非交易时段投资参考' | '交易时段数据待补齐' | '仅供投资参考'
   phase: MarketSessionPhase
   timezone: 'Asia/Shanghai'
   asOf: string
@@ -22,9 +22,8 @@ export type DecisionTimingAssessment = {
   quoteCoverage: { fresh: number; total: number; maxLagSeconds: number | null }
   eventCheckCoverage: { fresh: number; total: number; maxLagSeconds: number | null }
   policy: {
-    startTime: '14:20'
-    lastStartTime: '14:50'
-    expiresAt: '14:55'
+    morningSession: '09:30–11:30'
+    afternoonSession: '13:00–15:00'
     maxQuoteAgeSeconds: 300
     maxEventCheckAgeSeconds: 1200
   }
@@ -36,7 +35,7 @@ export type QuoteObservation = { code: string; tradeDate: string | null; fetched
 export type EventCheckObservation = { key: string; lastSuccessAt: string | null }
 
 const policy = {
-  startTime: '14:20', lastStartTime: '14:50', expiresAt: '14:55', maxQuoteAgeSeconds: 300, maxEventCheckAgeSeconds: 1200,
+  morningSession: '09:30–11:30', afternoonSession: '13:00–15:00', maxQuoteAgeSeconds: 300, maxEventCheckAgeSeconds: 1200,
 } as const
 
 function chinaMinutes(asOf: string) {
@@ -50,18 +49,22 @@ function lagSeconds(asOf: string, observedAt: string | null) {
 }
 
 function phaseFor(minutes: number, open: boolean | undefined, verified: boolean): MarketSessionPhase {
-  if (!verified || open === undefined) return 'calendar-unverified'
-  if (!open) return 'non-trading'
-  if (minutes >= 14 * 60 + 20 && minutes <= 14 * 60 + 50) return 'decision-window'
-  if (minutes < 9 * 60 + 30) return 'pre-market'
-  if (minutes >= 11 * 60 + 30 && minutes < 13 * 60) return 'midday-break'
-  if (minutes > 15 * 60) return 'post-market'
-  return 'trading'
+  if (!verified || open !== true) return 'non-trading'
+  const morning = minutes >= 9 * 60 + 30 && minutes < 11 * 60 + 30
+  const afternoon = minutes >= 13 * 60 && minutes < 15 * 60
+  return morning || afternoon ? 'trading' : 'non-trading'
 }
 
-export function isNearCloseDecisionWindow(asOf = new Date().toISOString()) {
+/** Whether the clock is inside either continuous A-share trading session. */
+export function isTradingSessionTime(asOf = new Date().toISOString()) {
   const minutes = chinaMinutes(asOf)
-  return minutes >= 14 * 60 + 20 && minutes <= 14 * 60 + 50
+  return (minutes >= 9 * 60 + 30 && minutes < 11 * 60 + 30) || (minutes >= 13 * 60 && minutes < 15 * 60)
+}
+function tradingValidity(asOf: string, tradingDate: string) {
+  const minutes = chinaMinutes(asOf)
+  const sessionEnd = minutes < 11 * 60 + 30 ? '11:30' : '15:00'
+  const freshnessEnd = Date.parse(asOf) + policy.maxQuoteAgeSeconds * 1000
+  return new Date(Math.min(freshnessEnd, Date.parse(`${tradingDate}T${sessionEnd}:00+08:00`))).toISOString()
 }
 
 export function assessDecisionTiming(input: {
@@ -89,21 +92,23 @@ export function assessDecisionTiming(input: {
   })
   const quotesFresh = uniqueTickers.length > 0 && quoteLags.every(lag => lag !== null)
   const eventsFresh = eventChecks.length > 0 && eventLags.every(lag => lag !== null)
-  const validUntil = phase === 'decision-window' ? new Date(`${tradingDate}T${policy.expiresAt}:00+08:00`).toISOString() : null
+  const observationExpiries = [
+    ...uniqueTickers.map(code => Date.parse(quoteByCode.get(code)?.fetchedAt || '') + policy.maxQuoteAgeSeconds * 1000),
+    ...eventChecks.map(check => Date.parse(check.lastSuccessAt || '') + policy.maxEventCheckAgeSeconds * 1000),
+  ].filter(Number.isFinite)
+  const validUntil = phase === 'trading' ? new Date(Math.min(Date.parse(tradingValidity(input.asOf, tradingDate)), ...observationExpiries)).toISOString() : null
   const reasons: string[] = []
-  if (phase === 'calendar-unverified') reasons.push('交易日历未通过核验')
-  else if (phase === 'non-trading') reasons.push('生成时点不是沪深交易日')
-  else if (phase !== 'decision-window') reasons.push('生成时点不在收盘前决策窗口 14:20–14:50')
-  if (phase === 'decision-window' && !quotesFresh) reasons.push(`目标ETF实时行情未全部达到5分钟时效（${quoteLags.filter(lag => lag !== null).length}/${uniqueTickers.length}）`)
-  if (phase === 'decision-window' && !eventsFresh) reasons.push(`公告检查未全部达到20分钟时效（${eventLags.filter(lag => lag !== null).length}/${eventChecks.length}）`)
-  const executionReady = phase === 'decision-window' && quotesFresh && eventsFresh
+  if (phase === 'non-trading') reasons.push(boundary.verified && calendarDay?.open ? '当前不在沪深连续交易时段' : '当前为非交易时间')
+  if (phase === 'trading' && !quotesFresh) reasons.push(`目标指数基金实时行情未全部达到5分钟时效（${quoteLags.filter(lag => lag !== null).length}/${uniqueTickers.length}）`)
+  if (phase === 'trading' && !eventsFresh) reasons.push(`公告检查未全部达到20分钟时效（${eventLags.filter(lag => lag !== null).length}/${eventChecks.length}）`)
+  const executionReady = phase === 'trading' && quotesFresh && eventsFresh
   const freshQuoteTimes = uniqueTickers.map(code => quoteByCode.get(code)?.fetchedAt || null).filter((value): value is string => !!value).sort()
   const freshEventTimes = eventChecks.map(check => check.lastSuccessAt).filter((value): value is string => !!value).sort()
   return {
     version: 1,
     status: executionReady ? 'execution-ready' : 'reference-only',
     executionReady,
-    label: executionReady ? '盘中执行时效已通过' : '仅供投资参考',
+    label: executionReady ? '交易时段时效已通过' : phase === 'trading' ? '交易时段数据待补齐' : '非交易时段投资参考',
     phase,
     timezone: 'Asia/Shanghai',
     asOf: input.asOf,
@@ -117,7 +122,7 @@ export function assessDecisionTiming(input: {
     eventCheckCoverage: { fresh: eventLags.filter(lag => lag !== null).length, total: eventChecks.length, maxLagSeconds: eventLags.every(lag => lag === null) ? null : Math.max(...eventLags.filter((lag): lag is number => lag !== null)) },
     policy,
     reasons,
-    basis: '趋势与技术指标使用最近完整收盘日；盘中实时行情只用于当前价格与时效复核；事件仅纳入冻结截点前可见内容。',
+    basis: '报告只区分交易时间与非交易时间；趋势和技术指标始终使用最近完整收盘日，交易时段内再追加实时行情与公告时效复核。',
   }
 }
 
@@ -125,15 +130,19 @@ export function effectiveDecisionTiming(value: DecisionTimingAssessment | null |
   if (!value) {
     const legacyAsOf = legacy?.asOf || now
     return {
-      version: 1, status: 'reference-only', executionReady: false, label: '仅供投资参考', phase: 'calendar-unverified', timezone: 'Asia/Shanghai', asOf: legacyAsOf,
+      version: 1, status: 'reference-only', executionReady: false, label: '非交易时段投资参考', phase: 'non-trading', timezone: 'Asia/Shanghai', asOf: legacyAsOf,
       tradingDate: chinaDate(legacyAsOf), closeDataSession: legacy?.closeDataSession || null, eventCutoff: legacyAsOf, quoteAsOf: null, eventCheckAsOf: null, validUntil: null,
       quoteCoverage: { fresh: 0, total: 0, maxLagSeconds: null }, eventCheckCoverage: { fresh: 0, total: 0, maxLagSeconds: null }, policy,
-      reasons: ['旧报告没有盘中时效审计，不能作为当前交易指令'], basis: '旧报告仅保留研究参考价值。',
+      reasons: ['旧报告没有交易时段时效审计，仅保留研究参考价值'], basis: '旧报告仅保留研究参考价值。',
     }
   }
+  const legacyPhase=String(value.phase)
+  const normalizedPhase:MarketSessionPhase=legacyPhase==='trading'||legacyPhase==='decision-window'?'trading':'non-trading'
+  const legacyWindowReason=value.reasons.some(reason=>reason.includes('收盘前决策窗口'))
+  value={...value,phase:normalizedPhase,label:value.executionReady?'交易时段时效已通过':normalizedPhase==='trading'?'交易时段数据待补齐':'非交易时段投资参考',reasons:legacyWindowReason?['当前不在沪深连续交易时段']:value.reasons,basis:'报告只区分交易时间与非交易时间；趋势和技术指标使用最近完整收盘日，交易时段内追加实时时效复核。'}
   if (!value.executionReady) return value
   if (!value.validUntil || Date.parse(now) > Date.parse(value.validUntil)) {
-    return { ...value, status: 'reference-only', executionReady: false, label: '仅供投资参考', reasons: [...new Set([...value.reasons, `执行有效期已于 ${value.validUntil || '未标注'} 结束`])] }
+    return { ...value, status: 'reference-only', executionReady: false, label: '交易时段数据待补齐', reasons: [...new Set([...value.reasons, '实时行情已超过5分钟时效，请重新生成报告'])] }
   }
   return value
 }

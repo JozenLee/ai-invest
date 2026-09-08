@@ -3,7 +3,7 @@
 
 import { aiClient, type AIClient } from '@/lib/ai/ai-factory'
 import { prisma } from '@/lib/db'
-import { etfIndexFetcher, type ETFItem, type IndexItem } from './etf-index-fetcher.service'
+import { etfIndexFetcher, type ETFItem } from './etf-index-fetcher.service'
 import { keywordMatcher } from '@/lib/utils/keyword-matcher'
 import { buildMatchingPrompt } from '@/lib/prompts/etf-index-matching'
 
@@ -13,6 +13,43 @@ export interface MatchOptions {
   topN?: number
   minRelevance?: number
   forceRefresh?: boolean
+}
+
+interface SegmentMatchContext {
+  description?: string
+  industryContext?: string
+  keyCategories?: string[]
+  companyTickers?: string[]
+}
+
+interface GroundedETFCandidate extends ETFItem {
+  matchScore: number
+  matchedKeywords: string[]
+  evidenceScore: number
+  holdingWeight: number
+  holdingCount: number
+  matchedCompanies: string[]
+}
+
+interface SwimLaneCompanyPayload { ticker?: string }
+interface SwimLaneSegmentPayload {
+  id: string
+  name: string
+  description?: string
+  key_categories?: string[]
+  keyCategories?: string[]
+  top_companies?: SwimLaneCompanyPayload[]
+  topCompanies?: SwimLaneCompanyPayload[]
+  companies?: SwimLaneCompanyPayload[]
+}
+interface SwimLaneStagePayload {
+  name?: string
+  segments?: SwimLaneSegmentPayload[]
+}
+interface SwimLanePayload {
+  industry?: { name?: string }
+  lanes?: Record<string, { stage?: { name?: string }; segments?: SwimLaneSegmentPayload[] }>
+  stages?: SwimLaneStagePayload[]
 }
 
 export interface MatchResult {
@@ -59,13 +96,24 @@ class ETFIndexMatcherService {
     this.aiClient = aiClient
   }
 
+  private async persistSegmentMatchResults(nodeId: string, etfs: MatchResult['etfs'], indices: MatchResult['indices']): Promise<void> {
+    const dataServiceUrl = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
+    const response = await fetch(`${dataServiceUrl}/api/v1/industry-graph/segments/${nodeId}/match-results`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segment_id: nodeId, etfs, indices }),
+    })
+    if (!response.ok) throw new Error(`保存匹配结果到Neo4j失败: ${response.status}`)
+  }
+
   /**
    * 为单个节点匹配ETF和指数（通过名称，用于Neo4j节点）
    */
   async matchNodeByName(
     nodeId: string,
     nodeName: string,
-    options: MatchOptions = {}
+    options: MatchOptions = {},
+    context: SegmentMatchContext = {},
   ): Promise<NodeMatchResult> {
     // 防止重复处理
     if (this.processingNodes.has(nodeId)) {
@@ -104,10 +152,7 @@ class ETFIndexMatcherService {
 
       // 关键词初筛
       const etfCandidates = matchETF
-        ? keywordMatcher.filterByKeywords(nodeName, etfList, {
-            minScore: 0.2,
-            maxResults: 20,
-          })
+        ? await this.groundedETFCandidates(nodeName, etfList, context)
         : []
 
       const indexCandidates = matchIndex
@@ -125,6 +170,7 @@ class ETFIndexMatcherService {
       // 如果关键词筛选后没有候选项，直接返回
       if (etfCandidates.length === 0 && indexCandidates.length === 0) {
         console.log(`[ETF匹配] 节点 ${nodeName} 没有匹配的候选项`)
+        await this.persistSegmentMatchResults(nodeId, [], [])
         return {
           nodeId,
           nodeName,
@@ -138,42 +184,58 @@ class ETFIndexMatcherService {
       const matchResult = await this.aiMatch({
         nodeName,
         nodeType: 'segment',
-        nodeDescription: undefined,
-        industryContext: undefined,
-        etfCandidates: etfCandidates.map(e => ({ ticker: e.ticker, name: e.name })),
-        indexCandidates: indexCandidates.map(i => ({ code: i.code, name: i.name })),
+        nodeDescription: context.description,
+        industryContext: context.industryContext,
+        etfCandidates: etfCandidates.map(e => ({
+          ticker: e.ticker,
+          name: e.name,
+          evidenceScore: e.evidenceScore,
+          holdingWeight: e.holdingWeight,
+          holdingCount: e.holdingCount,
+          matchedCompanies: e.matchedCompanies,
+        })),
+        indexCandidates: indexCandidates.map(i => ({ code: i.code, name: i.name, evidenceScore: i.matchScore })),
       })
 
-      // 过滤结果
-      const filteredETFs = matchResult.etfs
+      const evidenceByETF = new Map(etfCandidates.map(candidate => [candidate.ticker, candidate]))
+      const aiOrGroundedETFs = matchResult.etfs.length
+        ? matchResult.etfs.map(etf => {
+            const evidence = evidenceByETF.get(etf.code)
+            const relevance = evidence
+              ? Math.max(etf.relevance * 0.65 + evidence.evidenceScore * 0.35, evidence.holdingCount ? evidence.evidenceScore : 0)
+              : etf.relevance
+            return {
+              ...etf,
+              relevance: Math.min(1, relevance),
+              reasoning: evidence?.holdingCount
+                ? `${etf.reasoning}；持仓命中${evidence.holdingCount}家/合计${evidence.holdingWeight.toFixed(1)}%`
+                : etf.reasoning,
+            }
+          })
+        : etfCandidates
+            .filter(candidate => candidate.holdingCount > 0)
+            .map(candidate => ({
+              code: candidate.ticker,
+              name: candidate.name,
+              relevance: candidate.evidenceScore,
+              reasoning: `已披露持仓命中${candidate.holdingCount}家代表企业，合计${candidate.holdingWeight.toFixed(1)}%`,
+            }))
+
+      // AI负责解释，持仓证据负责校准和兜底；最终仍受显式阈值约束。
+      const filteredETFs = aiOrGroundedETFs
         .filter(e => e.relevance >= minRelevance)
+        .sort((a, b) => b.relevance - a.relevance)
         .slice(0, topN)
 
       const filteredIndices = matchResult.indices
         .filter(i => i.relevance >= minRelevance)
         .slice(0, topN)
 
-      // 保存匹配结果到Neo4j
+      // 包括空结果在内都必须写回；空结果用于清除该环节的历史映射，防止
+      // Company节点上的旧聚合关系污染另一个Segment成员关系。
       try {
-        const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
-        const saveResponse = await fetch(
-          `${DATA_SERVICE_URL}/api/v1/industry-graph/segments/${nodeId}/match-results`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              segment_id: nodeId,
-              etfs: filteredETFs,
-              indices: filteredIndices,
-            }),
-          }
-        )
-
-        if (!saveResponse.ok) {
-          console.warn(`保存匹配结果到Neo4j失败: ${saveResponse.status}`)
-        } else {
-          console.log(`节点 ${nodeName} 匹配结果已保存: ${filteredETFs.length} ETF, ${filteredIndices.length} 指数`)
-        }
+        await this.persistSegmentMatchResults(nodeId, filteredETFs, filteredIndices)
+        console.log(`节点 ${nodeName} 匹配结果已保存: ${filteredETFs.length} ETF, ${filteredIndices.length} 指数`)
       } catch (saveError) {
         console.warn('保存匹配结果到Neo4j出错:', saveError)
       }
@@ -373,18 +435,22 @@ class ETFIndexMatcherService {
         throw new Error(`获取产业数据失败: ${response.status}`)
       }
 
-      const swimlaneData = await response.json()
+      const swimlaneData = await response.json() as SwimLanePayload
 
       // 提取所有segment节点
-      const segments: Array<{ id: string; name: string }> = []
+      const segments: Array<{ id: string; name: string; description?: string; keyCategories?: string[]; companyTickers?: string[]; stageName?: string }> = []
 
       if (swimlaneData.lanes) {
         // 遍历所有泳道（upstream, midstream, downstream）
-        for (const lane of Object.values(swimlaneData.lanes as Record<string, any>)) {
+        for (const lane of Object.values(swimlaneData.lanes)) {
           if (lane.segments && Array.isArray(lane.segments)) {
-            segments.push(...lane.segments.map((seg: any) => ({
+            segments.push(...lane.segments.map(seg => ({
               id: seg.id,
-              name: seg.name
+              name: seg.name,
+              description: seg.description,
+              keyCategories: seg.key_categories || seg.keyCategories || [],
+              companyTickers: (seg.top_companies || seg.topCompanies || seg.companies || []).map(company => company.ticker).filter((ticker): ticker is string => Boolean(ticker)),
+              stageName: lane.stage?.name,
             })))
           }
         }
@@ -392,9 +458,13 @@ class ETFIndexMatcherService {
         // 备用：如果返回的是stages格式
         for (const stage of swimlaneData.stages) {
           if (stage.segments && Array.isArray(stage.segments)) {
-            segments.push(...stage.segments.map((seg: any) => ({
+            segments.push(...stage.segments.map(seg => ({
               id: seg.id,
-              name: seg.name
+              name: seg.name,
+              description: seg.description,
+              keyCategories: seg.keyCategories || [],
+              companyTickers: (seg.companies || []).map(company => company.ticker).filter((ticker): ticker is string => Boolean(ticker)),
+              stageName: stage.name,
             })))
           }
         }
@@ -421,7 +491,12 @@ class ETFIndexMatcherService {
         while (cursor < segments.length) {
           const index = cursor++
           const segment = segments[index]
-          results[index] = await this.matchNodeByName(segment.id, segment.name, options)
+          results[index] = await this.matchNodeByName(segment.id, segment.name, options, {
+            description: segment.description,
+            industryContext: [swimlaneData.industry?.name, segment.stageName].filter(Boolean).join(' / '),
+            keyCategories: segment.keyCategories,
+            companyTickers: segment.companyTickers,
+          })
           await new Promise(resolve => setTimeout(resolve, 500))
         }
       }
@@ -516,8 +591,8 @@ class ETFIndexMatcherService {
     nodeType: string
     nodeDescription?: string
     industryContext?: string
-    etfCandidates: Array<{ ticker: string; name: string }>
-    indexCandidates: Array<{ code: string; name: string }>
+    etfCandidates: Array<{ ticker: string; name: string; evidenceScore?: number; holdingWeight?: number; holdingCount?: number; matchedCompanies?: string[] }>
+    indexCandidates: Array<{ code: string; name: string; evidenceScore?: number }>
   }): Promise<MatchResult> {
     try {
       const prompt = buildMatchingPrompt(params)
@@ -549,6 +624,55 @@ class ETFIndexMatcherService {
     }
   }
 
+  private async groundedETFCandidates(
+    nodeName: string,
+    etfList: ETFItem[],
+    context: SegmentMatchContext,
+  ): Promise<GroundedETFCandidate[]> {
+    const semantic = keywordMatcher.filterByKeywords(nodeName, etfList, {
+      keywords: context.keyCategories,
+      minScore: 0.15,
+      maxResults: 30,
+    })
+    const candidateByCode = new Map<string, GroundedETFCandidate>(semantic.map(candidate => [candidate.ticker, {
+      ...candidate,
+      evidenceScore: candidate.matchScore,
+      holdingWeight: 0,
+      holdingCount: 0,
+      matchedCompanies: [],
+    }]))
+
+    const companyTickers = [...new Set((context.companyTickers || []).map(code => String(code).replace(/^(sh|sz)/i, '').replace(/\.(SH|SZ)$/i, '')).filter(Boolean))]
+    if (companyTickers.length) {
+      const holdings = await prisma.eTFHolding.findMany({
+        where: { stockCode: { in: companyTickers } },
+        orderBy: { weight: 'desc' },
+      })
+      const etfByCode = new Map(etfList.map(etf => [etf.ticker, etf]))
+      const grouped = new Map<string, typeof holdings>()
+      holdings.forEach(holding => grouped.set(holding.etfCode, [...(grouped.get(holding.etfCode) || []), holding]))
+      for (const [etfCode, rows] of grouped) {
+        const etf = etfByCode.get(etfCode)
+        if (!etf) continue
+        const current = candidateByCode.get(etfCode)
+        const holdingWeight = rows.reduce((sum, row) => sum + Math.max(0, row.weight), 0)
+        const holdingCount = new Set(rows.map(row => row.stockCode)).size
+        const holdingScore = Math.min(1, 0.5 + Math.min(0.35, holdingWeight / 40) + Math.min(0.15, holdingCount * 0.04))
+        candidateByCode.set(etfCode, {
+          ...(current || { ...etf, matchScore: 0, matchedKeywords: [] }),
+          evidenceScore: Math.max(current?.matchScore || 0, holdingScore),
+          holdingWeight,
+          holdingCount,
+          matchedCompanies: [...new Set(rows.map(row => row.stockName || row.stockCode))],
+        })
+      }
+    }
+
+    return [...candidateByCode.values()]
+      .sort((a, b) => b.evidenceScore - a.evidenceScore || b.holdingWeight - a.holdingWeight || a.ticker.localeCompare(b.ticker))
+      .slice(0, 20)
+  }
+
   /**
    * 获取节点的匹配状态
    */
@@ -572,8 +696,8 @@ class ETFIndexMatcherService {
       etfs.length > 0 || indices.length > 0
         ? new Date(
             Math.max(
-              ...etfs.map((e: any) => e.createdAt.getTime()),
-              ...indices.map((i: any) => i.createdAt.getTime())
+              ...etfs.map(e => e.createdAt.getTime()),
+              ...indices.map(i => i.createdAt.getTime())
             )
           ).toISOString()
         : null

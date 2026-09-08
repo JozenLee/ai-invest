@@ -1,3 +1,6 @@
+import { administrativeTitle } from './event-policy'
+import { productGroups } from '@/lib/analysis/report-insights'
+import { chinaDate } from './time'
 import type { Bar, Condition, Decision, ETFInput, Evaluation, ResearchSnapshot } from './contracts'
 import { dateKey, nextReview, sessionBoundary } from './time'
 
@@ -80,7 +83,7 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     }).every(Boolean):null
     const benchmarkTrend=benchmarkValid?benchmark.at(-1)!.close/mean(benchmark.slice(-60).map(b=>b.close))!-1:null
     const holdingFloor=requiredHoldingPeriod(cutoff)
-    const holdingsKnown=etf.holdings.length>0&&new Set(etf.holdings.map(h=>h.period)).size===1&&etf.holdings.every(h=>h.period&&h.publishedAt&&holdingFloor&&dateKey(h.period)!>=holdingFloor&&dateKey(h.period)!<=cutoff!&&Date.parse(h.publishedAt)<=Date.parse(snapshot.asOf)&&finite(h.weight)&&h.weight>=0&&h.weight<=100)&&etf.holdings.reduce((s,h)=>s+(h.weight||0),0)<=100.5
+    const holdingsKnown=etf.holdings.length>0&&new Set(etf.holdings.map(h=>h.code)).size===etf.holdings.length&&new Set(etf.holdings.map(h=>h.period)).size===1&&etf.holdings.every(h=>h.period&&(h.publishedAt||h.observedAt)&&holdingFloor&&dateKey(h.period)!>=holdingFloor&&dateKey(h.period)!<=cutoff!&&Date.parse(h.publishedAt||h.observedAt!)<=Date.parse(snapshot.asOf)&&finite(h.weight)&&h.weight>=0&&h.weight<=100)&&etf.holdings.reduce((s,h)=>s+(h.weight||0),0)<=100.5
     const weight=holdingsKnown?etf.holdings.reduce((s,h)=>s+h.weight!,0):null
     // A decision cites representative records, not every raw bundle ever fetched for the product.
     const priceEvidenceIds=etf.evidenceIds.slice(0,12)
@@ -97,10 +100,12 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
       condition('flow','领域多日主力净占比均值(%，交易分类非新增资金)',flowNetPct,'>=',0,flowIds),
       condition('premium','指数基金绝对折溢价(%)',premium===null?null:Math.abs(premium),'<=',rules.maxPremiumPct,p.evidenceIds),
       condition('liquidity','20日平均成交额(元)',amount,'>=',rules.minDailyAmount,priceEvidenceIds),
-      condition('spread','买卖价差（基点，同日快照）',productCurrent&&p.bookDate===cutoff?p.spreadBps:null,'<=',rules.maxSpreadBps,p.evidenceIds),
+      condition('spread','买卖价差（基点，同日快照）',(snapshot.decisionTiming?.phase==='trading' ? p.bookDate===chinaDate(snapshot.asOf)&&!!p.bookPublishedAt&&Date.parse(snapshot.asOf)-Date.parse(p.bookPublishedAt)>=0&&Date.parse(snapshot.asOf)-Date.parse(p.bookPublishedAt)<=300_000 : p.bookDate===cutoff)?p.spreadBps:null,'<=',rules.maxSpreadBps,p.evidenceIds),
       condition('volatility','年化波动率(%)',volatility===null?null:volatility*Math.sqrt(252)*100,'<=',rules.maxVolatilityPct,priceEvidenceIds),
       condition('holdings','已披露持仓权重覆盖(%，不是实时穿透)',weight,'>=',50,etf.holdings.map(h=>h.evidenceId)),
     ]
+    const premiumCondition=conditions.find(item=>item.key==='premium')!
+    if(premiumCondition.status==='unknown'){premiumCondition.availability=p.navStatus==='failed'?'failed':p.navStatus==='pending-publication'?'pending-publication':p.date?'stale':'missing';premiumCondition.detail=p.navDetail||`收盘价 ${date||'缺失'}；净值 ${p.date||'缺失'}，日期未对齐`}
     const critical=['calendar','session','history','continuity','adjustment','index']
     const blocked=conditions.some(c=>critical.includes(c.key)&&c.status!=='met')
     const riskSignals=[
@@ -111,7 +116,7 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     // A broad-market moving average alone must never turn every sector product into the same exit signal.
     const riskOff=!blocked && riskSignals.filter(Boolean).length>=2
     const related=new Set(etf.holdings.map(h=>h.code))
-    const risks=snapshot.events.filter(e=>e.category==='risk'&&e.status==='evidence'&&e.companies.some(c=>related.has(c)))
+    const risks=snapshot.events.filter(e=>e.category==='risk'&&!administrativeTitle.test(e.title)&&e.status==='evidence'&&e.companies.some(c=>related.has(c)))
     conditions.push(condition('event-risk','重大风险事件待人工复核',risks.length?'yes':'no','=','no',risks.flatMap(e=>e.evidenceIds).slice(0,24)))
     // Company and event availability are independent gates, not a count hidden in metadata.
     const covered=snapshot.companies.filter(c=>related.has(c.code))
@@ -131,6 +136,10 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     }
     conditions.push(condition('profit-growth','披露持仓加权利润同比(%，同币种同报告期)',weightedFinancial('profitGrowthPct'),'>=',0,companyEvidenceIds))
     conditions.push(condition('cash-quality','披露持仓加权经营现金/利润(%)',weightedFinancial('cashConversionPct'),'>=',50,companyEvidenceIds))
+    for(const key of ['profit-growth','cash-quality']) {
+      const c=conditions.find(item=>item.key===key)!
+      if(c.status==='unknown'){const reasons=[...new Set(covered.flatMap(company=>company.financialGaps||[]))];c.availability=reasons.length&&reasons.every(reason=>reason.includes('不适用'))?'not-applicable':'missing';c.detail=reasons.join('；')||'具备指标的持仓权重不足已披露权重的80%'}
+    }
     const sectorEvents=snapshot.events.filter(e=>e.status==='evidence'&&e.category!=='administrative')
     conditions.push(condition('events','有效产业事件证据',sectorEvents.length?1:null,'>=',1,sectorEvents.slice(0,12).flatMap(e=>e.evidenceIds).slice(0,24)))
     const state=blocked?'blocked':riskOff?'risk-off':conditions.every(c=>c.status==='met')?'eligible':'watch'
@@ -142,7 +151,7 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     const tracking=trackingDiff.length>=20?std(trackingDiff):null
     const ruleAction={unheld:state==='eligible'?'建仓' as const:'观望' as const,held:state==='eligible'?'持有' as const:state==='risk-off'?'减仓' as const:'观望' as const}
     return {ticker:etf.ticker,name:etf.name,indexCode:etf.indexCode,state,unheldAction:ruleAction.unheld,heldAction:ruleAction.held,ruleAction,researchOnly:true,
-      reason:state==='eligible'?'价格、相对强度、资金与产品门禁均满足，建议按风险预算分批建仓；后续按失效条件复核。':state==='risk-off'?'已核验的价格与市场条件触发风险收缩，未持有者建议观望，已持有者建议按组合风险预算分批减仓。':state==='blocked'?'核心数据条件不足，建议维持观望并优先补齐数据。':gaps.join('；'),
+      reason:state==='eligible'?'价格、相对强度、资金与产品门禁均满足，建议按风险预算分批建仓；后续按失效条件复核。':state==='risk-off'?`${etf.name}风险依据：${[benchmarkTrend!==null&&benchmarkTrend<0?`基准低于60日均线${Math.abs(benchmarkTrend*100).toFixed(2)}%`:null,usable&&bars.at(-1)!.close<ma60!?`基金低于60日均线${((1-bars.at(-1)!.close/ma60!)*100).toFixed(2)}%`:null,indexValid&&indices.at(-1)!.close<mean(indices.slice(-20).map(row=>row.close))!?'跟踪指数低于20日均线':null].filter(Boolean).join('；')}。持仓调整结合实际暴露与成本。`:state==='blocked'?'核心数据条件不足，建议维持观望并优先补齐数据。':gaps.join('；'),
       trigger:`规则版本1：连续${rules.entryConfirmDays}日指数趋势确认、相对强度、${rules.flowDays}日资金及全部产品/证据门禁同时满足。`,
       invalidation:'基准或ETF跌破60日均线、重大事件风险、任一关键数据失效；新事件需人工核验，不自动清仓。',horizon:`${profile.horizonDays}个交易日，盘后复核，次日盘前过期`,evidence:evidenceIds.map(id=>{const e=snapshot.evidence.find(e=>e.id===id);return e?`${id} · ${e.source} · ${e.dataDate||e.publishedAt||'日期未知'}`:id}),
       conditions,gaps,evidenceIds,expiresAt:expiry,metrics:{date,ma20,ma60,return20Pct:ret,relative20Pct:rs,volatilityPct:volatility===null?null:volatility*Math.sqrt(252)*100,premiumPct:premium,amount20:amount,flowSum,flowNetPct,flowDays:flowComplete?rules.flowDays:0,adjusted,trackingErrorPct:tracking===null?null:tracking*Math.sqrt(252)*100,disclosedWeightPct:weight} }
@@ -182,8 +191,12 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     const changedConditions=d.conditions.filter(c=>{const before=old?.conditions.find(o=>o.key===c.key);return !before||before.status!==c.status}).map(c=>c.key)
     return !old||old.state!==d.state||changedConditions.length?[{ticker:d.ticker,from:old?.state||'new',to:d.state,reason:d.reason,changedConditions}]:[]
   }):[]
-  return {version:1,snapshotId:snapshot.id,asOf:snapshot.asOf,workflow:snapshot.workflow,profile,expectedSession:cutoff,calendarVerified:boundary.verified,validation:'experimental-not-backtest-validated',decisions,
-    products:snapshot.etfs.map(e=>({ticker:e.ticker,indexCode:e.indexCode,feePct:e.product.feePct,navDate:e.product.date,shareChangePct:e.product.shares!==null&&e.product.previousShares!==null&&e.product.previousShares>0?(e.product.shares/e.product.previousShares-1)*100:null,trackingErrorPct:decisions.find(d=>d.ticker===e.ticker)?.metrics.trackingErrorPct??null,pe:e.product.pe,pb:e.product.pb,valuationDate:e.product.valuationDate||null,valuationSource:e.product.valuationSource||null,pePercentile5y:e.product.pePercentile5y,pbPercentile5y:e.product.pbPercentile5y,valuationSampleCount:e.product.valuationSampleCount,alternatives:e.indexCode?snapshot.etfs.filter(other=>other.ticker!==e.ticker&&other.indexCode===e.indexCode).map(other=>other.ticker):[],exposure:profile.segments.map(s=>({segment:s.name,weightPct:decisions.find(d=>d.ticker===e.ticker)?.metrics.disclosedWeightPct==null?null:e.holdings.filter(h=>s.companies.includes(h.code)).reduce((n,h)=>n+(h.weight||0),0)}))})),
+  const result:Evaluation = {version:1,snapshotId:snapshot.id,asOf:snapshot.asOf,workflow:snapshot.workflow,profile,expectedSession:cutoff,calendarVerified:boundary.verified,validation:'experimental-not-backtest-validated',decisions,
+    products:snapshot.etfs.map(e=>({nav:e.product.nav,navSource:e.product.navSource,navStatus:e.product.navStatus,navDetail:e.product.navDetail,ticker:e.ticker,indexCode:e.indexCode,feePct:e.product.feePct,navDate:e.product.date,shareChangePct:e.product.shares!==null&&e.product.previousShares!==null&&e.product.previousShares>0?(e.product.shares/e.product.previousShares-1)*100:null,trackingErrorPct:decisions.find(d=>d.ticker===e.ticker)?.metrics.trackingErrorPct??null,pe:e.product.pe,pb:e.product.pb,valuationDate:e.product.valuationDate||null,valuationSource:e.product.valuationSource||null,alternatives:e.indexCode?snapshot.etfs.filter(other=>other.ticker!==e.ticker&&other.indexCode===e.indexCode).map(other=>other.ticker):[],exposure:profile.segments.map(s=>({segment:s.name,weightPct:decisions.find(d=>d.ticker===e.ticker)?.metrics.disclosedWeightPct==null?null:e.holdings.filter(h=>s.companies.includes(h.code)).reduce((n,h)=>n+(h.weight||0),0)}))})),
     indexBreadth:{mappedIndices:indexGroups.size,usableIndices:usableIndices.length,aboveMA20:usableIndices.filter(b=>b.at(-1)!.close>mean(b.slice(-20).map(r=>r.close))!).length,coverage:indexGroups.size?usableIndices.length/indexGroups.size:0},
-    modules:{market:{status:benchmark.length>=rules.minHistory&&benchmark.at(-1)?.date===cutoff?'available':'missing',detail:'统一收盘日与基准序列'},flow:{status:flowComplete?'available':'missing',detail:flowComplete?`${rules.flowDays}个交易日完整领域板块覆盖`:'需要配置领域板块并补齐多日记录'},company:companyModule,events:{status:snapshot.events.some(e=>e.status==='evidence')?'available':'missing',detail:'同标题/公司/日期归并，异标题事件仍需人工核验，转载不算独立证据'}},events:snapshot.events,changes,previousSnapshotId:previous?.snapshotId||null,evidence:snapshot.evidence,omittedConditions}
+    modules:{market:{status:benchmark.length>=rules.minHistory&&benchmark.at(-1)?.date===cutoff?'available':'missing',detail:'统一收盘日与基准序列'},flow:{status:flowComplete&&flowNetPct!==null?'available':flowComplete?'limited':'missing',detail:flowComplete&&flowNetPct===null?'领域资金净额已取得，但主力净占比缺失，不用于资金条件判断':flowComplete?`${rules.flowDays}个交易日完整领域板块覆盖`:'需要配置领域板块并补齐多日记录'},company:companyModule,events:{status:snapshot.events.some(e=>e.status==='evidence')?'available':'missing',detail:'同标题/公司/日期归并，异标题事件仍需人工核验，转载不算独立证据'}},events:snapshot.events,changes,previousSnapshotId:previous?.snapshotId||null,evidence:snapshot.evidence,omittedConditions}
+  result.baselineReport=previous?.baselineReport
+  result.comparisonVersion=1
+  result.productComparisons=productGroups(result).map(group=>({indexCode:group.indexCode,comparisonDate:group.comparisonDate,candidate:group.comparisonCandidate,status:group.status,executionReady:group.executionReady,reason:group.reason,products:group.products.map(product=>({ticker:product.ticker,score:product.score,exclusions:product.exclusions}))}))
+  return result
 }

@@ -189,3 +189,15 @@ async def test_etf_holdings_batch_is_concurrent_and_keeps_diagnostics(monkeypatc
     assert diagnostics["a"]["status"] == "success"
     assert diagnostics["bad"]["status"] == "error"
     assert diagnostics["bad"]["rows"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sparse_statement_does_not_erase_reported_ratios(provider, monkeypatch):
+    async def request(api, **params):
+        if api == 'fina_indicator':
+            return pd.DataFrame([{'end_date': '20260630', 'netprofit_yoy': 25.0}])
+        return pd.DataFrame([{'end_date': '20260630', 'netprofit_yoy': float('nan'), 'n_income': 0}])
+    monkeypatch.setattr(provider.tushare, 'request_dataframe', request)
+    rows = await provider._get_tushare_financial_report('300308', 'income')
+    assert rows[0]['netprofit_yoy'] == 25
+    assert rows[0]['n_income'] == 0

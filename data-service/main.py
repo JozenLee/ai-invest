@@ -37,7 +37,7 @@ os.environ.pop('http_proxy', None)
 os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
-from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact
+from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact, company_context
 from routers import stocks, industry_analysis, fund, local_data
 
 # 配置日志
@@ -329,6 +329,7 @@ app.include_router(trends.router, prefix="/api/trends", tags=["trends"])
 app.include_router(platform_configs.router, prefix="/api/platform-configs", tags=["platform-configs"])
 app.include_router(industry_graph.router)
 app.include_router(industry_query.router)
+app.include_router(company_context.router)
 app.include_router(impact.router)
 app.include_router(stocks.router)
 app.include_router(industry_analysis.router, prefix="/api")

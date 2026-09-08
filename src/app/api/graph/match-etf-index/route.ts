@@ -3,6 +3,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { etfIndexMatcher } from '@/lib/services/etf-index-matcher.service'
+import { syncGraphEtfSubscriptions } from '@/lib/data-subscription-overview'
 
 export const maxDuration = 300 // 5分钟超时
 
@@ -82,6 +83,15 @@ export async function POST(request: NextRequest) {
           { success: false, error: '未知的scope类型' },
           { status: 400 }
         )
+    }
+
+    if (result.success) {
+      try {
+        await syncGraphEtfSubscriptions()
+      } catch (syncError) {
+        console.warn('匹配已保存，但刷新综合分析图谱投影失败:', syncError)
+        return NextResponse.json({ ...result, projectionWarning: '匹配已保存，但分析投影刷新失败；请在生成报告前刷新图谱投影' }, { status: 202 })
+      }
     }
 
     return NextResponse.json(result)

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 
 const { findMany,calendarFindFirst } = vi.hoisted(() => ({ findMany: vi.fn(),calendarFindFirst:vi.fn() }))
@@ -8,7 +8,8 @@ vi.mock('@/lib/research/store',()=>({getResearchProfile:vi.fn(async(industryId:s
 import { GET } from '../route'
 
 describe('analysis report summaries', () => {
-  beforeEach(() => {findMany.mockReset();calendarFindFirst.mockReset()})
+  beforeEach(() => {vi.useFakeTimers();vi.setSystemTime(new Date('2026-09-05T00:00:00Z'));findMany.mockReset();calendarFindFirst.mockReset()})
+  afterEach(()=>vi.useRealTimers())
 
   it('returns lightweight history records with recommendation confidence', async () => {
     findMany.mockResolvedValue([{
@@ -20,7 +21,7 @@ describe('analysis report summaries', () => {
     expect(payload.reports[0]).toMatchObject({id:'report-1',recommendation:{stateCounts:{'risk-off':1}}})
     expect(payload.reports[0].recommendation.confidencePct).toBeGreaterThan(0)
     expect(payload.reports[0]).not.toHaveProperty('content')
-    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({take:20,select:expect.objectContaining({dataJson:true})}))
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({take:100,select:expect.objectContaining({dataJson:true})}))
   })
   it('marks only the latest same-industry report per trading day for the next analysis',async()=>{
     calendarFindFirst.mockResolvedValue({payload:JSON.stringify({data:[{cal_date:'20260905',is_open:0},{cal_date:'20260904',is_open:1}]})})
@@ -32,5 +33,14 @@ describe('analysis report summaries', () => {
     const response=await GET(new NextRequest('http://localhost/api/analysis/reports?scope=all&contextIndustryId=ai&type=comprehensive&view=summary'))
     const payload=await response.json()
     expect(payload.reports.map((item:{inclusionLabel:string})=>item.inclusionLabel)).toEqual(['纳入下一轮分析','同交易日较早版本','其他产业领域'])
+  })
+  it('hides graph verification reports from the default comprehensive history',async()=>{
+    findMany.mockResolvedValue([
+      {id:'verification',type:'comprehensive',industryId:'ai',industryName:'AI',title:'验证',summary:'',createdAt:new Date('2026-09-05T01:00:00Z'),dataJson:JSON.stringify({metadata:{verificationMode:'graph-e2e'},researchEvaluation:{decisions:[]}})},
+      {id:'normal',type:'comprehensive',industryId:'ai',industryName:'AI',title:'正式',summary:'',createdAt:new Date('2026-09-05T00:00:00Z'),dataJson:JSON.stringify({metadata:{verificationMode:null},researchEvaluation:{decisions:[]}})},
+    ])
+    const response=await GET(new NextRequest('http://localhost/api/analysis/reports?industryId=ai&type=comprehensive&view=summary'))
+    const payload=await response.json()
+    expect(payload.reports.map((item:{id:string})=>item.id)).toEqual(['normal'])
   })
 })

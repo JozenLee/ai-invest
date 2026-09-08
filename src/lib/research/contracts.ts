@@ -16,9 +16,10 @@ export type Profile = {
 }
 export type EventInput = { id: string; title: string; content: string; source: string; url?: string | null; publishedAt: string; fetchedAt: string; company?: string; segments?: string[]; kind: 'announcement' | 'news' }
 export type ResearchEvent = {
-  id: string; title: string; category: 'earnings' | 'demand' | 'policy' | 'risk' | 'administrative' | 'other';
+  id: string; title: string; category: 'earnings' | 'demand' | 'policy' | 'risk' | 'administrative' | 'technology' | 'other';
   publishedAt: string; expiresAt: string; companies: string[]; segments: string[];
   evidenceIds: string[]; sources: string[]; urls: string[]; excerpt: string;
+  selectionReason?: string;
   status: 'evidence' | 'lead'; priority: number; verification: 'source-linked-not-independently-verified';
 }
 export type ETFInput = {
@@ -27,15 +28,15 @@ export type ETFInput = {
   indexCode: string | null; indexName?: string; indexBars: Bar[];
   navHistory?: Array<{date:string;nav:number}>;
   indexConstituents?: Array<{code:string;weight:number;date:string}>;
-  holdings: Array<{ code: string; name: string; weight: number | null; period: string | null; publishedAt: string | null; source: string; evidenceId: string }>;
-  product: { date: string | null; nav: number | null; shares: number | null; previousShares: number | null; shareDate?:string|null; previousShareDate?:string|null; bookDate?:string|null; valuationDate?:string|null; valuationSource?:string|null; pePercentile5y?:number|null; pbPercentile5y?:number|null; valuationSampleCount?:number; spreadBps: number | null; feePct: number | null; pe: number | null; pb: number | null; evidenceIds: string[] };
+  holdings: Array<{ code: string; name: string; weight: number | null; period: string | null; publishedAt: string | null; observedAt?: string | null; source: string; evidenceId: string }>;
+  product: { navSource?:string|null; navStatus?:string|null; navDetail?:string|null; publicationNotes?:string[]; date: string | null; nav: number | null; shares: number | null; previousShares: number | null; shareDate?:string|null; previousShareDate?:string|null; bookDate?:string|null; bookPublishedAt?:string|null; valuationDate?:string|null; valuationSource?:string|null; pePercentile5y?:number|null; pbPercentile5y?:number|null; valuationSampleCount?:number; spreadBps: number | null; feePct: number | null; pe: number | null; pb: number | null; evidenceIds: string[] };
 }
 export type ResearchSnapshot = {
   version: 1; id: string; asOf: string; capturedAt: string; profile: Profile; calendar: CalendarDay[]; evidence: Evidence[];
   etfs: ETFInput[]; benchmarkBars: Bar[]; sectorFlows: Array<{ date: string; sector: string; net: number; netPct: number | null; evidenceId: string }>;
   events: ResearchEvent[];
   historicalReports?: Array<{ reportId:string; industryId:string; industryName:string; sessionDate:string; createdAt:string; title:string; summary:string; confidencePct:number|null; recommendation:unknown; stateCounts:Record<string,number>; role:'historical-context' }>;
-  companies: Array<{ code: string; name: string; segment: string; pool: 'holding' | 'leader' | 'graph' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; evidenceIds: string[] }>;
+  companies: Array<{ code: string; name: string; stage?:string; stageCode?:string; segment: string; segmentCode?:string; pool: 'holding' | 'leader' | 'graph' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; financialGaps?:string[]; evidenceIds: string[]; representativeEtfs?:Array<{code:string;name:string;relevance:number;holdingVerified:boolean;holdingWeight?:number;reportPeriod?:string;source?:string}>; representativeIndices?:Array<{code:string;name:string;relevance:number;source?:string}>; matchSource?:string; matchConfidence?:number; representativenessScore?:number; selectionReason?:string }>;
   graphContext?: FrozenGraphContext;
   /** Frozen projections keep the existing report steps on exactly the same input. */
   projections: Record<string, Record<string, unknown>>;
@@ -43,7 +44,7 @@ export type ResearchSnapshot = {
   decisionTiming?: DecisionTimingAssessment;
   workflow?: { runId: string; parentRunId: string | null; baselineSnapshotId: string | null };
 }
-export type Condition = { key: string; label: string; value: number | string | null; operator: '>=' | '<=' | '='; threshold: number | string; status: 'met' | 'unmet' | 'unknown'; evidenceIds: string[] }
+export type Condition = { availability?:'failed'|'missing'|'stale'|'pending-publication'|'not-applicable'; detail?:string; key: string; label: string; value: number | string | null; operator: '>=' | '<=' | '='; threshold: number | string; status: 'met' | 'unmet' | 'unknown'; evidenceIds: string[] }
 export type Decision = {
   ticker: string; name: string; indexCode: string | null; state: 'blocked' | 'watch' | 'eligible' | 'risk-off';
   unheldAction: '建仓' | '观望'; heldAction: '持有' | '减仓' | '观望';
@@ -63,5 +64,8 @@ export type Evaluation = {
   evidenceTotal?: number; eventsTotal?: number;
   omittedConditions?: Array<{key:string;label:string;reason:string}>;
   workflow?: { runId: string; parentRunId: string | null; baselineSnapshotId: string | null };
-  products?: Array<{ticker:string;indexCode:string|null;feePct:number|null;navDate:string|null;shareChangePct:number|null;trackingErrorPct:number|null;pe?:number|null;pb?:number|null;valuationDate?:string|null;valuationSource?:string|null;pePercentile5y?:number|null;pbPercentile5y?:number|null;valuationSampleCount?:number;exposure:Array<{segment:string;weightPct:number|null}>;alternatives:string[]}>;
+  comparisonVersion?: number;
+  productComparisons?: Array<{indexCode:string;comparisonDate:string|null;candidate:string|null;status:string;executionReady:boolean;reason:string;products:Array<{ticker:string;score:number;exclusions:string[]}>}>;
+  baselineReport?: {id:string;createdAt:string;title:string};
+  products?: Array<{nav?:number|null;navSource?:string|null;navStatus?:string|null;navDetail?:string|null;ticker:string;indexCode:string|null;feePct:number|null;navDate:string|null;shareChangePct:number|null;trackingErrorPct:number|null;pe?:number|null;pb?:number|null;valuationDate?:string|null;valuationSource?:string|null;pePercentile5y?:number|null;pbPercentile5y?:number|null;valuationSampleCount?:number;exposure:Array<{segment:string;weightPct:number|null}>;alternatives:string[]}>;
 }

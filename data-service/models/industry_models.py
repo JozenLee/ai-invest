@@ -76,6 +76,23 @@ class IndustryStructure(BaseModel):
     evidence: List[EvidenceRef] = Field(default_factory=list)
 
 
+class RepresentativeETFRef(BaseModel):
+    code: str
+    name: str
+    holding_weight: Optional[float] = None
+    relevance: float = Field(0.0, ge=0, le=1)
+    report_period: Optional[str] = None
+    source: Optional[str] = None
+    holding_verified: bool = False
+
+
+class RepresentativeIndexRef(BaseModel):
+    code: str
+    name: str
+    relevance: float = Field(0.0, ge=0, le=1)
+    source: str = "segment_semantic_mapping"
+
+
 class CompanyInfo(BaseModel):
     """企业信息"""
     name: str = Field(..., description="企业中文名称")
@@ -89,6 +106,13 @@ class CompanyInfo(BaseModel):
     segment_code: Optional[str] = Field(None, description="所属环节代码")
     stage_code: Optional[str] = Field(None, description="所属阶段代码")
     evidence_urls: List[str] = Field(default_factory=list)
+    representative_etfs: List[RepresentativeETFRef] = Field(default_factory=list)
+    representative_indices: List[RepresentativeIndexRef] = Field(default_factory=list)
+    match_source: str = Field("web_search", description="企业候选的可追溯来源")
+    match_confidence: float = Field(0.5, ge=0, le=1)
+    representativeness_score: float = Field(0.0, ge=0, le=1)
+    selection_reason: Optional[str] = None
+    value_signals: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RelationshipInfo(BaseModel):

@@ -142,12 +142,14 @@ async def get_sector_capital_flow(
         normalized_date = raw_data_date.replace("/", "-").replace("年", "-").replace("月", "-").replace("日", "")
         if len(normalized_date) == 8 and normalized_date.isdigit():
             normalized_date = f"{normalized_date[:4]}-{normalized_date[4:6]}-{normalized_date[6:]}"
-        data_date = normalized_date[:10]
         market_status = get_market_status()
+        data_date = normalized_date[:10] or market_status["lastTradingDate"]
         is_realtime = market_status["isRealtime"] and data_date.replace("-", "") == datetime.now().strftime("%Y%m%d")
         return {
             "success": True,
-            "data": sectors[:20],
+            # 返回完整横截面，由调用方分别选取流入/流出榜。若只截取
+            # 降序后的前 20 条，强势交易日可能完全丢失净流出板块。
+            "data": sectors,
             "source": source,
             "meta": {
                 **market_status,

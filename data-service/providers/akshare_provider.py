@@ -44,9 +44,12 @@ class AKShareProvider(DataProvider):
     def _standardize_sector_flow(data: List[Dict], name_field: str = "行业",
                                   change_field: str = "行业-涨跌幅") -> List[Dict]:
         """统一板块资金流向字段名，将净额单位从亿元转换为元"""
+        from utils.trading_hours import get_last_trading_date
+
         data = [dict(item) for item in data]
         for item in data:
             item["名称"] = item.get(name_field, "")
+            item["日期"] = item.get("日期") or get_last_trading_date()
             try:
                 item["今日涨跌幅"] = float(item.get(change_field, 0))
             except (ValueError, TypeError):
@@ -62,7 +65,14 @@ class AKShareProvider(DataProvider):
                         item[key] = float(item[key]) * 1e8
                     except (ValueError, TypeError):
                         del item[key]
-        return data
+        # AKShare 上游偶尔会返回同名行业。榜单以行业名称为身份，保留
+        # 第一条有效记录，避免同一快照产生重复行和重复 React key。
+        unique = {}
+        for item in data:
+            name = str(item.get("名称", "")).strip()
+            if name and name not in unique:
+                unique[name] = item
+        return list(unique.values())
 
     @staticmethod
     def _find_latest_valid_in_hist(df: pd.DataFrame, col_names: List[str]) -> tuple:

@@ -1,17 +1,18 @@
 import { prisma } from '@/lib/db'
 import { notifySubscriptionWorker } from '@/lib/subscription-dispatch'
+import { chinaDate, dateKey, sessionBoundary } from '@/lib/research/time'
 
 // Only session-critical datasets block a new analysis. Financials and announcements
 // are low-frequency evidence and continue on their subscription schedules.
 const RESEARCH_KEYS=new Set(['research_calendar','index_daily','sector_capital_flow','etf_daily','etf_holdings','etf_research'])
-const DECISION_WINDOW_KEYS=new Set(['index_realtime','etf_realtime','constituent_stock_realtime','sector_capital_flow','stock_announcement'])
+const TRADING_SESSION_KEYS=new Set(['index_realtime','etf_realtime','sector_capital_flow','stock_announcement'])
 const terminal=new Set(['success','failed','partial'])
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms))
 
 type ResearchDatasetStatus = {datasetKey:string;enabled:boolean;status:string;lastError?:string|null}
 
 export function researchDatasetWarnings(datasets:ResearchDatasetStatus[]){
-  const issues=datasets.filter(dataset=>dataset.enabled&&RESEARCH_KEYS.has(dataset.datasetKey)&&['partial','failed'].includes(dataset.status))
+  const issues=datasets.filter(dataset=>dataset.enabled&&(RESEARCH_KEYS.has(dataset.datasetKey)||TRADING_SESSION_KEYS.has(dataset.datasetKey))&&['partial','failed'].includes(dataset.status))
   const groups=new Map<string,ResearchDatasetStatus[]>()
   for(const issue of issues)groups.set(issue.datasetKey,[...(groups.get(issue.datasetKey)||[]),issue])
   return [...groups].map(([key,rows])=>{
@@ -25,15 +26,29 @@ export function shouldRefreshResearchDataset(dataset:{datasetKey:string;enabled:
   return dataset.enabled&&keys.has(dataset.datasetKey)&&!['queued','running'].includes(dataset.status)&&(!dataset.lastSuccessAt||now.getTime()-dataset.lastSuccessAt.getTime()>maxAgeMs)
 }
 
-const maxAgeFor=(datasetKey:string,decisionWindow:boolean)=>decisionWindow
+const maxAgeFor=(datasetKey:string,tradingSession:boolean)=>tradingSession
   ? datasetKey.endsWith('_realtime')||datasetKey==='sector_capital_flow' ? 5*60*1000 : datasetKey==='stock_announcement' ? 20*60*1000 : 90*60*1000
   : 90*60*1000
 
-export async function ensureResearchInputsFresh(industryId:string, options: { refresh?: boolean; decisionWindow?: boolean } = {}){
-  const now=new Date()
-  const [subscriptions,graphRow]=await Promise.all([
+export function hasCurrentResearchSeries(payloads: string[], expectedSession: string) {
+  const fields = new Set<string>()
+  for (const payload of payloads) {
+    try {
+      const data = JSON.parse(payload)?.data || {}
+      for (const field of ['daily','factors','indexDaily']) {
+        if (Array.isArray(data[field]) && data[field].some((row:Record<string,unknown>)=>dateKey(row.trade_date||row.date)===expectedSession)) fields.add(field)
+      }
+    } catch { /* Unreadable bundles cannot establish freshness. */ }
+  }
+  return fields.size === 3
+}
+
+export async function ensureResearchInputsFresh(industryId:string, options: { refresh?: boolean; tradingSession?: boolean; asOf?: string } = {}){
+  const now=new Date(options.asOf||Date.now())
+  const [subscriptions,graphRow,calendarRow]=await Promise.all([
     prisma.dataSubscription.findMany({where:{enabled:true},include:{instrument:true,datasets:true}}),
     prisma.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}}),
+    prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'}}),
   ])
   const normalize=(value:unknown)=>String(value||'').toLowerCase().replace(/^(sh|sz)/,'').replace(/\.(sh|sz)$/,'')
   let graphCodes=new Set<string>()
@@ -43,31 +58,90 @@ export async function ensureResearchInputsFresh(industryId:string, options: { re
     const warnings = researchDatasetWarnings(selected.flatMap(subscription => subscription.datasets))
     return { status: 'warning', queued: 0, completed: 0, partial: 0, failed: 0, warnings: [...new Set(['本轮未触发外部同步，使用当前本地订阅快照', ...warnings])].slice(0, 8) }
   }
-  const decisionWindow=options.decisionWindow===true
-  const eligibleKeys=new Set([...RESEARCH_KEYS,...(decisionWindow?[...DECISION_WINDOW_KEYS]:[])])
-  const targets=selected.flatMap(subscription=>subscription.datasets.filter(dataset=>shouldRefreshResearchDataset(dataset,now,maxAgeFor(dataset.datasetKey,decisionWindow),eligibleKeys)).map(dataset=>({dataset,code:subscription.instrument.code})))
-  const targetIds=new Set(targets.map(target=>target.dataset.id))
-  const existingWarnings=researchDatasetWarnings(selected.flatMap(subscription=>subscription.datasets).filter(dataset=>!targetIds.has(dataset.id)))
-  if(!targets.length)return {status:existingWarnings.length?'warning':'fresh',queued:0,completed:0,partial:0,failed:0,warnings:existingWarnings.slice(0,8)}
-  const runIds=await prisma.$transaction(async tx=>{
-    const ids:string[]=[]
-    for(const target of targets){
-      const claimed=await tx.subscriptionDataset.updateMany({where:{id:target.dataset.id,status:{notIn:['queued','running']}},data:{status:'queued',nextRunAt:now,lastError:null}})
-      if(claimed.count){const run=await tx.dataFetchRun.create({data:{datasetId:target.dataset.id,targetCode:target.code,status:'queued',qualityStatus:'pending'}});ids.push(run.id)}
-    }
-    return ids
-  })
-  if(!runIds.length)return {status:existingWarnings.length?'warning':'fresh',queued:0,completed:0,partial:0,failed:0,warnings:existingWarnings.slice(0,8)}
-  try{await notifySubscriptionWorker()}catch(error){return {status:'blocked',queued:runIds.length,completed:0,partial:0,failed:runIds.length,warnings:[error instanceof Error?error.message:'数据服务不可用，不能冻结新的研究快照']}}
-  for(let attempt=0;attempt<300;attempt++){
-    const runs=await prisma.dataFetchRun.findMany({where:{id:{in:runIds}},include:{dataset:{select:{datasetKey:true}}}})
-    if(runs.length===runIds.length&&runs.every(run=>terminal.has(run.status))){
-      const failed=runs.filter(run=>run.status==='failed'),partial=runs.filter(run=>run.status==='partial')
-      const currentWarnings=[...new Set([...failed,...partial].map(run=>`${run.dataset.datasetKey}：${run.error||'部分数据未取得'}`))]
-      const warnings=[...new Set([...currentWarnings,...existingWarnings])].slice(0,8)
-      return {status:warnings.length?'warning':'fresh',queued:runIds.length,completed:runs.length-failed.length-partial.length,partial:partial.length,failed:failed.length,warnings}
-    }
-    await pause(2000)
+  let calendarOpen=false
+  try{
+    const payload=JSON.parse(calendarRow?.payload||'null')
+    const rows=Array.isArray(payload)?payload:Array.isArray(payload?.data)?payload.data:[]
+    const today=chinaDate(now.toISOString())
+    calendarOpen=rows.some((row:Record<string,unknown>)=>dateKey(row.cal_date||row.date)===today&&Number(row.is_open??row.open)===1)
+  }catch{/* A missing/unreadable calendar is conservatively non-trading. */}
+  const tradingSession=options.tradingSession===true&&calendarOpen
+  // Finish slow evidence collection before refreshing the five-minute feeds.
+  // Observe existing jobs as well as jobs claimed by this invocation.
+  let expectedSession: string | null = null
+  try {
+    const payload=JSON.parse(calendarRow?.payload||'null'),rows=Array.isArray(payload)?payload:payload?.data||[]
+    expectedSession=sessionBoundary(rows.map((row:Record<string,unknown>)=>({date:dateKey(row.cal_date||row.date)||'',open:Number(row.is_open??row.open)===1})),now.toISOString()).expectedSession
+  } catch { /* The frozen calendar gate handles missing calendar evidence. */ }
+  const staleSeries=new Set<string>()
+  if(expectedSession){
+    const etfCodes=selected.filter(item=>item.instrument.type==='ETF').map(item=>item.instrument.code)
+    const bundles=await prisma.rawPayload.findMany({where:{datasetKey:'etf_research',targetCode:{in:etfCodes},fetchedAt:{gte:new Date(now.getTime()-7*86400000),lte:now}},orderBy:{fetchedAt:'desc'}})
+    for(const code of etfCodes)if(!hasCurrentResearchSeries(bundles.filter(row=>row.targetCode===code).map(row=>row.payload),expectedSession))staleSeries.add(code)
   }
-  return {status:'blocked',queued:runIds.length,completed:0,partial:0,failed:0,warnings:['关键数据同步等待超过10分钟；本轮不冻结快照，请在同步完成后继续执行']}
+  const stages = [RESEARCH_KEYS, ...(tradingSession ? [TRADING_SESSION_KEYS] : [])]
+  const result = {status:'fresh',queued:0,completed:0,partial:0,failed:0,warnings:[] as string[]}
+  const deadline = Date.now() + 10 * 60 * 1000
+  let datasets = selected.flatMap(subscription=>subscription.datasets.map(dataset=>({...dataset,code:subscription.instrument.code})))
+  for (const keys of stages) {
+    const checkedAt = new Date()
+    const eligible = datasets.filter(dataset=>dataset.enabled&&keys.has(dataset.datasetKey))
+    const active = eligible.filter(dataset=>['queued','running'].includes(dataset.status))
+    const targets = eligible.filter(dataset=>shouldRefreshResearchDataset(dataset,checkedAt,maxAgeFor(dataset.datasetKey,tradingSession),keys)||dataset.datasetKey==='etf_research'&&staleSeries.has(dataset.code)&&!['queued','running'].includes(dataset.status))
+    const pendingIds = new Set([...active,...targets].map(dataset=>dataset.id))
+    result.warnings.push(...researchDatasetWarnings(eligible.filter(dataset=>!pendingIds.has(dataset.id))))
+    if (!pendingIds.size) continue
+    const runIds = await prisma.$transaction(async tx=>{
+      for (const target of targets) {
+        const claimed = await tx.subscriptionDataset.updateMany({where:{id:target.id,status:{notIn:['queued','running']}},data:{status:'queued',nextRunAt:checkedAt,lastError:null}})
+        if (claimed.count) {
+          await tx.dataFetchRun.create({data:{datasetId:target.id,targetCode:target.code,status:'queued',qualityStatus:'pending'}})
+          result.queued++
+        }
+      }
+      // A scheduler may claim a target between the read and update. Join its run.
+      const runs = await tx.dataFetchRun.findMany({where:{datasetId:{in:[...pendingIds]},status:{in:['queued','running']}}})
+      const covered=new Set(runs.map(run=>run.datasetId))
+      if ([...pendingIds].some(id=>!covered.has(id))) return []
+      return runs.map(run=>run.id)
+    })
+    if (!runIds.length) {
+      result.status='blocked'
+      result.warnings.push('同步状态与任务记录不一致，不能冻结研究快照')
+      return result
+    }
+    try { await notifySubscriptionWorker() } catch {
+      result.status='blocked';result.warnings.push('数据服务不可用，不能冻结新的研究快照');return result
+    }
+    let finished = false
+    while (Date.now() < deadline) {
+      const runs = await prisma.dataFetchRun.findMany({where:{id:{in:runIds}},include:{dataset:{select:{datasetKey:true}}}})
+      if (runs.length===runIds.length&&runs.every(run=>terminal.has(run.status))) {
+        result.failed += runs.filter(run=>run.status==='failed').length
+        result.partial += runs.filter(run=>run.status==='partial').length
+        result.completed += runs.filter(run=>run.status==='success').length
+        result.warnings.push(...runs.filter(run=>run.status!=='success').map(run=>`${run.dataset.datasetKey}：${run.error||'部分数据未取得'}`))
+        finished=true;break
+      }
+      await pause(2000)
+    }
+    if (!finished) {
+      result.status='blocked';result.warnings.push('关键数据同步等待超过10分钟；本轮不冻结快照，请在同步完成后继续执行');return result
+    }
+    const current = await prisma.subscriptionDataset.findMany({where:{id:{in:datasets.map(dataset=>dataset.id)}}})
+    datasets = current.map(dataset=>({...dataset,code:datasets.find(item=>item.id===dataset.id)!.code}))
+  }
+  // Successful jobs can still finish too early relative to other slow feeds.
+  // Do not label that outcome fresh; the frozen timing gate remains authoritative.
+  if (tradingSession) {
+    const finishedAt=new Date()
+    for (const dataset of datasets.filter(dataset=>dataset.enabled&&TRADING_SESSION_KEYS.has(dataset.datasetKey))) {
+      if (!dataset.lastSuccessAt || finishedAt.getTime()-dataset.lastSuccessAt.getTime()>maxAgeFor(dataset.datasetKey,true)) {
+        result.warnings.push(`${dataset.datasetKey}/${dataset.code}：同步结束时仍未满足时效要求`)
+      }
+    }
+  }
+  result.warnings=[...new Set(result.warnings)].slice(0,12)
+  result.status=result.warnings.length?'warning':'fresh'
+  return result
 }

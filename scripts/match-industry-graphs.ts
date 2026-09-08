@@ -8,7 +8,10 @@ async function request(path: string, init?: RequestInit) {
 }
 
 async function main() {
-  const industries = (await request('/api/graph/industries')).data as Array<{ id: string; name: string }>
+  const availableIndustries = (await request('/api/graph/industries')).data as Array<{ id: string; name: string }>
+  const requestedIds = process.argv.flatMap((arg, index, args) => arg === '--industry-id' && args[index + 1] ? [args[index + 1]] : [])
+  const industries = requestedIds.length ? availableIndustries.filter(industry => requestedIds.includes(industry.id)) : availableIndustries
+  if (!industries.length) throw new Error('没有找到待匹配的产业')
   const results = []
   for (const industry of industries) {
     const swimlane = (await request(`/api/graph/industries/${encodeURIComponent(industry.id)}/swimlane`)).data

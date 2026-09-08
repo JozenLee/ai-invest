@@ -28,10 +28,15 @@ type ReportData = {
   researchEvaluation?: { expectedSession?: string | null; decisions?: Array<{state?:string}> }
   investmentAdvice?: string | Record<string,unknown>
   reportQuality?: { confidenceScore?: number }
+  metadata?: { verificationMode?: string | null }
 }
 
 const parse = <T,>(value: string | null | undefined): T | null => { try { return JSON.parse(value || 'null') as T } catch { return null } }
 const iso = (value: Date | string) => value instanceof Date ? value.toISOString() : new Date(value).toISOString()
+
+export function isVerificationReport(candidate: Pick<HistoricalReportCandidate, 'dataJson'>) {
+  return parse<ReportData>(candidate.dataJson)?.metadata?.verificationMode === 'graph-e2e'
+}
 
 function advice(value: ReportData['investmentAdvice']) {
   if (!value) return null
@@ -58,7 +63,7 @@ export function selectHistoricalReports(input:{
   const sessions=[...new Set(input.tradingSessions.filter(day=>day<=cutoff))].sort().slice(-policy.lookbackTradingDays)
   const allowed=new Set(sessions),latestBySession=new Map<string,HistoricalReportCandidate>()
   for(const candidate of [...input.candidates].sort((a,b)=>iso(b.createdAt).localeCompare(iso(a.createdAt)))){
-    if(candidate.industryId!==input.profile.industryId||iso(candidate.createdAt)>input.asOf)continue
+    if(candidate.industryId!==input.profile.industryId||iso(candidate.createdAt)>input.asOf||isVerificationReport(candidate))continue
     const session=reportTradingSession(candidate)
     if(!session||!allowed.has(session)||latestBySession.has(session))continue
     latestBySession.set(session,candidate)
@@ -75,7 +80,7 @@ export function annotateHistoricalReports(candidates:HistoricalReportCandidate[]
   const includedIds=new Set(included.map(item=>item.reportId)),includedSessions=new Set(included.map(item=>item.sessionDate))
   return candidates.map(candidate=>{
     const sessionDate=reportTradingSession(candidate),isIncluded=includedIds.has(candidate.id)
-    const inclusionLabel=isIncluded?'纳入下一轮分析':candidate.industryId!==contextIndustryId?'其他产业领域':sessionDate&&includedSessions.has(sessionDate)?'同交易日较早版本':'不在当前回溯窗口'
+    const inclusionLabel=isVerificationReport(candidate)?'链路验证报告，不纳入分析':isIncluded?'纳入下一轮分析':candidate.industryId!==contextIndustryId?'其他产业领域':sessionDate&&includedSessions.has(sessionDate)?'同交易日较早版本':'不在当前回溯窗口'
     return {sessionDate,includedInNextAnalysis:isIncluded,inclusionLabel}
   })
 }

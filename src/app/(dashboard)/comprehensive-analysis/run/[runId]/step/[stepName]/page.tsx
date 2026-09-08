@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable @typescript-eslint/no-explicit-any -- Historical step artifacts are heterogeneous JSON payloads. */
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
@@ -6,7 +7,6 @@ import { ArrowLeft, Database, FileText, Loader2, ExternalLink, BarChart3, Chevro
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import ReactMarkdown from 'react-markdown'
 import { AnalysisResultView } from '@/components/analysis/AnalysisResultView'
 import { PromptDialog } from '@/components/analysis/PromptDialog'
 import { analysisFieldLabels, chineseValue } from '@/lib/analysis/chinese-labels'
@@ -31,7 +31,7 @@ const labels: Record<string, string> = {
   'market-trends': '市场趋势', 'industry-info': '产业信息', 'etf-codes': '指数基金代码','data-quality':'数据质量','etf-data-gaps':'行情缺口',
   'etf-holdings':'指数基金持仓','holdings-summary':'持仓摘要','news-articles':'资讯样本','news-events':'归并事件','news-evidence-gaps':'资讯证据缺口',
   'news-trends':'资讯趋势','news-sentiment':'资讯倾向','market-reference-data':'市场参考数据','market-reference-indicators':'市场参考指标',
-  'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-decision-support':'组合投资建议','portfolio-decision-validation':'历史回放统计','portfolio-analysis':'私有持仓分析','historical-report-context':'纳入分析的历史报告','historical-report-policy':'历史报告回溯规则',
+  'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-decision-support':'组合投资建议','portfolio-analysis':'私有持仓分析','historical-report-context':'纳入分析的历史报告','historical-report-policy':'历史报告回溯规则',
   code: '代码', ticker: '代码', name: '名称', description: '描述', weight: '权重',
   bind_type: '绑定类型', bindType: '绑定类型', etf_code: '指数基金代码', etf_name: '指数基金名称',
   change_pct: '涨跌幅', change: '涨跌幅', price: '价格', date: '日期', time: '时间',
@@ -139,7 +139,7 @@ export default function StepResultPage() {
   }, [step])
 
   const visibleArtifacts = useMemo(
-    () => (step?.artifacts || []).filter((artifact) => !['etf-codes', 'industry-info', 'ai-prompt'].includes(artifact.artifactKey)),
+    () => (step?.artifacts || []).filter((artifact) => !['etf-codes', 'industry-info', 'ai-prompt', 'portfolio-decision-validation'].includes(artifact.artifactKey)),
     [step]
   )
 

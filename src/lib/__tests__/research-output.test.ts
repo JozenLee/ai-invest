@@ -1,18 +1,38 @@
 import {describe,expect,it} from 'vitest'
-import {validateResearchOutput,valuationNarrative} from '@/lib/workflow/research-output'
+import {saveValidatedResearchOutput,validateResearchOutput,valuationNarrative} from '@/lib/workflow/research-output'
+import type {StepContext} from '@/lib/workflow/types'
 
 describe('research output validation',()=>{
   it('rejects incomplete stage output',()=>{
     expect(()=>validateResearchOutput('{"analysis":"x"}','market-analysis')).toThrow(/缺少字段/)
   })
+  it('requires a dedicated comprehensive conclusion for investment advice',()=>{
+    const raw=JSON.stringify({rating:'谨慎',tacticalView:{},strategicView:{},thesis:'单模块观点',etfImplications:[],scenarios:{},counterEvidence:[],risks:[],watchlist:[]})
+    expect(()=>validateResearchOutput(raw,'investment-advice')).toThrow(/executiveSummary/)
+  })
   it('removes ETF adjustment sources from company financial claims',()=>{
     const raw=JSON.stringify({analysis:'x',stage:'成长期',drivers:[],outlook:'x',evidence:[{claim:'公司净利润增长',source:'Tushare/fund_adj；公司财报'}],counterEvidence:[],watchlist:[]})
     const result=validateResearchOutput(raw,'industry-overview')
     expect(result.text).not.toContain('fund_adj')
-    expect(result.issues).toHaveLength(1)
+    expect(result.issues).toEqual(expect.arrayContaining(['已移除不能支持公司财务结论的ETF复权因子来源','行业总览缺少按产业环节组织的segmentSignals']))
   })
   it('builds valuation text from distinct indices without confusing NAV dates',()=>{
     const text=valuationNarrative([{indexCode:'IDX',pe:20,pb:2,valuationDate:'2026-09-04',valuationSource:'constituents'},{indexCode:'IDX',pe:20,pb:2,valuationDate:'2026-09-04',valuationSource:'constituents'}])
     expect(text).toContain('1个跟踪指数');expect(text).toContain('2026-09-04');expect(text).toContain('constituents')
+  })
+  it('records a limited status when AI prose drops available graph mappings',async()=>{
+    const artifacts=new Map<string,any>([['graph-context',{revisionId:'r1',mappingRevisionId:'m1',companyMappings:[{representativeEtfs:[{code:'159001'}]}]}]])
+    const context={artifacts,saveArtifact:async(key:string,value:unknown)=>{artifacts.set(key,value)}} as StepContext
+    const raw=JSON.stringify({analysis:'x',key_companies:[],chain_structure:[],evidence:[],counterEvidence:[],watchlist:[]})
+    await saveValidatedResearchOutput(context,'company-analysis',raw)
+    expect(artifacts.get('company-analysis-graph-usage-validation')).toMatchObject({status:'limited',mappingRevisionId:'m1'})
+  })
+  it('marks nested company fields as limited instead of accepting shape-only JSON',async()=>{
+    const artifacts=new Map<string,any>()
+    const context={artifacts,saveArtifact:async(key:string,value:unknown)=>{artifacts.set(key,value)}} as StepContext
+    const raw=JSON.stringify({analysis:'x',key_companies:[{公司:'测试公司',代码:'600000'}],chain_structure:[],evidence:[],counterEvidence:[],watchlist:[]})
+    await saveValidatedResearchOutput(context,'company-analysis',raw)
+    expect(artifacts.get('company-analysis-validation')).toMatchObject({status:'limited'})
+    expect(artifacts.get('company-analysis-validation').issues.join('')).toContain('graphPath')
   })
 })

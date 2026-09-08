@@ -124,7 +124,14 @@ async def edit_industry(industry_id: str):
                     market_position: c.market_position,
                     key_products: c.key_products,
                     description: c.description,
-                    evidence_urls: COALESCE(c.source_urls, [])
+                    evidence_urls: COALESCE(c.source_urls, []),
+                    representative_etfs: c.representative_etfs_json,
+                    representative_indices: c.representative_indices_json,
+                    match_source: c.match_source,
+                    match_confidence: c.match_confidence,
+                    representativeness_score: c.representativeness_score,
+                    selection_reason: c.selection_reason,
+                    value_signals: c.value_signals_json
                 }]
             }) as segments
             ORDER BY stage.order
@@ -194,6 +201,7 @@ async def edit_industry(industry_id: str):
                 company_list = []
                 for comp in companies:
                     if isinstance(comp, dict):
+                        import json
                         company_list.append(CompanyInfo(
                             name=comp.get('name', ''),
                             name_en=comp.get('name_en'),
@@ -205,7 +213,14 @@ async def edit_industry(industry_id: str):
                             description=comp.get('description'),
                             segment_code=segment_code,
                             stage_code=stage.get('stage_code'),
-                            evidence_urls=comp.get('evidence_urls', [])
+                            evidence_urls=comp.get('evidence_urls', []),
+                            representative_etfs=json.loads(comp.get('representative_etfs') or '[]') if isinstance(comp.get('representative_etfs'), str) else (comp.get('representative_etfs') or []),
+                            representative_indices=json.loads(comp.get('representative_indices') or '[]') if isinstance(comp.get('representative_indices'), str) else (comp.get('representative_indices') or []),
+                            match_source=comp.get('match_source') or 'web_search',
+                            match_confidence=comp.get('match_confidence') or 0.5,
+                            representativeness_score=comp.get('representativeness_score') or 0.0,
+                            selection_reason=comp.get('selection_reason'),
+                            value_signals=json.loads(comp.get('value_signals') or '{}') if isinstance(comp.get('value_signals'), str) else (comp.get('value_signals') or {}),
                         ))
 
                 details[segment_code] = SegmentDetail(
@@ -439,7 +454,14 @@ async def review_structure(
                                 description=comp.get('description'),
                                 segment_code=segment_code,
                                 stage_code=stage.stage_code,
-                                evidence_urls=comp.get('evidence_urls', [])
+                                evidence_urls=comp.get('evidence_urls', []),
+                                representative_etfs=comp.get('representative_etfs', []),
+                                representative_indices=comp.get('representative_indices', []),
+                                match_source=comp.get('match_source') or 'web_search',
+                                match_confidence=comp.get('match_confidence') or 0.5,
+                                representativeness_score=comp.get('representativeness_score') or 0.0,
+                                selection_reason=comp.get('selection_reason'),
+                                value_signals=comp.get('value_signals', {}),
                             ))
                         else:
                             # 如果已经是CompanyInfo对象，直接使用
@@ -762,12 +784,20 @@ async def run_exploration_task(
 
         explorer = get_explorer_service()
         structure = await explorer.explore_structure(industry_name, description)
+        from services.graph_cognition import assess_structure_cognition
+        cognition = assess_structure_cognition(structure)
+        task = task_manager.get_task(task_id)
+        if task:
+            task.metadata["structure_cognition"] = cognition
+            task_manager.save_task(task)
+        if not structure.structure or cognition["score"] < 50:
+            raise ValueError(f"产业结构认知质量不足，未进入审核: {'；'.join(cognition['issues'])}")
 
         task_manager.update_task(
             task_id,
             status="exploring_details",
             progress=40,
-            current_step="产业链结构已生成，开始填充企业信息...",
+            current_step=f"产业链结构已生成（认知质量 {cognition['score']:.0f}），开始填充企业信息...",
             structure=structure
         )
 
@@ -1512,6 +1542,7 @@ async def save_segment_match_results(
 
     try:
         neo4j_service = get_neo4j_service()
+        mapping_revision_id = str(uuid.uuid4())
 
         async with neo4j_service.session() as session:
             # 将匹配结果转换为JSON字符串存储
@@ -1520,18 +1551,27 @@ async def save_segment_match_results(
 
             # 更新Segment节点，存储匹配结果
             query = """
-            MATCH (s:Segment {id: $segment_id})
+            MATCH (industry:Industry)-[:HAS_STAGE]->(:Stage)-[:HAS_SEGMENT]->(s:Segment {id: $segment_id})
             SET s.matched_etfs = $etfs,
                 s.matched_indices = $indices,
-                s.last_matched_at = datetime()
-            RETURN s.name as name
+                s.last_matched_at = datetime(),
+                industry.mapping_revision_id = $mapping_revision_id,
+                industry.mapping_content_hash = null,
+                industry.mapping_published_at = datetime(),
+                industry.mapping_updated_at = datetime()
+            WITH s
+            OPTIONAL MATCH (s)-[:INCLUDES]->(company:Company)
+            RETURN s.name as name,
+                   collect(DISTINCT {id: company.id, ticker: company.ticker,
+                     representative_etfs_json: company.representative_etfs_json}) AS companies
             """
 
             result = await session.run(
                 query,
                 segment_id=segment_id,
                 etfs=etfs_json,
-                indices=indices_json
+                indices=indices_json,
+                mapping_revision_id=mapping_revision_id,
             )
 
             records = await result.data()
@@ -1539,13 +1579,81 @@ async def save_segment_match_results(
             if not records or len(records) == 0:
                 raise HTTPException(status_code=404, detail="Segment节点不存在")
 
+            company_mapping_count = 0
+            etf_by_code = {
+                str(item.get("code") or "").strip(): item
+                for item in match_result.etfs
+                if item.get("code")
+            }
+            for company in records[0].get("companies", []):
+                if not company.get("id") or not company.get("ticker"):
+                    continue
+                ticker = str(company["ticker"]).strip()
+                placeholders = ",".join("?" for _ in etf_by_code)
+                holding_rows = []
+                if placeholders:
+                    try:
+                        from db import db
+                        holding_rows = db.execute(
+                            f"SELECT etfCode, weight, updateDate FROM ETFHolding WHERE stockCode = ? AND etfCode IN ({placeholders}) ORDER BY weight DESC",
+                            (ticker, *etf_by_code.keys()),
+                        )
+                    except Exception:
+                        holding_rows = []
+                representative_etfs = []
+                for holding in holding_rows:
+                    item = etf_by_code.get(str(holding.get("etfCode") or ""))
+                    if not item:
+                        continue
+                    representative_etfs.append({
+                        "code": item["code"],
+                        "name": item.get("name") or item["code"],
+                        "relevance": float(item.get("relevance") or 0),
+                        "holding_weight": float(holding.get("weight") or 0),
+                        "report_period": str(holding.get("updateDate") or ""),
+                        "source": "local_etf_holding",
+                        "holding_verified": True,
+                    })
+                try:
+                    existing = json.loads(company.get("representative_etfs_json") or "[]")
+                except (TypeError, ValueError):
+                    existing = []
+                merged = {str(item.get("code")): item for item in existing if item.get("code")}
+                merged.update({str(item["code"]): item for item in representative_etfs})
+                representative_indices = [{
+                    "code": item.get("code"),
+                    "name": item.get("name") or item.get("code"),
+                    "relevance": float(item.get("relevance") or 0),
+                    "source": "segment_semantic_mapping",
+                } for item in match_result.indices if item.get("code")]
+                await session.run(
+                    """MATCH (segment:Segment {id: $segment_id})-[membership:INCLUDES]->(company:Company {id: $company_id})
+                       SET membership.representative_etfs_json = $segment_representative_etfs,
+                           membership.representative_indices_json = $representative_indices,
+                           membership.mapping_revision_id = $mapping_revision_id,
+                           membership.mapping_updated_at = datetime()
+                       SET company.representative_etfs_json = $representative_etfs,
+                           company.representative_indices_json = $representative_indices,
+                           company.mapping_updated_at = datetime()
+                       RETURN company.id""",
+                    segment_id=segment_id,
+                    company_id=company["id"],
+                    segment_representative_etfs=json.dumps(representative_etfs, ensure_ascii=False),
+                    representative_etfs=json.dumps(list(merged.values()), ensure_ascii=False),
+                    representative_indices=json.dumps(representative_indices, ensure_ascii=False),
+                    mapping_revision_id=mapping_revision_id,
+                )
+                company_mapping_count += 1
+
             return {
                 "success": True,
                 "message": f"成功保存 {records[0]['name']} 的匹配结果",
                 "data": {
                     "segment_id": segment_id,
                     "etf_count": len(match_result.etfs),
-                    "index_count": len(match_result.indices)
+                    "index_count": len(match_result.indices),
+                    "company_mapping_count": company_mapping_count,
+                    "mapping_revision_id": mapping_revision_id,
                 }
             }
 

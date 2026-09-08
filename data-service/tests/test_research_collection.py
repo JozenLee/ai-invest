@@ -1,7 +1,9 @@
 import pytest
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 from unittest.mock import AsyncMock
-from services.research_collection import collect_research
+from services.research_collection import collect_research, collect_calendar, fetch_orderbook as real_fetch_orderbook
 
 
 @pytest.fixture(autouse=True)
@@ -13,7 +15,7 @@ def no_live_orderbook(monkeypatch):
 async def test_calendar_keeps_closed_days():
     provider = AsyncMock()
     provider.request_dataframe.return_value = pd.DataFrame([{'cal_date': '20260904', 'is_open': 1}, {'cal_date': '20260905', 'is_open': 0}])
-    result = await collect_research(provider, 'research_calendar', 'sh000001')
+    result = await collect_calendar(provider, '20260904', '20260905')
     assert len(result['data']) == 2
     assert result['source'] == 'Tushare/trade_cal'
 
@@ -103,3 +105,128 @@ async def test_index_valuation_falls_back_to_constituent_daily_basic():
     result = await collect_research(provider, 'etf_research', '159995')
     assert result['data']['indexValuation'][0]['pe_ttm'] == pytest.approx(14.285714, rel=1e-5)
     assert result['sources']['indexValuation'] == 'Tushare/index_weight+daily_basic'
+
+
+@pytest.mark.asyncio
+async def test_calendar_queries_both_states_in_bounded_windows():
+    provider = AsyncMock()
+    async def request(api, **params):
+        days = pd.date_range(params['start_date'], params['end_date'])
+        assert len(days) <= 118
+        return pd.DataFrame([{'cal_date': day.strftime('%Y%m%d'), 'is_open': int(day.weekday() < 5)}
+                             for day in days if str(int(day.weekday() < 5)) == params['is_open']])
+    provider.request_dataframe.side_effect = request
+    result = await collect_calendar(provider, '20260101', '20260907')
+    assert len(result['data']) == len(pd.date_range('20260101', '20260907'))
+    assert {row['is_open'] for row in result['data']} == {0, 1}
+
+
+def test_tencent_orderbook_fallback_keeps_source_time_and_identity(monkeypatch):
+    import requests
+    from unittest.mock import Mock
+    from services.research_collection import fetch_orderbook, normalize_tencent_orderbook
+    fields = [''] * 31
+    fields[2], fields[9], fields[19], fields[30] = '159995', '1.119', '1.120', '20260904145900'
+    text = 'v_sz159995="' + '~'.join(fields) + '";'
+    response = Mock(content=text.encode('gb18030'))
+    monkeypatch.setattr(requests.Session, 'get', Mock(side_effect=[requests.ConnectionError(), response]))
+    result = real_fetch_orderbook('159995')
+    assert result['source'] == 'tencent/orderbook'
+    assert result['publishedAt'].startswith('2026-09-04T06:59:00')
+    assert 8 < result['spreadBps'] < 9
+    with pytest.raises(ValueError):
+        normalize_tencent_orderbook(text, '159801')
+    fields[19] = '0'
+    with pytest.raises(ValueError):
+        normalize_tencent_orderbook('v_sz159995="' + '~'.join(fields) + '";', '159995')
+
+
+@pytest.mark.asyncio
+async def test_calendar_uses_explicit_predecessors_when_gateway_ignores_closed_filter():
+    provider = AsyncMock()
+    provider.request_dataframe.return_value = pd.DataFrame([
+        {'cal_date':'20260904','is_open':1,'pretrade_date':'20260903'},
+        {'cal_date':'20260907','is_open':1,'pretrade_date':'20260904'},
+    ])
+    result = await collect_calendar(provider, '20260904', '20260906')
+    assert [row['is_open'] for row in result['data']] == [1,0,0]
+    assert result['data'][-1]['state_basis'] == 'trade_cal.pretrade_date'
+    provider.request_dataframe.return_value = pd.DataFrame([
+        {'cal_date':'20260904','is_open':1,'pretrade_date':'20260903'},
+        {'cal_date':'20260907','is_open':1,'pretrade_date':'20260903'},
+    ])
+    with pytest.raises(ValueError, match='冲突'):
+        await collect_calendar(provider, '20260904', '20260906')
+
+
+@pytest.mark.asyncio
+async def test_parallel_valuation_reads_share_a_lock_on_the_running_loop():
+    import asyncio
+    from services import research_collection as module
+    module._daily_basic_cache.clear()
+    provider = AsyncMock()
+    async def request(*args, **kwargs):
+        await asyncio.sleep(0)
+        return pd.DataFrame([{'ts_code': '600000.SH', 'pe_ttm': 10}])
+    provider.request_dataframe.side_effect = request
+    results = await asyncio.gather(*(module._market_daily_basic(provider, '20260907') for _ in range(4)))
+    provider.request_dataframe.assert_awaited_once()
+    assert all(result == results[0] for result in results)
+
+
+@pytest.mark.asyncio
+async def test_current_session_is_retried_separately_from_cached_history():
+    provider = AsyncMock()
+    async def request(api, **params):
+        if api == 'etf_basic':
+            return pd.DataFrame([{'ts_code':'159995.SZ','index_code':'980017.SZ'}])
+        day = params.get('trade_date', '20260904')
+        return pd.DataFrame([{'ts_code':params.get('ts_code','159995.SZ'),'trade_date':day,
+                              'open':1,'high':1,'low':1,'close':1,'amount':100,'adj_factor':1}])
+    provider.request_dataframe.side_effect = request
+    result = await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,8,9,tzinfo=ZoneInfo('Asia/Shanghai')))
+    for field in ('daily','factors','indexDaily','shares'):
+        assert {row['trade_date'] for row in result['data'][field]} == {'20260904','20260907'}
+
+
+@pytest.mark.asyncio
+async def test_shares_before_publication_are_pending_not_failed():
+    provider = AsyncMock()
+    async def request(api, **params):
+        if api == 'etf_share_size':
+            assert 'trade_date' not in params, 'must not demand unpublished shares'
+            return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260904','total_share':100}])
+        if api == 'fund_nav':
+            return pd.DataFrame([{'ts_code':'159995.SZ','nav_date':'20260907','ann_date':'20260907','unit_nav':1}])
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':1}])
+    provider.request_dataframe.side_effect = request
+    result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,7,19,30,tzinfo=ZoneInfo('Asia/Shanghai')))
+    assert result['fieldStatus']['shares']['status']=='pending-publication'
+    assert 'shares' not in result['failures']
+    assert result['fieldStatus']['shares']['expectedAt']=='2026-09-08T08:30:00+08:00'
+
+
+@pytest.mark.asyncio
+async def test_recent_and_exact_nav_queries_repair_old_wide_response():
+    provider = AsyncMock()
+    async def request(api, **params):
+        if api=='fund_nav':
+            day='20260907' if params.get('nav_date') else '20260904' if params.get('start_date')=='20260824' else '20260828'
+            return pd.DataFrame([{'ts_code':'159995.SZ','nav_date':day,'ann_date':day,'unit_nav':1,'adj_nav':2}])
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':1}])
+    provider.request_dataframe.side_effect=request
+    result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,7,19,30,tzinfo=ZoneInfo('Asia/Shanghai')))
+    assert result['fieldStatus']['nav']['status']=='available'
+    assert [row['nav_date'] for row in result['data']['nav']]==['20260907','20260904','20260828']
+
+
+@pytest.mark.asyncio
+async def test_empty_share_response_after_release_is_a_real_gap():
+    provider=AsyncMock()
+    async def request(api,**params):
+        if api=='etf_share_size':return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260904','total_share':100}])
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':1}])
+    provider.request_dataframe.side_effect=request
+    result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,8,9,tzinfo=ZoneInfo('Asia/Shanghai')))
+    assert 'shares' in result['failures']
+    assert result.get('fieldStatus',{}).get('shares',{}).get('status')!='pending-publication'
