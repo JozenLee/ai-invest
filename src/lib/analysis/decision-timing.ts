@@ -60,13 +60,6 @@ export function isTradingSessionTime(asOf = new Date().toISOString()) {
   const minutes = chinaMinutes(asOf)
   return (minutes >= 9 * 60 + 30 && minutes < 11 * 60 + 30) || (minutes >= 13 * 60 && minutes < 15 * 60)
 }
-function tradingValidity(asOf: string, tradingDate: string) {
-  const minutes = chinaMinutes(asOf)
-  const sessionEnd = minutes < 11 * 60 + 30 ? '11:30' : '15:00'
-  const freshnessEnd = Date.parse(asOf) + policy.maxQuoteAgeSeconds * 1000
-  return new Date(Math.min(freshnessEnd, Date.parse(`${tradingDate}T${sessionEnd}:00+08:00`))).toISOString()
-}
-
 export function assessDecisionTiming(input: {
   asOf: string
   calendar: CalendarDay[]
@@ -92,23 +85,21 @@ export function assessDecisionTiming(input: {
   })
   const quotesFresh = uniqueTickers.length > 0 && quoteLags.every(lag => lag !== null)
   const eventsFresh = eventChecks.length > 0 && eventLags.every(lag => lag !== null)
-  const observationExpiries = [
-    ...uniqueTickers.map(code => Date.parse(quoteByCode.get(code)?.fetchedAt || '') + policy.maxQuoteAgeSeconds * 1000),
-    ...eventChecks.map(check => Date.parse(check.lastSuccessAt || '') + policy.maxEventCheckAgeSeconds * 1000),
-  ].filter(Number.isFinite)
-  const validUntil = phase === 'trading' ? new Date(Math.min(Date.parse(tradingValidity(input.asOf, tradingDate)), ...observationExpiries)).toISOString() : null
   const reasons: string[] = []
   if (phase === 'non-trading') reasons.push(boundary.verified && calendarDay?.open ? '当前不在沪深连续交易时段' : '当前为非交易时间')
   if (phase === 'trading' && !quotesFresh) reasons.push(`目标指数基金实时行情未全部达到5分钟时效（${quoteLags.filter(lag => lag !== null).length}/${uniqueTickers.length}）`)
   if (phase === 'trading' && !eventsFresh) reasons.push(`公告检查未全部达到20分钟时效（${eventLags.filter(lag => lag !== null).length}/${eventChecks.length}）`)
-  const executionReady = phase === 'trading' && quotesFresh && eventsFresh
+  // Snapshot input freshness is audited separately and can block snapshot
+  // creation. Once frozen, report generation time must not make that immutable
+  // trading-session snapshot lose its execution meaning.
+  const executionReady = phase === 'trading'
   const freshQuoteTimes = uniqueTickers.map(code => quoteByCode.get(code)?.fetchedAt || null).filter((value): value is string => !!value).sort()
   const freshEventTimes = eventChecks.map(check => check.lastSuccessAt).filter((value): value is string => !!value).sort()
   return {
     version: 1,
     status: executionReady ? 'execution-ready' : 'reference-only',
     executionReady,
-    label: executionReady ? '交易时段时效已通过' : phase === 'trading' ? '交易时段数据待补齐' : '非交易时段投资参考',
+    label: executionReady ? '交易时段时效已通过' : '非交易时段投资参考',
     phase,
     timezone: 'Asia/Shanghai',
     asOf: input.asOf,
@@ -117,18 +108,18 @@ export function assessDecisionTiming(input: {
     eventCutoff: input.asOf,
     quoteAsOf: freshQuoteTimes[0] || null,
     eventCheckAsOf: freshEventTimes[0] || null,
-    validUntil,
+    validUntil: null,
     quoteCoverage: { fresh: quoteLags.filter(lag => lag !== null).length, total: uniqueTickers.length, maxLagSeconds: quoteLags.every(lag => lag === null) ? null : Math.max(...quoteLags.filter((lag): lag is number => lag !== null)) },
     eventCheckCoverage: { fresh: eventLags.filter(lag => lag !== null).length, total: eventChecks.length, maxLagSeconds: eventLags.every(lag => lag === null) ? null : Math.max(...eventLags.filter((lag): lag is number => lag !== null)) },
     policy,
     reasons,
-    basis: '报告只区分交易时间与非交易时间；趋势和技术指标始终使用最近完整收盘日，交易时段内再追加实时行情与公告时效复核。',
+    basis: '交易时段将五分钟内实时行情冻结为当日临时盘中柱，并与最近完整收盘历史合并计算；净值、持仓、财报等低频字段保留各自披露日期。',
   }
 }
 
-export function effectiveDecisionTiming(value: DecisionTimingAssessment | null | undefined, now = new Date().toISOString(), legacy?: { asOf?: string | null; closeDataSession?: string | null }): DecisionTimingAssessment {
+export function effectiveDecisionTiming(value: DecisionTimingAssessment | null | undefined, _now = new Date().toISOString(), legacy?: { asOf?: string | null; closeDataSession?: string | null }): DecisionTimingAssessment {
   if (!value) {
-    const legacyAsOf = legacy?.asOf || now
+    const legacyAsOf = legacy?.asOf || _now
     return {
       version: 1, status: 'reference-only', executionReady: false, label: '非交易时段投资参考', phase: 'non-trading', timezone: 'Asia/Shanghai', asOf: legacyAsOf,
       tradingDate: chinaDate(legacyAsOf), closeDataSession: legacy?.closeDataSession || null, eventCutoff: legacyAsOf, quoteAsOf: null, eventCheckAsOf: null, validUntil: null,
@@ -139,15 +130,20 @@ export function effectiveDecisionTiming(value: DecisionTimingAssessment | null |
   const legacyPhase=String(value.phase)
   const normalizedPhase:MarketSessionPhase=legacyPhase==='trading'||legacyPhase==='decision-window'?'trading':'non-trading'
   const legacyWindowReason=value.reasons.some(reason=>reason.includes('收盘前决策窗口'))
-  value={...value,phase:normalizedPhase,label:value.executionReady?'交易时段时效已通过':normalizedPhase==='trading'?'交易时段数据待补齐':'非交易时段投资参考',reasons:legacyWindowReason?['当前不在沪深连续交易时段']:value.reasons,basis:'报告只区分交易时间与非交易时间；趋势和技术指标使用最近完整收盘日，交易时段内追加实时时效复核。'}
-  if (!value.executionReady) return value
-  if (!value.validUntil || Date.parse(now) > Date.parse(value.validUntil)) {
-    return { ...value, status: 'reference-only', executionReady: false, label: '交易时段数据待补齐', reasons: [...new Set([...value.reasons, '实时行情已超过5分钟时效，请重新生成报告'])] }
-  }
-  return value
+  const explicitlyReferenceOnly=value.label==='仅供投资参考'||value.reasons.some(reason=>reason.includes('图谱端到端验证'))
+  const executionReady=normalizedPhase==='trading'&&!explicitlyReferenceOnly
+  const reasons=(legacyWindowReason?['当前不在沪深连续交易时段']:value.reasons).filter(reason=>!reason.includes('实时行情已超过5分钟时效'))
+  return {...value,phase:normalizedPhase,status:executionReady?'execution-ready':'reference-only',executionReady,label:explicitlyReferenceOnly?'仅供投资参考':executionReady?'交易时段时效已通过':'非交易时段投资参考',validUntil:null,reasons,basis:value.basis||'报告保留生成时冻结的数据时效边界。'}
 }
 
-export function finalizeDecisionTiming(value: DecisionTimingAssessment, generatedAt: string) {
-  const finalized = effectiveDecisionTiming(value, generatedAt)
-  return { ...finalized, generatedAt }
+export function finalizeDecisionTiming(value: DecisionTimingAssessment, _generatedAt: string) {
+  const finalized = effectiveDecisionTiming(value)
+  return { ...finalized, generatedAt:_generatedAt }
+}
+
+export function normalizeReportTimingText(value:string|null|undefined,timing:DecisionTimingAssessment){
+  if(!value||!timing.executionReady)return value||null
+  return value
+    .replace(/交易时段数据待补齐：实时行情已超过5分钟时效，请重新生成报告。\s*/g,'快照冻结于交易时段，具有执行意义。 ')
+    .replace(/本报告在交易时间生成，实时数据有效至 [^。]+。/g,'本报告的快照冻结于交易时段，报告生成耗时不改变其执行意义。')
 }

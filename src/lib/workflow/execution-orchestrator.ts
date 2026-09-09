@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Persisted workflow artifacts and legacy run metadata are runtime-validated heterogeneous JSON. */
 import { prisma } from '@/lib/db'
-import type { StepDefinition, StepContext, ArtifactType } from './types'
+import type { StepDefinition, StepContext } from './types'
+import {executionWaves} from './execution-waves'
 
 export class ExecutionOrchestrator {
   constructor(
@@ -41,9 +43,7 @@ export class ExecutionOrchestrator {
 
     try {
       await this.applyConditionalSteps(runId)
-      for (const step of this.steps) {
-        await this.executeStep(runId, step.name)
-      }
+      for(const wave of executionWaves(this.steps))await Promise.all(wave.map(step=>this.executeStep(runId,step.name)))
 
       await this.updateRunStatus(runId, 'COMPLETED')
     } catch (error) {
@@ -80,7 +80,7 @@ export class ExecutionOrchestrator {
 
     try {
       // 加载依赖步骤的产物
-      const artifacts = await this.loadArtifacts(runId, stepDef.dependencies)
+      const artifacts = await this.loadArtifacts(runId)
 
       // 构建执行上下文
       const context: StepContext = {
@@ -270,10 +270,7 @@ export class ExecutionOrchestrator {
     }
   }
 
-  private async loadArtifacts(
-    runId: string,
-    dependencySteps: string[]
-  ): Promise<Map<string, any>> {
+  private async loadArtifacts(runId: string): Promise<Map<string, any>> {
     const artifacts = new Map()
     // Steps commonly need both direct dependency outputs and shared inputs
     // produced earlier in the workflow (for example industry-info and ETF
@@ -413,11 +410,12 @@ export class ExecutionOrchestrator {
   /**
    * 获取执行详情
    */
-  async getRunDetails(runId: string, compact = false) {
+  async getRunDetails(runId: string, compact = false, stepName?:string) {
     return prisma.executionRun.findUnique({
       where: { id: runId },
       include: {
         steps: {
+          ...(stepName?{where:{stepName}}:{}),
           orderBy: { stepIndex: 'asc' },
           include: {
             artifacts: {

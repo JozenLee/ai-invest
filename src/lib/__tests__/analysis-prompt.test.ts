@@ -7,10 +7,11 @@ import type {StepContext} from '@/lib/workflow/types'
 function context(){const artifacts=new Map<string,unknown>();return {artifacts,context:{runId:'run',stepId:'step',input:{},artifacts,updateProgress:vi.fn(),saveArtifact:vi.fn(async(key:string,value:unknown)=>{artifacts.set(key,value)})} as StepContext}}
 describe('workflow AI retry',()=>{
   beforeEach(()=>create.mockReset())
-  it('retries one transient timeout and records the recovered attempt',async()=>{
+  it('fails fast after a long timeout instead of repeating the same wait',async()=>{
     create.mockRejectedValueOnce(new Error('aborted')).mockResolvedValueOnce({content:[{type:'text',text:'{}'}]})
-    const {context:ctx,artifacts}=context(),result=await runAnalysisPrompt(ctx,{messages:[{role:'user',content:'研究证据'.repeat(30)}]})
-    expect(result.content[0].text).toBe('{}');expect(create).toHaveBeenCalledTimes(2);expect(artifacts.has('ai-error-attempt-1')).toBe(true);expect(artifacts.get('ai-request-status')).toMatchObject({attempt:2})
+    const {context:ctx,artifacts}=context()
+    await expect(runAnalysisPrompt(ctx,{messages:[{role:'user',content:'研究证据'.repeat(30)}]})).rejects.toThrow('aborted')
+    expect(create).toHaveBeenCalledTimes(1);expect(artifacts.has('ai-error-attempt-1')).toBe(true);expect(artifacts.get('ai-request-status')).toMatchObject({attempt:1,status:'failed'})
   })
 })
 

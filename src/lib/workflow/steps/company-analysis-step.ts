@@ -35,7 +35,7 @@ export const companyAnalysisStep: StepDefinition = {
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {max_tokens:8192,timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'company-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.3})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:2560,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'company-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('company-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

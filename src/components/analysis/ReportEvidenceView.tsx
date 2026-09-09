@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 type Mode = 'related' | 'appendix'
 
 export function ReportEvidenceView({ evaluation, baseUrl, mode = 'appendix' }: { evaluation?: Evaluation; baseUrl: string; mode?: Mode }) {
-  const [scope, setScope] = useState('all')
+  const [scope, setScope] = useState(mode === 'appendix' ? 'decision' : 'all')
   const [limit, setLimit] = useState(mode === 'related' ? 6 : 12)
   const [sourceLimit, setSourceLimit] = useState(30)
   const all = evaluation?.events || []
@@ -28,7 +28,7 @@ export function ReportEvidenceView({ evaluation, baseUrl, mode = 'appendix' }: {
     <p className="text-xs text-muted-foreground">显示 {Math.min(limit, rows.length)} / {rows.length} 项</p>
     <div className="grid gap-3 lg:grid-cols-2">{rows.slice(0, limit).map(event => <article key={event.id} className="min-w-0 rounded-xl border bg-card p-4 [overflow-wrap:anywhere]">
       <h3 className="text-sm font-semibold leading-6">{event.title}</h3>
-      <p className="mt-1 text-xs text-muted-foreground">{event.publishedAt.slice(0, 10)} · {event.sources.map(chineseSource).join('、')}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{event.publishedAt.slice(0, 10)} · {event.sources.map(chineseSource).join('、')}{event.evidenceGrade?` · ${event.evidenceGrade}级证据 · 材料性${event.materialityScore??'待核验'}`:''}</p>
       <p className="mt-2 text-xs text-muted-foreground">{event.status === 'lead' ? '正文不足，仅作线索' : event.category === 'administrative' || administrativeTitle.test(event.title) ? '治理公告，不参与投资判断' : event.priority >= 4 ? '具有产业影响的事件证据' : '一般事件，未列入重点分析'}</p>
       <p className="mt-3 line-clamp-3 text-sm leading-6">{event.excerpt}</p>
       <details className="mt-2"><summary className="cursor-pointer text-xs text-primary">查看全文摘录与来源</summary><p className="mt-2 whitespace-pre-wrap text-sm leading-6">{event.excerpt}</p><div className="mt-2 flex flex-wrap gap-3">{event.urls.map((url, index) => /^https?:\/\//.test(url) ? <a key={url} href={url} target="_blank" rel="noreferrer" className="text-xs text-primary underline">原文 {index + 1}</a> : null)}{event.evidenceIds.map((id, index) => <a key={id} href={`${baseUrl}&evidence=${encodeURIComponent(id)}`} target="_blank" rel="noreferrer" className="text-xs text-primary underline">冻结记录 {index + 1}</a>)}</div></details>

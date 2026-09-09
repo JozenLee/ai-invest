@@ -10,13 +10,15 @@ const list=(value:unknown)=>Array.isArray(value)?value.filter((item):item is str
 
 function fallback(context:Parameters<NonNullable<StepDefinition['execute']>>[0]){
   const input=row(researchEvidence(context,'news-analysis')),events=rows(input.events),graph=row(input.graph),mappings=rows(graph.eventMappings)
-  const catalysts=events.slice(0,6).map(event=>{
+  const catalystEvents=events.filter(event=>event.category!=='risk').slice(0,5)
+  const catalysts=catalystEvents.map(event=>{
     const mapping=mappings.find(item=>item.eventId===event.id),path=rows(mapping?.paths)[0]
     const segments=list(path?.segmentNames).length?list(path?.segmentNames):list(event.segments)
     return {event:String(event.title||'事件标题待核验'),path:segments.length?`冻结事件 → ${segments.join(' → ')} → 相关指数基金（方向待复核）`:'冻结事件 → 产业环节待映射',affectedCompanies:list(path?.affectedCompanies).length?list(path?.affectedCompanies):list(event.companies),affectedEtfs:list(path?.affectedEtfs),conditions:'需由订单、财务、市场和实际指数暴露共同验证',confidence:'待智能复核'}
   })
   const evidence=events.slice(0,8).map(event=>({claim:String(event.title||'冻结事件'),source:list(event.sources).join('、')||'冻结事件来源',date:String(event.publishedAt||''),evidenceIds:list(event.evidenceIds).slice(0,6)}))
-  return {analysis:`产业事件智能请求未完成；已保留${events.length}项实际入模的冻结事件、来源和图谱路径，并以结构化降级结果继续生成报告，不据此判断情绪方向。`,sentiment:'未知',catalysts,risks:['智能事件归纳未完成，事件方向、传导强度和产业影响需下一轮复核。'],evidence,watchlist:events.slice(0,6).map(event=>String(event.title||'')).filter(Boolean)}
+  const risks=events.filter(event=>event.category==='risk').slice(0,4).map(event=>`${String(event.title||'风险事件')}（${String(event.evidenceGrade||'等级待核验')}级证据，材料性${String(event.materialityScore??'待核验')}）`)
+  return {analysis:`已对${events.length}项决策事件完成来源等级、独立性、材料性与图谱路径的确定性筛选；方向与影响仍由最终综合模型结合市场和财务证据判断。`,sentiment:'未知',catalysts,risks, evidence,watchlist:events.slice(0,6).map(event=>String(event.title||'')).filter(Boolean)}
 }
 
 /**
@@ -34,8 +36,15 @@ export const newsAnalysisStep: StepDefinition = {
     const prompt = researchPrompt(context, 'news-analysis')
 
     let result:string
+    if(process.env.AI_ENABLE_EVENT_SYNTHESIS!=='true'){
+      result=JSON.stringify(fallback(context))
+      await context.saveArtifact('news-analysis-ai-status',{status:'deterministic',reason:'事件已在采集层完成分级去重，方向交由最终综合模型判断'},'DATA')
+      await saveValidatedResearchOutput(context,'news-analysis',result)
+      await context.updateProgress(1,1,'事件证据筛选完成')
+      return
+    }
     try{
-      const response = await runAnalysisPrompt(context, {max_tokens:8192,timeoutMs:180000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'news-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.3})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_FAST_MODEL,max_tokens:4096,timeoutMs:90000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'news-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('news-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

@@ -4,6 +4,7 @@ const values:Record<string,string>={
   up:'上行',down:'下行',stable:'震荡',unknown:'未知',low:'低',medium:'中',high:'高',
   positive:'积极',neutral:'中性',negative:'消极',emerging:'萌芽期',growing:'成长期',mature:'成熟期',declining:'衰退期',
   met:'已满足',unmet:'未满足',lead:'待核实线索',evidence:'有效证据',true:'是',false:'否',
+  completed:'已完成',passed:'通过',warning:'有提示',deterministic:'确定性汇编','reference-only':'仅供参考','non-trading':'非交易时段',running:'进行中',pending:'等待中','historical-comprehensive-conclusion':'历史综合结论',
 }
 
 export function chineseValue(value:unknown){
@@ -82,7 +83,7 @@ export const analysisFieldLabels:Record<string,string>={
   key_companies:'重点企业证据',chain_structure:'产业链结构',catalysts:'催化因素',risks:'风险提示',sentiment:'资讯倾向',stage:'产业阶段',
   facts:'证据事实',inference:'分析推断',boundary:'证据边界',data_scope:'数据范围',evidence_boundary:'适用边界',conclusion:'结论',source:'来源',
   date:'日期',content:'内容',details:'说明',evidence:'依据',risk:'风险',driver:'驱动因素',watch_points:'后续观察',watchlist:'跟踪清单',
-  counterEvidence:'反向证据',counter_evidence:'反向证据',claim:'判断',executiveSummary:'综合投资结论',allocationStance:'配置立场',keyDrivers:'关键驱动',mainRisks:'主要风险',actionPlan:'行动建议',reviewTriggers:'复核触发项',thesis:'研究论点',etfImplications:'指数基金影响',scenarios:'情景分析',
+  counterEvidence:'反向证据',counter_evidence:'反向证据',claim:'判断',executiveSummary:'综合投资结论',allocationStance:'配置立场',keyDrivers:'关键驱动',opportunities:'机会与兑现状态',mainRisks:'主要风险',watchPoints:'重点关注',actionPlan:'建议操作',priority:'操作优先级',historyComparison:'历史机会验证',reviewTriggers:'复核触发项',thesis:'研究论点',etfImplications:'指数基金影响',scenarios:'情景分析',
   base:'基准情景',bull:'乐观情景',bear:'悲观情景',period:'报告期',reportType:'报表类型',publishDate:'发布日期',currency:'币种',
   status:'状态',quality:'数据质量',count:'数量',total:'总数',name:'名称',code:'代码',ticker:'证券代码',description:'说明',weight:'权重',
   role:'产业角色',fact:'事实摘要',evidenceId:'证据编号',industry_stage:'产业环节',segments:'细分环节',companies:'关联企业',assessment:'分析判断',

@@ -31,6 +31,12 @@ describe('versioned graph research context', () => {
     expect(graphContextIssues(context)).toEqual([])
   })
 
+  it('maps company-specific events through the company graph membership',()=>{
+    const context=buildFrozenGraphContext(group,{},[{id:'event-company',title:'芯片公司调研',segments:[],companies:['688001']}])
+    expect(context.eventMappings[0]).toMatchObject({directSegments:['chip'],directSegmentNames:['芯片']})
+    expect(context.eventMappings[0].paths.some(path=>path.affectedCompanies.includes('688001'))).toBe(true)
+  })
+
   it('blocks unversioned or relation-free context', () => {
     const context = buildFrozenGraphContext({ id: 'legacy', name: '旧图谱', stages: [] })
     expect(graphContextIssues(context)).toContain('产业图谱尚未发布为可追溯版本')

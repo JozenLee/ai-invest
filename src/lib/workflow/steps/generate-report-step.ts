@@ -5,8 +5,10 @@ import { buildReportQuality, buildReportReviewDelta } from '@/lib/analysis/repor
 import type { Evaluation } from '@/lib/research/contracts'
 import { effectiveDecisionTiming, finalizeDecisionTiming, type DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
 import { applyDecisionTimingGate } from '@/lib/portfolio/decision-support'
+import { auditEvidenceTree } from '@/lib/analysis/evidence-references'
 import type { FrozenGraphContext } from '@/lib/graph/research-context'
 import type { StepDefinition } from '../types'
+import { refreshEventPaths } from '../event-paths'
 
 type ArchivedReportData = {
   socialReport?: SocialReport | null
@@ -74,20 +76,22 @@ export const generateReportStep: StepDefinition = {
     const lineage = context.input.rulesOnly ? await reviewLineage(context.input.parentRunId) : { parent: null, narrative: null }
     const parentData = parseArchivedData(lineage.parent?.dataJson || null)
     const inheritedData = parseArchivedData(lineage.narrative?.dataJson || null)
-    const industryAnalysis = context.input.rulesOnly ? inheritedData.industryAnalysis : context.artifacts.get('industry-overview')
-    const companyAnalysis = context.input.rulesOnly ? inheritedData.companyAnalysis : context.artifacts.get('company-analysis')
-    const sentimentAnalysis = context.input.rulesOnly ? inheritedData.sentimentAnalysis : context.artifacts.get('news-analysis')
-    const investmentAdvice = context.input.rulesOnly ? inheritedData.investmentAdvice : context.artifacts.get('investment-advice')
+    const evidenceSources=(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]) as Evaluation['evidence']
+    const industryAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.industryAnalysis : context.artifacts.get('industry-overview'),evidenceSources)
+    const companyAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.companyAnalysis : context.artifacts.get('company-analysis'),evidenceSources)
+    const inheritedSentiment = context.input.rulesOnly ? inheritedData.sentimentAnalysis : context.artifacts.get('news-analysis')
+    const investmentAdvice = auditEvidenceTree(context.input.rulesOnly ? inheritedData.investmentAdvice : context.artifacts.get('investment-advice'),evidenceSources)
     const investmentRecord = record(investmentAdvice)
     const executiveSummary = record(investmentRecord.executiveSummary)
     const executiveConclusion = String(executiveSummary.conclusion || investmentRecord.thesis || '').replace(/\s+/g, ' ').trim()
-    const marketAnalysis = context.input.rulesOnly ? inheritedData.marketAnalysis : context.artifacts.get('market-analysis')
+    const marketAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.marketAnalysis : context.artifacts.get('market-analysis'),evidenceSources)
     const etfBindings = (context.artifacts.get('etf-bindings') as Array<Record<string, unknown>> | undefined) || []
     const evaluation = context.artifacts.get('research-evaluation') as Evaluation | undefined
     const dataQuality = context.artifacts.get('data-quality')
     const researchPreflight = context.artifacts.get('research-preflight')
     const graphContext = (context.artifacts.get('graph-context') || context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext | undefined
     const graphMappingValidation = context.artifacts.get('graph-mapping-validation')
+    const sentimentAnalysis = auditEvidenceTree(refreshEventPaths(inheritedSentiment,graphContext),evidenceSources)
     const graphReportSection = graphContext ? {
       revisions: {
         structureRevisionId: graphContext.revisionId,
@@ -96,6 +100,7 @@ export const generateReportStep: StepDefinition = {
         mappingRevisionId: graphContext.mappingRevisionId,
         mappingContentHash: graphContext.mappingContentHash,
         mappingPublishedAt: graphContext.mappingPublishedAt,
+        mappingSource: graphContext.mappingSource,
         sourceFetchedAt: graphContext.sourceFetchedAt,
       },
       coverage: graphContext.coverage,
@@ -105,11 +110,11 @@ export const generateReportStep: StepDefinition = {
           name: segment.name,
           matchedEtfs: (segment.etfs || []).slice(0, 5).map(item => ({ code: item.code, name: item.name, relevance: item.relevance })),
           matchedIndices: (segment.indices || []).slice(0, 5).map(item => ({ code: item.code, name: item.name, relevance: item.relevance })),
-          representativeCompanies: [...(segment.companies || [])].sort((a, b) => (b.representativenessScore || 0) - (a.representativenessScore || 0)).slice(0, 3).map(company => ({ code: company.code, name: company.name, matchSource: company.matchSource, matchConfidence: company.matchConfidence, representativenessScore: company.representativenessScore, selectionReason: company.selectionReason, representativeEtfs: company.representativeEtfs, representativeIndices: company.representativeIndices })),
+          representativeCompanies: [...(segment.companies || [])].sort((a, b) => (b.representativenessScore || 0) - (a.representativenessScore || 0)).slice(0, 2).map(company => ({ code: company.code, name: company.name, matchSource: company.matchSource, matchConfidence: company.matchConfidence, representativenessScore: company.representativenessScore, selectionReason: company.selectionReason, representativeEtfs: (company.representativeEtfs||[]).slice(0,3).map(item=>({code:item.code,name:item.name,holdingVerified:item.holdingVerified,holdingWeight:item.holdingWeight,reportPeriod:item.reportPeriod})), representativeIndices: (company.representativeIndices||[]).slice(0,2).map(item=>({code:item.code,name:item.name,relevance:item.relevance})) })),
         })),
       })),
-      etfExposure: (graphContext.etfExposure || []).filter(item => etfBindings.some(binding => binding.etf_code === item.code)).slice(0, 12),
-      eventPropagation: (graphContext.eventMappings || []).slice(0, 8),
+      etfExposure: (graphContext.etfExposure || []).filter(item => etfBindings.some(binding => binding.etf_code === item.code)).slice(0, 8).map(item=>({code:item.code,name:item.name,segments:(item.segments||[]).slice(0,4).map(segment=>({stageName:segment.stageName,segmentName:segment.segmentName,relevance:segment.relevance,holdingVerified:segment.holdingVerified,matchedCompanies:(segment.matchedCompanies||[]).slice(0,4)}))})),
+      eventPropagation: (graphContext.eventMappings || []).slice(0, 5).map(item=>({eventId:item.eventId,title:item.title,directSegmentNames:(item.directSegmentNames||[]).slice(0,4),paths:(item.paths||[]).slice(0,1).map(path=>({segmentNames:(path.segmentNames||[]).slice(0,5),direction:path.direction,weight:path.weight,confidence:path.confidence,affectedCompanies:(path.affectedCompanies||[]).slice(0,5),affectedEtfs:(path.affectedEtfs||[]).slice(0,5)}))})),
       mappingStatus: graphMappingValidation,
       limitation: '图谱关系用于界定产业范围、选择企业样本和构造ETF暴露及传导假设；匹配置信度与历史持仓不单独构成交易信号，披露期不代表实时权重。',
     } : null
@@ -117,7 +122,14 @@ export const generateReportStep: StepDefinition = {
     const frozenTiming = context.artifacts.get('decision-timing') as DecisionTimingAssessment | undefined
     const decisionTiming = frozenTiming ? finalizeDecisionTiming(frozenTiming, generatedAt) : effectiveDecisionTiming(undefined, generatedAt)
     const portfolioDecisionSupport = applyDecisionTimingGate(context.artifacts.get('portfolio-decision-support'), decisionTiming)
-    const reportQuality = buildReportQuality({ evaluation, dataQuality, preflight: researchPreflight, decisionTiming })
+    const analysisStatuses = {
+      market: context.artifacts.get('market-analysis-ai-status') || null,
+      event: context.artifacts.get('news-analysis-ai-status') || null,
+      company: context.artifacts.get('company-analysis-ai-status') || null,
+      industry: context.artifacts.get('industry-overview-ai-status') || null,
+      investment: context.artifacts.get('investment-advice-ai-status') || null,
+    }
+    const reportQuality = buildReportQuality({ evaluation, dataQuality, preflight: researchPreflight, decisionTiming, analysisStatuses })
     const reviewDelta = context.input.rulesOnly ? buildReportReviewDelta({
       current: evaluation,
       previous: parentData.researchEvaluation,
@@ -152,7 +164,7 @@ export const generateReportStep: StepDefinition = {
         industryId: industryInfo.id,
         industryName: industryInfo.name,
         title: context.input.verificationMode==='graph-e2e' ? title : social?.title || title,
-        summary: `${context.input.verificationMode==='graph-e2e'?'仅用于验证知识图谱到综合报告的传递，不构成最新市场分析或交易依据。 ':''}${decisionTiming.executionReady ? '交易时段数据时效已通过。' : `${decisionTiming.label}：${decisionTiming.reasons[0] || '使用最近完整收盘数据'}。`} ${context.input.rulesOnly
+        summary: `${context.input.verificationMode==='graph-e2e'?'仅用于验证知识图谱到综合报告的传递，不构成最新市场分析或交易依据。 ':''}${decisionTiming.executionReady ? '快照冻结于交易时段，具有执行意义。' : `${decisionTiming.label}：${decisionTiming.reasons[0] || '使用最近完整收盘数据'}。`} ${context.input.rulesOnly
           ? `${reviewDelta?.summary || '本地规则复核已完成。'}${lineage.narrative ? ` 正文继承自${lineage.narrative.createdAt.toISOString()}的完整分析，本轮未重新调用AI。` : ''}`
           : executiveConclusion || social?.subtitle || '完整研究与ETF操作建议已生成；一页发布版暂不可用。'}`,
         content: reportContent,
@@ -170,16 +182,11 @@ export const generateReportStep: StepDefinition = {
             industry: context.artifacts.get('industry-overview-graph-usage-validation'),
             investment: context.artifacts.get('investment-advice-graph-usage-validation'),
           },
-          analysisStatuses: {
-            market: context.artifacts.get('market-analysis-ai-status') || null,
-            event: context.artifacts.get('news-analysis-ai-status') || null,
-            company: context.artifacts.get('company-analysis-ai-status') || null,
-            industry: context.artifacts.get('industry-overview-ai-status') || null,
-            investment: context.artifacts.get('investment-advice-ai-status') || null,
-          },
+          analysisStatuses,
           researchPreflight,
           dataQuality,
           reportQuality,
+          strategyValidation: context.artifacts.get('strategy-validation') || null,
           decisionTiming,
           reviewDelta,
           historicalReportContext: context.artifacts.get('historical-report-context') || [],

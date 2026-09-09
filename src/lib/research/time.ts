@@ -23,6 +23,23 @@ export function sessionBoundary(calendar: CalendarDay[], asOf: string) {
   }
   return { expectedSession: null, verified: false }
 }
+
+/**
+ * Research calculations use the current exchange session while the market is
+ * open.  The current session is backed by a frozen realtime quote that is
+ * merged into the completed daily history as a provisional intraday bar.
+ * Outside continuous trading hours we retain the latest completed session.
+ */
+export function analysisSessionBoundary(calendar: CalendarDay[], asOf: string) {
+  const completed = sessionBoundary(calendar, asOf)
+  const today = chinaDate(asOf)
+  const local = new Date(Date.parse(asOf) + 8 * 3600000)
+  const minutes = local.getUTCHours() * 60 + local.getUTCMinutes()
+  const continuousTrading = (minutes >= 9 * 60 + 30 && minutes < 11 * 60 + 30) || (minutes >= 13 * 60 && minutes < 15 * 60)
+  const todayRow = calendar.find(row => row.date === today)
+  if (continuousTrading && todayRow?.open === true) return { expectedSession: today, verified: true, intraday: true }
+  return { ...completed, intraday: false }
+}
 export function nextReview(calendar: CalendarDay[], asOf: string) {
   const today=chinaDate(asOf),close=Date.parse(`${today}T15:00:00+08:00`)
   // A pre-market review is valid through that session. A post-close review

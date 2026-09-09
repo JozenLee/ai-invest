@@ -3,6 +3,9 @@ import { adjustedBars, validBars } from './engine'
 
 export type ReplayCosts = { commissionBps: number; slippageBps: number }
 export type ReplayLedgerEntry = { snapshot: ResearchSnapshot; evaluation: Evaluation }
+const average=(values:number[])=>values.length?values.reduce((sum,value)=>sum+value,0)/values.length:null
+const deviation=(values:number[])=>{const mean=average(values);return mean===null||values.length<2?null:Math.sqrt(values.reduce((sum,value)=>sum+(value-mean)**2,0)/(values.length-1))}
+const annualRatio=(values:number[])=>{const mean=average(values),risk=deviation(values);return mean===null||risk===null||risk===0?null:mean/risk*Math.sqrt(252)}
 
 /** Keep only point-in-time fields required by the walk-forward ledger. */
 export function compactReplaySnapshot(snapshot: ResearchSnapshot): ResearchSnapshot {
@@ -65,16 +68,24 @@ export function replayResearch(snapshots: ResearchSnapshot[], evaluations: Evalu
     }
     // Replay equity chronologically for drawdown; exclude close-before-fill look-ahead.
     let replayCash=1,replayUnits=0
+    const equityCurve:Array<{date:string;equity:number}>=[]
     for(const bar of tradingBars){
       for(const trade of trades.filter(t=>t.date===bar.date)) {
         if(trade.side==='buy'){replayUnits=(replayCash-trade.cost)/trade.price;replayCash=0}else{replayCash=replayUnits*trade.price-trade.cost;replayUnits=0}
       }
-      const equity=replayCash+replayUnits*bar.close;peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak*100)
+      const equity=replayCash+replayUnits*bar.close;equityCurve.push({date:bar.date,equity});peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak*100)
     }
     const final=cash+units*(bars.at(-1)?.close||0)
     const benchmark=validBars(last.benchmarkBars,last.asOf.slice(0,10)).filter(b=>b.date>=tradingBars[0]?.date)
     const rate=(costs.commissionBps+costs.slippageBps)/10000
-    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,benchmarkReturnPct:benchmark.length>1?((benchmark.at(-1)!.close/benchmark[0].open)*(1-rate)-1)*100:null,turnover,maxDrawdownPct:maxDrawdown}
+    const portfolioReturns=equityCurve.slice(1).map((row,index)=>row.equity/equityCurve[index].equity-1)
+    const benchmarkByDate=new Map(benchmark.map(row=>[row.date,row])),aligned=equityCurve.filter(row=>benchmarkByDate.has(row.date))
+    const benchmarkReturns=aligned.slice(1).map((row,index)=>benchmarkByDate.get(row.date)!.close/benchmarkByDate.get(aligned[index].date)!.close-1)
+    const activeReturns=portfolioReturns.slice(-benchmarkReturns.length).map((value,index)=>value-benchmarkReturns[index])
+    const benchmarkReturnPct=benchmark.length>1?((benchmark.at(-1)!.close/benchmark[0].open)*(1-rate)-1)*100:null
+    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,benchmarkReturnPct,excessReturnPct:benchmarkReturnPct===null?null:(final-1)*100-benchmarkReturnPct,turnover,maxDrawdownPct:maxDrawdown,annualizedVolatilityPct:(deviation(portfolioReturns)||0)*Math.sqrt(252)*100,sharpeRatio:annualRatio(portfolioReturns),informationRatio:annualRatio(activeReturns),observations:equityCurve.length}
   })
-  return {status:'paper-only' as const,reason:'只验证可重放与成本口径，不证明投资有效性；成交为模拟，非真实下单',results,costs,validation:'not-validated',snapshots:ordered.length,from:ordered[0].asOf,to:last.asOf}
+  const tested=results.filter(item=>item.status!=='insufficient'),trades=tested.reduce((sum,item)=>sum+item.trades.length,0),observations=tested.length?Math.min(...tested.map(item=>item.observations||0)):0
+  const validation=tested.length&&trades>=30&&observations>=252?'candidate-walk-forward' as const:'insufficient-history' as const
+  return {status:'paper-only' as const,reason:validation==='candidate-walk-forward'?'已达到最小样本门槛，仍需跨市场状态稳定性和参数敏感性复核后才能标记为有效。':'仅验证可重放、成本和风险指标口径；样本不足以证明投资有效性。',results,costs,validation,snapshots:ordered.length,trades,observations,from:ordered[0].asOf,to:last.asOf}
 }

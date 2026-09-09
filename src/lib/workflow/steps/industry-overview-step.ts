@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- AI artifacts are validated after runtime parsing. */
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
@@ -53,10 +54,21 @@ export const industryOverviewStep: StepDefinition = {
     const prompt = researchPrompt(context, 'industry-overview')
 
     let result:string
+    if(process.env.AI_ENABLE_INTERMEDIATE_SYNTHESIS!=='true'){
+      result=JSON.stringify(timeoutFallback(context))
+      const parsed=JSON.parse(result)
+      parsed.analysis='行业总览由冻结图谱及市场、企业、事件模块确定性汇编；跨模块投资研判由最终综合模型完成。'
+      result=JSON.stringify(parsed)
+      await context.saveArtifact('industry-overview-ai-status',{status:'deterministic',reason:'已取消重复的中间层大模型调用'},'DATA')
+      await saveValidatedResearchOutput(context,'industry-overview',result)
+      await context.updateProgress(1,1,'行业总览汇编完成')
+      return
+    }
     try{
       const response = await runAnalysisPrompt(context, {
-        max_tokens:8192,
-        timeoutMs:300000,
+        model:process.env.CLAUDE_FAST_MODEL,
+        max_tokens:4096,
+        timeoutMs:180000,
         maxAttempts:2,
         validateOutput:(text)=>validateResearchOutput(text,'industry-overview'),
       system: RESEARCH_SYSTEM,

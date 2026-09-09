@@ -27,10 +27,10 @@ import {
 import { ReportEvidenceView } from "@/components/analysis/ReportEvidenceView";
 import { PortfolioDecisionPanel } from "@/components/analysis/PortfolioDecisionPanel";
 import { SocialReportView } from "@/components/analysis/SocialReportView";
+import { ComprehensiveConclusionView } from "@/components/analysis/ComprehensiveConclusionView";
 import type { Evaluation } from "@/lib/research/contracts";
 import { chineseNarrative, chineseSource } from "@/lib/analysis/chinese-labels";
 import {
-  consolidateWatchlist,
   decisionConfidence,
   guardActionLanguage,
   productGroups,
@@ -81,6 +81,7 @@ type Structured = {
   };
   dataQuality?: { status?: string };
   reportQuality?: ReportQualityAssessment;
+  strategyValidation?: {status?:string;validation?:string;reason?:string;snapshots?:number;trades?:number;observations?:number;limitations?:string[];results?:Array<{ticker:string;status:string;returnPct:number|null;excessReturnPct?:number|null;maxDrawdownPct:number|null;sharpeRatio?:number|null;informationRatio?:number|null}>};
   decisionTiming?: DecisionTimingAssessment;
   inheritedFromReportId?: string | null;
   historicalReportContext?: Array<{
@@ -88,7 +89,7 @@ type Structured = {
     title: string;
     sessionDate: string;
     createdAt: string;
-    summary: string;
+    comprehensiveConclusion?: unknown;
   }>;
   marketAnalysis?: unknown;
   industryAnalysis?: unknown;
@@ -257,32 +258,9 @@ export default function ComprehensiveReportPage() {
       guardActionLanguage(structured.investmentAdvice, timing.executionReady),
     ),
     industry = parseAnalysis(structured.industryAnalysis);
-  const watchlist = [
-    ...new Set(
-      [
-        structured.investmentAdvice,
-        structured.industryAnalysis,
-        structured.marketAnalysis,
-        structured.companyAnalysis,
-        structured.sentimentAnalysis,
-      ].flatMap((value) => {
-        const row = parseAnalysis(value);
-        return Array.isArray(row.watchlist)
-          ? row.watchlist.filter(
-              (item): item is string => typeof item === "string",
-            )
-          : [];
-      }),
-    ),
-  ];
   const summary = cleanClaim(
     String(parseAnalysis(advice.executiveSummary).conclusion || advice.thesis || industry.analysis || report.summary || ""),
   );
-  const executive = parseAnalysis(advice.executiveSummary);
-  const recommendation = parseAnalysis(advice.recommendation);
-  const executiveDrivers = Array.isArray(executive.keyDrivers) ? executive.keyDrivers.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
-  const executiveRisks = Array.isArray(executive.mainRisks) ? executive.mainRisks.filter((item): item is string => typeof item === "string").slice(0, 3) : [];
-  const executiveActions = parseAnalysis(executive.actionPlan);
   const investmentFallback = structured.analysisStatuses?.investment?.status === "fallback" || JSON.stringify(advice).includes("智能投资建议请求超时");
   const portfolio = applyDecisionTimingGate(
     structured.portfolioDecisionSupport,
@@ -343,7 +321,7 @@ export default function ComprehensiveReportPage() {
         </div>
         <div className="flex flex-wrap gap-2">
           <Badge variant="outline">{timing.label}</Badge>
-          <Badge variant="outline">研究置信度 {readiness.confidencePct}%</Badge>
+          <Badge variant="outline">决策证据覆盖度 {readiness.confidencePct}/100</Badge>
           <Badge variant="outline">{quality?.grade || "—"}级数据质量</Badge>
         </div>
         <h1 className="text-2xl font-semibold sm:text-3xl">
@@ -351,7 +329,7 @@ export default function ComprehensiveReportPage() {
         </h1>
         <p className="text-xs leading-6 text-muted-foreground">
           生成 {date(report.createdAt)} · 证据冻结 {date(evaluation?.asOf)} ·
-          收盘基准 {evaluation?.expectedSession || "未核验"} ·{" "}
+          {timing.phase === "trading" ? "盘中数据日" : "收盘基准"} {evaluation?.expectedSession || "未核验"} ·{" "}
           {decisions.length}只产品 / {coverage.indexCount}个指数
         </p>
       </header>
@@ -393,53 +371,15 @@ export default function ComprehensiveReportPage() {
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 {title("综合投资结论")}
-                <div className="flex flex-wrap gap-2"><Badge variant={investmentFallback ? "outline" : "default"}>{investmentFallback ? "超时降级汇编" : "AI 综合研判"}</Badge><Badge variant="outline">{chineseNarrative(String(advice.rating || "未评级"))}</Badge></div>
+                <Badge variant={investmentFallback ? "outline" : "default"}>{investmentFallback ? "超时降级汇编" : "AI 综合研判"}</Badge>
               </div>
               {investmentFallback && <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">综合模型请求未在时限内完成；本结论由已完成的市场、事件、企业、行业总览和冻结规则结构化汇编，不新增模型推断。</p>}
-              <p className="mt-5 text-base leading-8">
-                {chineseNarrative(summary)}
-              </p>
-              <div className="mt-5 rounded-xl border border-primary/20 bg-primary/[0.035] p-4">
-                <h3 className="text-sm font-medium">配置立场</h3>
-                <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executive.allocationStance || recommendation.reason || "配置立场待生成"))}</p>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">未持有</h3>
-                  <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executiveActions.unheld || recommendation.unheld || "观望"))}</p>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">已持有</h3>
-                  <p className="mt-2 text-sm leading-6">{chineseNarrative(String(executiveActions.held || recommendation.held || "按风险预算复核"))}</p>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">20个交易日</h3>
-                  <p className="mt-2 text-sm leading-6">
-                    {chineseNarrative(
-                      String(
-                        parseAnalysis(advice.tacticalView).signal ||
-                          `${decisions.filter((item) => item.state === "risk-off").length}只产品风险收缩，${decisions.filter((item) => item.state === "eligible").length}只满足条件。`,
-                      ),
-                    )}
-                  </p>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">6—12个月</h3>
-                  <p className="mt-2 text-sm leading-6">
-                    {chineseNarrative(
-                      String(
-                        parseAnalysis(advice.strategicView).thesis ||
-                          industry.outlook ||
-                          "长期观点待生成",
-                      ),
-                    )}
-                  </p>
-                </div>
-              </div>
-              {(executiveDrivers.length > 0 || executiveRisks.length > 0) && <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <div className="rounded-xl border p-4"><h3 className="text-sm font-medium">结论成立的关键驱动</h3><ul className="mt-3 space-y-2">{executiveDrivers.map(item => <li key={item} className="flex gap-2 text-sm leading-6"><span aria-hidden className="mt-2.5 size-1.5 shrink-0 rounded-full bg-emerald-500"/>{chineseNarrative(item)}</li>)}</ul>{!executiveDrivers.length && <p className="mt-2 text-sm text-muted-foreground">旧报告未保存结构化驱动因素。</p>}</div>
-                <div className="rounded-xl border p-4"><h3 className="text-sm font-medium">主要风险与反证</h3><ul className="mt-3 space-y-2">{executiveRisks.map(item => <li key={item} className="flex gap-2 text-sm leading-6"><span aria-hidden className="mt-2.5 size-1.5 shrink-0 rounded-full bg-amber-500"/>{chineseNarrative(item)}</li>)}</ul>{!executiveRisks.length && <p className="mt-2 text-sm text-muted-foreground">旧报告未保存结构化主要风险。</p>}</div>
-              </div>}
+              <ComprehensiveConclusionView
+                advice={advice}
+                fallbackSummary={summary}
+                industryOutlook={industry.outlook}
+                decisionSummary={`${decisions.filter((item) => item.state === "risk-off").length}只产品风险收缩，${decisions.filter((item) => item.state === "eligible").length}只满足条件。`}
+              />
               {structured.inheritedFromReportId && (
                 <p className="mt-4 text-xs text-amber-700">
                   本轮为规则复核，研究正文继承自{" "}
@@ -538,7 +478,7 @@ export default function ComprehensiveReportPage() {
                           未持有：{action.unheld} · 已持有：{action.held}
                         </span>
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          产品证据覆盖评分 {decisionConfidence(decision)}% ·
+                          产品证据覆盖度 {decisionConfidence(decision)}/100 ·
                           指数 {decision.indexCode || "待映射"}
                         </span>
                       </summary>
@@ -555,6 +495,7 @@ export default function ComprehensiveReportPage() {
                             : (decision.metrics.amount20 / 1e8).toFixed(2) +
                               "亿元"}
                         </p>
+                        <p className="text-xs leading-5 text-muted-foreground">多因子诊断 {decision.metrics.factorRegime||"未知"} · 得分 {decision.metrics.factorScore??"未知"} · 60日收益 {decision.metrics.return60Pct?.toFixed(2)??"未知"}% · 120日最大回撤 {decision.metrics.maxDrawdown120Pct?.toFixed(2)??"未知"}%（描述性指标，未直接驱动动作）</p>
                         <dl className="space-y-2">
                           {decision.conditions.map((condition) => (
                             <div
@@ -648,6 +589,7 @@ export default function ComprehensiveReportPage() {
                         {group.valuation.date || "日期未标注"} ·{" "}
                         {chineseSource(group.valuation.source || "来源未标注")}
                       </p>
+                      {(group.valuation.pePercentileHistory!=null||group.valuation.pbPercentileHistory!=null)&&<p className="mt-1 text-xs text-muted-foreground">可用历史样本分位：市盈率 {group.valuation.pePercentileHistory?.toFixed(1)??"缺失"}% · 市净率 {group.valuation.pbPercentileHistory?.toFixed(1)??"缺失"}% · {group.valuation.historyStart||"起点未知"}起 {group.valuation.sampleCount} 期；不等同五年分位</p>}
                     </div>
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[680px] text-left text-sm">
@@ -715,6 +657,7 @@ export default function ComprehensiveReportPage() {
                   </article>
                 );
               })}
+              {!!evaluation?.indexOverlaps?.length&&<div className="rounded-xl border bg-card p-4"><h3 className="font-medium">跨指数持仓重叠</h3><p className="mt-1 text-xs text-muted-foreground">用于识别重复暴露；按最新披露前十大持仓估算，不代表完整指数或实时权重。</p><div className="mt-3 grid gap-2 md:grid-cols-2">{evaluation.indexOverlaps.filter(item=>(item.weightedOverlapPct||0)>0).sort((a,b)=>(b.weightedOverlapPct||0)-(a.weightedOverlapPct||0)).slice(0,8).map(item=><div key={`${item.leftIndexCode}-${item.rightIndexCode}`} className="rounded-lg border p-3 text-xs"><span className="font-medium">{item.leftIndexCode} ↔ {item.rightIndexCode}</span><span className="float-right">重叠 {item.weightedOverlapPct?.toFixed(1)??"未知"}%</span><p className="mt-1 text-muted-foreground">共同持仓 {item.commonHoldings} 家 · 披露期 {item.periods.join("、")||"未知"}</p></div>)}</div></div>}
             </section>
           )}
           {activePage === "portfolio" && portfolio && (
@@ -725,24 +668,6 @@ export default function ComprehensiveReportPage() {
                 timing.executionReady && readiness.level === "advice-ready"
               }
             />
-          )}
-          {activePage === "summary" && (
-            <section className="space-y-4 rounded-2xl border bg-card p-5 sm:p-6">
-              {title("后续观察")}
-              <p className="text-sm text-muted-foreground">
-                跨模块观察项集中展示；出现变化后再复核对应研究判断。
-              </p>
-              <ul className="grid gap-2 md:grid-cols-2">
-                {consolidateWatchlist(watchlist).map((item) => (
-                  <li
-                    key={item}
-                    className="rounded-lg border p-3 text-sm leading-6"
-                  >
-                    {chineseNarrative(item)}
-                  </li>
-                ))}
-              </ul>
-            </section>
           )}
           {activePage === "readiness" && (
             <section id="readiness" className="scroll-mt-20 space-y-4">
@@ -794,7 +719,7 @@ export default function ComprehensiveReportPage() {
                     </h3>
                     <p className="mt-2 text-xs leading-5 text-muted-foreground">
                       {item.key === "premium" && item.known < item.total
-                        ? `收盘价基准 ${evaluation?.expectedSession}；部分净值日期落后，无法配对计算同日折溢价。历史净值见产品比较。`
+                        ? `最近完整收盘日 ${timing.closeDataSession || evaluation?.expectedSession}；盘中实时价格不能与尚未发布的当日净值配对。历史净值见产品比较。`
                         : item.detail}
                     </p>
                   </div>
@@ -891,6 +816,7 @@ export default function ComprehensiveReportPage() {
                   </div>
                 </details>
               )}
+              {structured.strategyValidation&&<details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">规则样本外回放：{structured.strategyValidation.validation==='candidate-walk-forward'?'达到候选样本门槛':'历史样本不足'}</summary><p className="mt-3 text-sm leading-6">{structured.strategyValidation.reason}</p><p className="mt-2 text-xs text-muted-foreground">冻结交易日 {structured.strategyValidation.snapshots||0} · 模拟交易 {structured.strategyValidation.trades||0} · 最少观察日 {structured.strategyValidation.observations||0}</p>{structured.strategyValidation.results?.length?<div className="mt-3 grid gap-2 sm:grid-cols-2">{structured.strategyValidation.results.slice(0,8).map(item=><div className="rounded-lg border p-3 text-xs" key={item.ticker}><span className="font-mono">{item.ticker}</span><span className="float-right">{item.status}</span><p className="mt-1 text-muted-foreground">回放收益 {item.returnPct?.toFixed(2)??'—'}% · 超额 {item.excessReturnPct?.toFixed(2)??'—'}% · 最大回撤 {item.maxDrawdownPct?.toFixed(2)??'—'}%</p></div>)}</div>:null}{structured.strategyValidation.limitations?.map((item,index)=><p className="mt-2 text-xs text-muted-foreground" key={index}>{item}</p>)}</details>}
               <details className="rounded-xl border p-4">
                 <summary className="cursor-pointer text-sm font-medium">
                   历史上下文与版本记录

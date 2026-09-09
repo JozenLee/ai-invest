@@ -66,8 +66,9 @@ export function buildReportQuality(input: {
   dataQuality?: DataQualityLike
   preflight?: PreflightLike
   decisionTiming?: DecisionTimingAssessment | null
+  analysisStatuses?: Record<string,{status?:string}|null|undefined>
 }): ReportQualityAssessment {
-  const { evaluation, dataQuality, preflight, decisionTiming } = input
+  const { evaluation, dataQuality, preflight, decisionTiming, analysisStatuses } = input
   const market = conditionCoverage(evaluation, ['calendar', 'session', 'history', 'continuity', 'adjustment', 'index'])
   const fundamentals = conditionCoverage(evaluation, ['holdings', 'fundamentals', 'profit-growth', 'cash-quality'])
   const product = conditionCoverage(evaluation, ['premium', 'liquidity', 'spread', 'volatility'])
@@ -82,16 +83,25 @@ export function buildReportQuality(input: {
   const valuationScore = round(ratio(currentValuation, indexCodes.length) * 100)
   const evidence = evaluation?.evidence || []
   const datedEvidence = evidence.filter(item => item.dataDate || item.publishedAt).length
+  const uniqueEvidence = new Set(evidence.map(item=>item.hash).filter(Boolean)).size
   const decisionEvents = selectDecisionEvents(evaluation,Number.MAX_SAFE_INTEGER)
   const linkedEvents = decisionEvents.filter(item => item.evidenceIds.length > 0 && item.sources.length > 0).length
-  const evidenceScore = round((ratio(datedEvidence, evidence.length) * 0.55 + ratio(linkedEvents, decisionEvents.length) * 0.45) * 100)
+  const gradeWeight={A:1,B:.85,C:.65,D:.25} as const
+  const graded=decisionEvents.map(item=>gradeWeight[item.evidenceGrade||'C'])
+  const gradeScore=graded.length?graded.reduce((sum,value)=>sum+value,0)/graded.length:1
+  const independent=decisionEvents.filter(item=>item.sourceTier==='primary'||item.sourceTier==='corroborated'||(item.independentSourceCount||0)>=2).length
+  const fallbackModules=Object.entries(analysisStatuses||{}).filter(([,value])=>value?.status==='fallback').map(([key])=>key)
+  const narrativeFactor=fallbackModules.includes('event')?.75:1
+  const eventTraceability=decisionEvents.length?ratio(linkedEvents,decisionEvents.length):1
+  const eventIndependence=decisionEvents.length?ratio(independent,decisionEvents.length):1
+  const evidenceScore = round((ratio(datedEvidence, evidence.length) * .25 + ratio(uniqueEvidence,evidence.length) * .2 + eventTraceability * .15 + gradeScore * .25 + eventIndependence * .15) * 100 * narrativeFactor)
   const syncIntentionallySkipped=preflight?.status==='warning'&&(preflight.queued||0)===0&&preflight.warnings?.some(message=>message.includes('未触发外部同步'))
   const dimensions: QualityDimension[] = [
     { key: 'market', label: '行情完整性', score: market.score, weight: 28, detail: `${market.known}/${market.total}项关键行情条件可核验` },
     { key: 'fundamentals', label: '基本面覆盖', score: fundamentals.score, weight: 22, detail: `${fundamentals.known}/${fundamentals.total}项持仓与财务条件可核验` },
     { key: 'valuation', label: '当期估值有效性', score: valuationScore, weight: 16, detail: `${currentValuation}/${indexCodes.length}个跟踪指数有可核验当期估值` },
     { key: 'product', label: '产品可交易数据', score: product.score, weight: 17, detail: `${product.known}/${product.total}项当期产品交易条件可核验` },
-    { key: 'evidence', label: '证据可追溯性', score: evidenceScore, weight: 17, detail: `${datedEvidence}/${evidence.length}条证据有业务日期，${linkedEvents}/${decisionEvents.length}个决策事件可追溯` },
+    { key: 'evidence', label: '证据质量与可追溯性', score: evidenceScore, weight: 17, detail: `${datedEvidence}/${evidence.length}条有业务日期，${uniqueEvidence}/${evidence.length}条内容唯一，${independent}/${decisionEvents.length}个决策事件为一手或多源` },
   ]
   const weightedScore = round(dimensions.reduce((sum, item) => sum + item.score * item.weight, 0) / 100)
   const timingFailed = decisionTiming?.phase === 'trading' && !decisionTiming.executionReady
@@ -104,6 +114,7 @@ export function buildReportQuality(input: {
     dataQuality?.status !== 'available' && '研究数据门禁未完全通过',
     preflight?.status && preflight.status !== 'fresh' && !syncIntentionallySkipped && `分析前同步未完全成功${preflight.failed ? `（失败${preflight.failed}项）` : ''}`,
     product.score < 80 && 'ETF产品交易数据覆盖不足',
+    ...fallbackModules.map(module=>`${module==='event'?'事件':module}智能分析已降级，质量评分已扣减`),
     decisionTiming && !decisionTiming.executionReady && `报告仅供参考：${decisionTiming.reasons[0] || '当前为非交易时间'}`,
   ].filter(Boolean) as string[]
   const usability = !evaluation || market.score < 50 ? 'insufficient' : dataQuality?.status === 'available' && product.score >= 70 && !(preflight?.failed || 0) && preflight?.status !== 'blocked' && decisionTiming?.executionReady !== false ? 'advice-grade' : 'limited-advice'

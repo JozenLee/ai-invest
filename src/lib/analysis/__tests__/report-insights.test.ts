@@ -41,8 +41,8 @@ describe('report investment readiness', () => {
     evaluation.decisions[0].conditions.find(item=>item.key==='premium')!.status='unknown'
     evaluation.decisions[0].conditions.find(item=>item.key==='trend')!.status='unmet'
     evaluation.products=[
-      {ticker:'A',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]},
-      {ticker:'B',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]},
+      {ticker:'A',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationDate:evaluation.expectedSession,valuationSampleCount:1,exposure:[],alternatives:[]},
+      {ticker:'B',indexCode:'IDX',feePct:.5,navDate:null,shareChangePct:null,trackingErrorPct:1,pe:20,valuationDate:evaluation.expectedSession,valuationSampleCount:1,exposure:[],alternatives:[]},
     ]
     const coverage=reportCoverage(evaluation)
     expect(coverage.data.find(item=>item.key==='premium')?.known).toBe(0)

@@ -1,7 +1,7 @@
 import {describe,it,expect} from 'vitest'
 import {fixture} from './fixtures'
 import {evaluateResearch,adjustedBars,requiredHoldingPeriod,selectProductNav} from '../engine'
-import {sessionBoundary,dateKey,visibleAt,nextReview} from '../time'
+import {analysisSessionBoundary,sessionBoundary,dateKey,visibleAt,nextReview} from '../time'
 import {clusterEvents} from '../events'
 import {validateProfile} from '../profile'
 import {replayResearch} from '../replay'
@@ -12,6 +12,28 @@ describe('P0 point-in-time evidence',()=>{
     expect(sessionBoundary(calendar,'2026-09-08T04:00:00Z').expectedSession).toBe('2026-09-04')
     expect(sessionBoundary(calendar,'2026-09-08T08:00:00Z').expectedSession).toBe('2026-09-08')
     expect(sessionBoundary(calendar,'2026-09-09T08:00:00Z').verified).toBe(false)
+  })
+  it('uses the current open session for intraday analysis without redefining the completed close',()=>{
+    const calendar=[{date:'2026-09-07',open:true},{date:'2026-09-08',open:true}]
+    expect(sessionBoundary(calendar,'2026-09-08T02:00:00Z').expectedSession).toBe('2026-09-07')
+    expect(analysisSessionBoundary(calendar,'2026-09-08T02:00:00Z')).toMatchObject({expectedSession:'2026-09-08',verified:true,intraday:true})
+  })
+  it('uses a frozen intraday bar in prices and technical decisions',()=>{
+    const s=fixture(),last=s.etfs[0].bars.at(-1)!
+    s.asOf='2026-09-08T02:00:00Z';s.capturedAt=s.asOf
+    for(const date of ['2026-09-07','2026-09-08']){
+      const prior=s.etfs[0].bars.at(-1)!,close=date==='2026-09-08'?prior.close*0.9:prior.close+1
+      const bar={...prior,date,open:prior.close,high:Math.max(prior.close,close),low:Math.min(prior.close,close),close}
+      s.etfs[0].bars.push(bar);s.etfs[0].factors.push({date,factor:1});s.benchmarkBars.push({...bar,close:prior.close+0.5})
+      if(date==='2026-09-07')s.etfs[0].indexBars.push({...bar,close:prior.close+0.25})
+    }
+    s.sectorFlows.push({date:'2026-09-08',sector:'半导体',net:10000000,netPct:1,evidenceId:'raw-one'})
+    const result=evaluateResearch(s),decision=result.decisions[0]
+    expect(result.expectedSession).toBe('2026-09-08')
+    expect(decision.metrics.date).toBe('2026-09-08')
+    expect(decision.metrics.return20Pct).not.toBeNull()
+    expect(decision.conditions.find(item=>item.key==='session')?.label).toBe('盘中行情对齐')
+    expect(last.date).toBe('2026-09-04')
   })
   it('rejects invalid calendar dates and future evidence',()=>{
     expect(dateKey('20260230')).toBeNull();expect(dateKey('20260904')).toBe('2026-09-04')
@@ -86,6 +108,8 @@ describe('P1 mapping and representative evidence',()=>{
     const base={id:'a',title:'公司:投资者关系管理制度（上市后适用）',content:'本制度用于规范公司治理、内部控制和投资者沟通流程。'.repeat(4),source:'公告',company:'600000',kind:'announcement' as const,publishedAt:'2026-09-01',fetchedAt:'2026-09-02'}
     expect(clusterEvents([base],'2026-09-04')[0].category).toBe('administrative')
     expect(clusterEvents([{...base,title:'公司:关于参加半年度业绩说明会的公告'}],'2026-09-04')[0].category).toBe('administrative')
+    expect(clusterEvents([{...base,title:'公司:关于实际控制人部分股票解除质押的公告'}],'2026-09-04')[0].category).toBe('administrative')
+    expect(clusterEvents([{...base,title:'公司:关于回购公司股份的进展公告'}],'2026-09-04')[0].category).toBe('administrative')
   })
   it('validates bounded risk rules and requires named segments for leaders',()=>{
     const p=fixture().profile;expect(validateProfile(p,'ai')).toEqual(p)
@@ -120,7 +144,7 @@ describe('P2 decisions and paper replay',()=>{
   it('skips expired signals and never manufactures a trade',()=>{
     const s=fixture(),second=structuredClone(s);second.id='two';second.asOf='2026-09-07T09:00:00Z';second.etfs[0].bars.push({...second.etfs[0].bars.at(-1)!,date:'2026-09-07'});second.etfs[0].factors.push({date:'2026-09-07',factor:1})
     const result=replayResearch([s,second],[evaluateResearch(s),evaluateResearch(second)],{commissionBps:3,slippageBps:5})
-    expect(result.results[0].trades).toHaveLength(0);expect(result.validation).toBe('not-validated')
+    expect(result.results[0].trades).toHaveLength(0);expect(result.validation).toBe('insufficient-history')
   })
   it('fills an unexpired pre-market signal only at the subsequent open and deducts costs',()=>{
     const last=fixture(),first=structuredClone(last);last.id='last';first.id='morning';first.asOf='2026-09-04T01:05:00Z';first.capturedAt=first.asOf
@@ -130,5 +154,19 @@ describe('P2 decisions and paper replay',()=>{
     const result=replayResearch([first,last],[evaluation,evaluateResearch(last)],{commissionBps:3,slippageBps:5})
     const trade=result.results[0].trades[0];expect(trade.date).toBe('2026-09-04');expect(trade.price).toBe(last.etfs[0].bars.at(-1)!.open);expect(trade.cost).toBeCloseTo(0.0008)
     expect(result.results[0].returnPct).toBeCloseTo(-0.08)
+    expect(result.results[0]).toEqual(expect.objectContaining({observations:expect.any(Number),maxDrawdownPct:expect.any(Number)}))
+  })
+  it('computes multi-horizon risk diagnostics without changing the rule gate',()=>{
+    const result=evaluateResearch(fixture()),decision=result.decisions[0]
+    expect(decision.metrics).toEqual(expect.objectContaining({return60Pct:expect.any(Number),downsideVolatilityPct:null,maxDrawdown120Pct:expect.any(Number),factorScore:expect.any(Number),factorRegime:expect.any(String)}))
+    expect(decision.state).toBe('eligible')
+  })
+  it('exposes disclosed cross-index overlap without calling it realtime exposure',()=>{
+    const snapshot=fixture(),second=structuredClone(snapshot.etfs[0])
+    second.ticker='159801';second.indexCode='OTHER.CSI';second.holdings=[{...second.holdings[0],weight:30},{...second.holdings[0],code:'600001',weight:30}]
+    snapshot.etfs.push(second)
+    const overlap=evaluateResearch(snapshot).indexOverlaps?.[0]
+    expect(overlap).toMatchObject({commonHoldings:1,weightedOverlapPct:50})
+    expect(overlap?.basis).toContain('不是完整指数成分重叠')
   })
 })

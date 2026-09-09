@@ -16,8 +16,16 @@ describe('portfolio decision support', () => {
   })
 
   it('keeps broad sector-name matches as proxies instead of inventing an ETF identity', () => {
-    const mapping = resolveHoldingMapping({ ticker: '017470', name: '嘉实上证科创板芯片ETF发起联接C', industry: '人工智能算力硬件', weightPct: 10, marketValue: 10000 }, evaluation())
-    expect(mapping).toMatchObject({ method: 'domain-proxy', targetEtfCode: null, decisionTicker: null, fundType: 'feeder' })
+    const mapping = resolveHoldingMapping({ ticker: '017470', name: '嘉实上证科创板芯片ETF发起联接C', industry: '人工智能算力硬件',industryMatchSource:'ai',industryMatchConfidence:.86, weightPct: 10, marketValue: 10000 }, evaluation())
+    expect(mapping).toMatchObject({ method: 'domain-proxy', targetEtfCode: null, decisionTicker: null, fundType: 'feeder',domainVerified:true,scope:'domain' })
+  })
+
+  it('separates verified domain allocation from product-level execution mapping',()=>{
+    const support=buildPortfolioDecisionSupport({evaluation:evaluation(),totalAssets:100000,cashWeightPct:10,policy,dataQualityAvailable:true,portfolioAsOf:new Date().toISOString(),holdings:[{ticker:'017470',name:'嘉实上证科创板芯片ETF发起联接C',industry:'人工智能算力硬件',industryMatchConfidence:.86,weightPct:10,marketValue:10000}]})
+    expect(support).toMatchObject({domainMappingCoveragePct:100,productMappingCoveragePct:0})
+    expect(support.gates.find(item=>item.key==='domain-mapping')).toMatchObject({met:true})
+    expect(support.gates.find(item=>item.key==='mapping')).toMatchObject({met:false})
+    expect(support.actions[0].reason).toContain('产业领域归属已核验')
   })
 
   it('turns a risk-off domain above the policy band into a confidence-rated reduction recommendation', () => {

@@ -45,10 +45,11 @@ export function hasCurrentResearchSeries(payloads: string[], expectedSession: st
 
 export async function ensureResearchInputsFresh(industryId:string, options: { refresh?: boolean; tradingSession?: boolean; asOf?: string } = {}){
   const now=new Date(options.asOf||Date.now())
-  const [subscriptions,graphRow,calendarRow]=await Promise.all([
+  const [subscriptions,graphRow,calendarRow,profileRow]=await Promise.all([
     prisma.dataSubscription.findMany({where:{enabled:true},include:{instrument:true,datasets:true}}),
     prisma.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}}),
     prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'}}),
+    prisma.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}}),
   ])
   const normalize=(value:unknown)=>String(value||'').toLowerCase().replace(/^(sh|sz)/,'').replace(/\.(sh|sz)$/,'')
   let graphCodes=new Set<string>()
@@ -130,6 +131,56 @@ export async function ensureResearchInputsFresh(industryId:string, options: { re
     }
     const current = await prisma.subscriptionDataset.findMany({where:{id:{in:datasets.map(dataset=>dataset.id)}}})
     datasets = current.map(dataset=>({...dataset,code:datasets.find(item=>item.id===dataset.id)!.code}))
+  }
+  // Slow research and announcement collection can make quotes fetched at the
+  // beginning of preflight stale again. Refresh only the report's ETF universe
+  // and benchmark once more, then freeze immediately from this synchronized set.
+  if(tradingSession){
+    let benchmark='000300'
+    try{benchmark=normalize(JSON.parse(profileRow?.payload||'{}').benchmark||benchmark)}catch{/* Default benchmark remains 沪深300. */}
+    const selectedEtfCodes=new Set(selected.filter(item=>item.instrument.type==='ETF').map(item=>normalize(item.instrument.code)))
+    const criticalIds=new Set(selected.flatMap(subscription=>subscription.datasets.filter(dataset=>dataset.enabled&&(
+      dataset.datasetKey==='etf_realtime'&&selectedEtfCodes.has(normalize(subscription.instrument.code))||
+      dataset.datasetKey==='index_realtime'&&normalize(subscription.instrument.code)===benchmark
+    )).map(dataset=>dataset.id)))
+    const critical=datasets.filter(dataset=>criticalIds.has(dataset.id))
+    if(!critical.length){result.status='blocked';result.warnings.push('未配置盘中指数基金或基准实时行情订阅');return result}
+    const finalTargets=critical.filter(dataset=>!dataset.lastSuccessAt||Date.now()-dataset.lastSuccessAt.getTime()>60_000||dataset.status!=='success')
+    if(!finalTargets.length){
+      // The regular realtime stage just synchronized every critical quote.
+    }else{
+    const synchronizedRunIds=await prisma.$transaction(async tx=>{
+      const ids:string[]=[]
+      for(const target of finalTargets){
+        const active=(await tx.dataFetchRun.findMany({where:{datasetId:{in:[target.id]},status:{in:['queued','running']}}}))[0]
+        if(active){ids.push(active.id);continue}
+        const claimed=await tx.subscriptionDataset.updateMany({where:{id:target.id,status:{notIn:['queued','running']}},data:{status:'queued',nextRunAt:new Date(),lastError:null}})
+        if(!claimed.count)continue
+        const run=await tx.dataFetchRun.create({data:{datasetId:target.id,targetCode:target.code,status:'queued',qualityStatus:'pending'}})
+        ids.push(run.id);result.queued++
+      }
+      return ids
+    })
+    if(synchronizedRunIds.length!==finalTargets.length){result.status='blocked';result.warnings.push('盘中行情临冻结同步未完整排队');return result}
+    try{await notifySubscriptionWorker()}catch{result.status='blocked';result.warnings.push('数据服务不可用，盘中行情无法临冻结同步');return result}
+    let synchronized=false
+    const quoteDeadline=Math.min(deadline,Date.now()+5*60*1000)
+    while(Date.now()<quoteDeadline){
+      const runs=await prisma.dataFetchRun.findMany({where:{id:{in:synchronizedRunIds}}})
+      if(runs.length===synchronizedRunIds.length&&runs.every(run=>terminal.has(run.status))){
+        if(runs.some(run=>run.status!=='success')){result.status='blocked';result.warnings.push(...runs.filter(run=>run.status!=='success').map(run=>`盘中行情：${run.error||'实时数据未取得'}`));return result}
+        result.completed+=runs.length
+        synchronized=true;break
+      }
+      await pause(1000)
+    }
+    if(!synchronized){result.status='blocked';result.warnings.push('盘中行情临冻结同步超时');return result}
+    }
+    const today=chinaDate(now.toISOString()),codes=critical.map(item=>item.code)
+    const quotes=typeof prisma.marketQuote?.findMany==='function'?await prisma.marketQuote.findMany({where:{code:{in:codes},tradeDate:today,fetchedAt:{gte:new Date(Date.now()-5*60*1000)}}}):[]
+    const freshCodes=new Set(quotes.length?quotes.map(quote=>normalize(quote.code)):critical.filter(item=>item.lastSuccessAt&&Date.now()-item.lastSuccessAt.getTime()<=5*60*1000).map(item=>normalize(item.code)))
+    const missing=critical.filter(item=>!freshCodes.has(normalize(item.code))).map(item=>item.code)
+    if(missing.length){result.status='blocked';result.warnings.push(`盘中行情仍未达到5分钟时效：${missing.join('、')}`);return result}
   }
   // Successful jobs can still finish too early relative to other slow feeds.
   // Do not label that outcome fresh; the frozen timing gate remains authoritative.

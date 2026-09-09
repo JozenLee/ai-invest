@@ -1,4 +1,5 @@
 import type { Profile } from './contracts'
+import { normalizeExecutiveConclusion, type ExecutiveInvestmentConclusion } from '@/lib/analysis/investment-conclusion'
 
 export type HistoricalReportCandidate = {
   id: string
@@ -17,17 +18,13 @@ export type HistoricalReportContext = {
   sessionDate: string
   createdAt: string
   title: string
-  summary: string
-  confidencePct: number | null
-  recommendation: unknown
-  stateCounts: Record<string, number>
-  role: 'historical-context'
+  comprehensiveConclusion: ExecutiveInvestmentConclusion
+  role: 'historical-comprehensive-conclusion'
 }
 
 type ReportData = {
   researchEvaluation?: { expectedSession?: string | null; decisions?: Array<{state?:string}> }
   investmentAdvice?: string | Record<string,unknown>
-  reportQuality?: { confidenceScore?: number }
   metadata?: { verificationMode?: string | null }
 }
 
@@ -70,9 +67,7 @@ export function selectHistoricalReports(input:{
   }
   return [...latestBySession.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([sessionDate,candidate])=>{
     const data=parse<ReportData>(candidate.dataJson),investment=advice(data?.investmentAdvice)
-    const stateCounts=(data?.researchEvaluation?.decisions||[]).reduce<Record<string,number>>((counts,item)=>{const key=item.state||'unknown';counts[key]=(counts[key]||0)+1;return counts},{})
-    const confidence=Number(investment?.confidencePct??data?.reportQuality?.confidenceScore)
-    return {reportId:candidate.id,industryId:candidate.industryId,industryName:candidate.industryName,sessionDate,createdAt:iso(candidate.createdAt),title:candidate.title,summary:String(candidate.summary||'').slice(0,800),confidencePct:Number.isFinite(confidence)?confidence:null,recommendation:investment?.recommendation||null,stateCounts,role:'historical-context'}
+    return {reportId:candidate.id,industryId:candidate.industryId,industryName:candidate.industryName,sessionDate,createdAt:iso(candidate.createdAt),title:candidate.title,comprehensiveConclusion:normalizeExecutiveConclusion(investment,String(candidate.summary||'').slice(0,800)),role:'historical-comprehensive-conclusion'}
   })
 }
 

@@ -1,4 +1,4 @@
-import { administrativeTitle } from '@/lib/research/event-policy'
+import { administrativeTitle, digestTitle, nonMaterialRiskTitle } from '@/lib/research/event-policy'
 import type { Decision, Evaluation } from '@/lib/research/contracts'
 import type { DecisionTimingAssessment } from './decision-timing'
 
@@ -35,7 +35,7 @@ export function reportCoverage(evaluation?:Evaluation){
   const signalUnknown=indexSignals.filter(status=>status==='unknown').length
   const groups=new Map<string,NonNullable<Evaluation['products']>>()
   for(const product of evaluation?.products||[]){if(product.indexCode)groups.set(product.indexCode,[...(groups.get(product.indexCode)||[]),product])}
-  const currentValuation=[...groups.values()].filter(rows=>rows.some(row=>finite(row.pe)&&row.pe!>0||finite(row.pb)&&row.pb!>0)).length
+  const currentValuation=[...groups.values()].filter(rows=>rows.some(row=>row.valuationDate===evaluation?.expectedSession&&(finite(row.pe)&&row.pe!>0||finite(row.pb)&&row.pb!>0))).length
   const field=(key:string,label:string)=>({key,label,known:conditionCount(key),total,detail:`${conditionCount(key)}/${total} 项具备可核验底层数据`})
   return {
     dataUnknown,dataTotal:dataConditions.length,signalMet,signalUnmet,signalUnknown,signalTotal,signalKnown:signalTotal-signalUnknown,indexCount:indexGroups.size,
@@ -45,7 +45,7 @@ export function reportCoverage(evaluation?:Evaluation){
       field('holdings','最新定期持仓权重'),
       field('profit-growth','持仓加权利润同比'),
       field('cash-quality','持仓加权现金质量'),
-      {key:'valuation-current',label:'指数当期估值',known:currentValuation,total:groups.size||evaluation?.indexBreadth.mappedIndices||0,detail:`${currentValuation}/${groups.size||evaluation?.indexBreadth.mappedIndices||0} 个跟踪指数具备当期估值`},
+      {key:'valuation-current',label:'指数同日估值',known:currentValuation,total:groups.size||evaluation?.indexBreadth.mappedIndices||0,detail:`${currentValuation}/${groups.size||evaluation?.indexBreadth.mappedIndices||0} 个跟踪指数估值日期与研究基准日一致`},
     ].filter(item=>item.total>0&&!omitted.has(item.key)),
     signals:[
       ...[...signalConditionKeys].map(key=>({key,label:{market:'基准趋势',trend:'指数趋势确认',relative:'相对基准转强',flow:'领域资金改善'}[key]||key,met:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='met').length,unmet:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='unmet').length,unknown:[...indexGroups.values()].filter(rows=>signalStatus(rows,key)==='unknown').length,total:indexGroups.size})),
@@ -162,6 +162,10 @@ export function productGroups(evaluation?: Evaluation) {
       valuation: {
         pe: ranked.find(item => finite(item.pe) && item.pe! > 0)?.pe ?? null,
         pb: ranked.find(item => finite(item.pb) && item.pb! > 0)?.pb ?? null,
+        pePercentileHistory: ranked.find(item=>finite(item.pePercentileHistory))?.pePercentileHistory??null,
+        pbPercentileHistory: ranked.find(item=>finite(item.pbPercentileHistory))?.pbPercentileHistory??null,
+        historyStart: ranked.find(item=>item.valuationHistoryStart)?.valuationHistoryStart??null,
+        sampleCount: ranked.find(item=>item.valuationSampleCount)?.valuationSampleCount??0,
         date: ranked.find(item => item.valuationDate)?.valuationDate ?? null,
         source: ranked.find(item => item.valuationSource)?.valuationSource ?? null,
       },
@@ -191,8 +195,8 @@ export function decisionEvents(evaluation?: Evaluation, limit = 12) {
   if (!evaluation) return []
   const seen = new Set<string>()
   const candidates=[...evaluation.events]
-    .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && item.priority >= 4)
-    .sort((a, b) => b.priority - a.priority || b.publishedAt.localeCompare(a.publishedAt))
+    .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && !digestTitle.test(item.title) && !nonMaterialRiskTitle.test(item.title) && item.priority >= 4 && !['C','D'].includes(item.evidenceGrade||'B') && (item.materialityScore??70)>=65)
+    .sort((a, b) => (b.materialityScore??0)-(a.materialityScore??0) || b.priority - a.priority || b.publishedAt.localeCompare(a.publishedAt))
     .filter(item => {
       const key = [eventFingerprint(item.title),item.publishedAt.slice(0,10),[...item.companies].sort().join(',')].join(':')
       if (!key || seen.has(key)) return false
@@ -217,6 +221,24 @@ export function horizonViews(evaluation?: Evaluation) {
   return {
     tactical: `${evaluation.profile.horizonDays}个交易日：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}；${evaluation.indexBreadth.aboveMA20?`${evaluation.indexBreadth.aboveMA20}/${evaluation.indexBreadth.usableIndices}个有效指数位于20日均线上方`:'有效指数均未站上20日均线'}。`,
     strategic: `6—12个月：企业财务模块${evaluation.modules.company?.status === 'available' ? '可用' : '仍有限'}，${valuationCount?`${valuationCount}/${evaluation.indexBreadth.mappedIndices}个指数具备可展示估值`:'暂无指数具备可展示估值'}；产业逻辑需由订单、盈利和现金流持续验证。`,
+  }
+}
+
+export function deterministicScenarios(evaluation?:Evaluation){
+  if(!evaluation)return null
+  const uniqueProducts=[...new Map((evaluation.products||[]).map(item=>[item.indexCode||item.ticker,item])).values()]
+  const percentiles=uniqueProducts.map(item=>item.pePercentileHistory).filter(finite).sort((a,b)=>a-b)
+  const medianPercentile=percentiles.length?percentiles[Math.floor(percentiles.length/2)]:null
+  const factorScores=evaluation.decisions.map(item=>item.metrics.factorScore).filter(finite)
+  const factorScore=factorScores.length?Math.round(factorScores.reduce((sum,value)=>sum+value,0)/factorScores.length):null
+  const profit=evaluation.decisions.map(item=>item.conditions.find(condition=>condition.key==='profit-growth')).filter(Boolean)
+  const cash=evaluation.decisions.map(item=>item.conditions.find(condition=>condition.key==='cash-quality')).filter(Boolean)
+  return {
+    inputs:{valuationMedianPercentile:medianPercentile,multiFactorAverageScore:factorScore,profitGrowthPositive:profit.filter(item=>item?.status==='met').length,profitGrowthKnown:profit.filter(item=>item?.status!=='unknown').length,cashQualityHealthy:cash.filter(item=>item?.status==='met').length,cashQualityKnown:cash.filter(item=>item?.status!=='unknown').length},
+    base:{conditions:'盈利与现金流按当前已披露广度延续，估值分位与多周期趋势不显著改善。',expectedReturn:null},
+    bull:{conditions:'盈利扩散、现金转化改善且风险调整动量转强；估值扩张必须由盈利兑现支持。',expectedReturn:null},
+    bear:{conditions:'盈利或订单下修、现金流恶化，并伴随估值分位回落和下行波动扩大。',expectedReturn:null},
+    decomposition:'未来收益应分解为盈利增长、估值变化、分红、管理费及跟踪偏差；缺少一致预测时不输出伪精确收益率。',
   }
 }
 

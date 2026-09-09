@@ -56,6 +56,8 @@ export class ClaudeClient {
       temperature?: number
       messages?: Array<{ role: string; content: string }>
       timeoutMs?: number
+      cacheTtl?: '5m' | '1h'
+      effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     }) => {
       if (!this.client) throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
       const message = await this.client.messages.create({
@@ -63,6 +65,8 @@ export class ClaudeClient {
         max_tokens: params.max_tokens || this.maxTokens,
         messages: params.messages?.length ? params.messages.map(item=>({role:item.role==='assistant'?'assistant' as const:'user' as const,content:item.content})) : [{role:'user',content:params.prompt||''}],
         system: params.system,
+        cache_control: { type:'ephemeral', ttl:params.cacheTtl||'1h' },
+        ...(params.effort?{output_config:{effort:params.effort}}:{}),
         ...(params.temperature===undefined?{}:{temperature:params.temperature}),
       }, { signal: AbortSignal.timeout(Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS||360000)))) })
       // Preserve termination/usage diagnostics, and collect ALL visible text

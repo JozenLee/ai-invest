@@ -22,6 +22,14 @@ describe('report quality and review lineage', () => {
     const quality=buildReportQuality({evaluation,dataQuality:{status:'limited'},preflight:{status:'warning',queued:0,completed:0,failed:0,warnings:['本轮未触发外部同步，使用当前本地订阅快照']}})
     expect(quality.blockers).not.toContain('分析前同步未完全成功')
   })
+  it('penalizes duplicate evidence and a degraded event synthesis',()=>{
+    const evaluation=evaluateResearch(fixture())
+    evaluation.evidence=[...evaluation.evidence,{...evaluation.evidence[0],id:'duplicate'}]
+    const normal=buildReportQuality({evaluation,dataQuality:{status:'available'}})
+    const degraded=buildReportQuality({evaluation,dataQuality:{status:'available'},analysisStatuses:{event:{status:'fallback'}}})
+    expect(degraded.dimensions.find(item=>item.key==='evidence')!.score).toBeLessThan(normal.dimensions.find(item=>item.key==='evidence')!.score)
+    expect(degraded.blockers.join('')).toContain('事件智能分析已降级')
+  })
 
   it('reports numeric condition changes even when the state is unchanged', () => {
     const previous = evaluateResearch(fixture())
@@ -52,14 +60,14 @@ it('counts omitted missing fields in the quality denominator',()=>{
   expect(quality.blockers.some(item=>item.includes('仍计入质量覆盖率'))).toBe(true)
 })
 
-it('cannot rate stale intraday data A even with complete close prices',async()=>{
+it('does not downgrade execution meaning after a trading-session snapshot is frozen',async()=>{
   const { assessDecisionTiming }=await import('../decision-timing')
   const snapshot=fixture()
   const timing=assessDecisionTiming({asOf:'2026-09-04T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
   const quality=buildReportQuality({evaluation:evaluateResearch(snapshot),dataQuality:{status:'available'},decisionTiming:timing})
-  expect(quality.overallScore).toBeLessThanOrEqual(69)
-  expect(quality.grade).not.toBe('A')
-  expect(quality.usability).toBe('limited-advice')
+  expect(timing.executionReady).toBe(true)
+  expect(quality.overallScore).toBeGreaterThanOrEqual(70)
+  expect(quality.usability).toBe('advice-grade')
 })
 
 it('does not count a previous-session valuation as current evidence',()=>{

@@ -6,9 +6,19 @@ describe('research output validation',()=>{
   it('rejects incomplete stage output',()=>{
     expect(()=>validateResearchOutput('{"analysis":"x"}','market-analysis')).toThrow(/缺少字段/)
   })
+  it('repairs surrounding prose and trailing commas without a second model call',()=>{
+    const raw='说明如下：\n```json\n{"analysis":"观察","trend":"未知","risk_level":"未知","evidence":[],"counterEvidence":[],"watchlist":[],}\n```\n以上。'
+    expect(validateResearchOutput(raw,'market-analysis').text).toContain('"analysis":"观察"')
+  })
   it('requires a dedicated comprehensive conclusion for investment advice',()=>{
     const raw=JSON.stringify({rating:'谨慎',tacticalView:{},strategicView:{},thesis:'单模块观点',etfImplications:[],scenarios:{},counterEvidence:[],risks:[],watchlist:[]})
     expect(()=>validateResearchOutput(raw,'investment-advice')).toThrow(/executiveSummary/)
+  })
+  it('flags legacy conclusions that omit opportunity and action modules',()=>{
+    const raw=JSON.stringify({rating:'谨慎',executiveSummary:{conclusion:'谨慎',allocationStance:'低配',keyDrivers:[],mainRisks:[],actionPlan:{unheld:'观望',held:'持有'},reviewTriggers:[]},tacticalView:{},strategicView:{},thesis:'产业观点',etfImplications:[],scenarios:{},counterEvidence:[],risks:[],watchlist:[]})
+    const result=validateResearchOutput(raw,'investment-advice')
+    expect(result.issues.join('')).toContain('opportunities')
+    expect(result.issues.join('')).toContain('priority')
   })
   it('removes ETF adjustment sources from company financial claims',()=>{
     const raw=JSON.stringify({analysis:'x',stage:'成长期',drivers:[],outlook:'x',evidence:[{claim:'公司净利润增长',source:'Tushare/fund_adj；公司财报'}],counterEvidence:[],watchlist:[]})

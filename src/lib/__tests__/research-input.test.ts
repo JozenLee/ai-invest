@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { compactEvidence, marketSignals, newsSignals, researchEvidence } from '../workflow/research-input'
+import { companyResearchPacket } from '../workflow/prompt-evidence'
 import type { StepContext } from '../workflow/types'
 
 describe('decision-focused evidence', () => {
@@ -44,6 +45,14 @@ describe('decision-focused evidence', () => {
     expect(companyInput.companies[0].graphMapping).toMatchObject({stage:'上游',segment:'芯片',representativeEtfs:[{code:'159001'}]})
     const adviceInput=researchEvidence(context,'investment-advice')
     expect(adviceInput.graph.etfExposure[0]).toMatchObject({code:'159001',segments:[{segmentCode:'chip',matchedCompanies:['688001']}]})
+  })
+  it('summarizes the full company universe before selecting representatives',()=>{
+    const companies=Array.from({length:20},(_,index)=>({stockCode:String(index),stockName:`公司${index}`,segment:index<10?'芯片':'服务器',financialPeriods:2,profitGrowthPct:index-5,cashConversionPct:index*10,financials:[{reportType:'income',period:'2026-06-30',metrics:[]}]}))
+    const packet=companyResearchPacket(companies)
+    expect(packet.coverage).toMatchObject({companyCount:20,segmentCount:2,profitGrowthKnown:20,cashQualityKnown:20})
+    expect(packet.segmentAggregates).toHaveLength(2)
+    expect(packet.representativeCompanies.length).toBeGreaterThan(2)
+    expect(packet.representativeCompanies.length).toBeLessThanOrEqual(8)
   })
   it('bounds the industry synthesis packet instead of replaying full upstream evidence',()=>{
     const many=Array.from({length:30},(_,index)=>({code:String(index).padStart(6,'0'),name:'样本'+index,relevance:1-index/100,holdingVerified:false}))

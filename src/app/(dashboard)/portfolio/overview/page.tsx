@@ -611,7 +611,8 @@ export default function PortfolioOverviewPage() {
                           {h.industryDomainSource === 'ai' && <span className="text-[10px] text-muted-foreground">AI</span>}
                         </div>
                         {(h.targetEtfCode || h.targetIndexCode) && <p className="mt-1 font-mono text-[10px] text-muted-foreground">{h.targetEtfCode || '—'} · {h.targetIndexCode || '指数待补'}</p>}
-                        {!h.targetEtfCode && !h.targetIndexCode && <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">{/ETF.*联接/i.test(h.name) ? '底层ETF待核验' : '穿透映射待补'}</p>}
+                        {!h.targetEtfCode && !h.targetIndexCode && h.industryDomain && <p className="mt-1 text-[10px] text-muted-foreground">领域已映射 · {/ETF.*联接/i.test(h.name) ? '底层ETF待补' : /混合/i.test(h.name)?'主动基金不强行映射ETF':'产品穿透待补'}</p>}
+                        {!h.targetEtfCode && !h.targetIndexCode && !h.industryDomain && <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-300">产业领域与产品穿透均待补</p>}
                       </TableCell>
                       <TableCell className="text-right">{h.quantity.toLocaleString()}</TableCell>
                       <TableCell className="text-right">{h.unitNav.toFixed(4)}</TableCell>

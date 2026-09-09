@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { normalizeSocialReport, parseSocialReport } from '@/lib/analysis/social-report'
+import { effectiveDecisionTiming, normalizeReportTimingText } from '@/lib/analysis/decision-timing'
 
 /**
  * GET /api/analysis/reports/[id]
@@ -24,6 +25,8 @@ export async function GET(
     if(['comprehensive','verification'].includes(report.type)&&report.dataJson){
       try{
         const data=JSON.parse(report.dataJson)
+        const timing=effectiveDecisionTiming(data.decisionTiming,report.createdAt.toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null})
+        data.decisionTiming=timing
         // Enrich an old report only from its own immutable snapshot. Never read
         // today's NAV or silently replace the stored historical evaluation.
         const snapshotId=data.researchEvaluation?.snapshotId
@@ -40,7 +43,7 @@ export async function GET(
           }
         }
         if(data.socialReport)data.socialReport=normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)
-        return NextResponse.json({...report,dataJson:JSON.stringify(data)})
+        return NextResponse.json({...report,summary:normalizeReportTimingText(report.summary,timing),content:normalizeReportTimingText(report.content,timing),dataJson:JSON.stringify(data)})
       }catch{/* Preserve legacy unreadable data for diagnostics. */}
     }
     return NextResponse.json(report)

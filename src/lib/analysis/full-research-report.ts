@@ -3,7 +3,7 @@ import type { DecisionTimingAssessment } from './decision-timing'
 
 const labels: Record<string, string> = {
   analysis: '分析', score: '评分', rating: '评级', executiveSummary: '综合投资结论', conclusion: '综合判断',
-  allocationStance: '配置立场', keyDrivers: '关键驱动', mainRisks: '主要风险', actionPlan: '行动建议', reviewTriggers: '复核触发项',
+  allocationStance: '配置立场', keyDrivers: '关键驱动', opportunities: '机会与兑现状态', mainRisks: '主要风险', watchPoints: '重点关注', actionPlan: '建议操作', priority: '操作优先级', historyComparison: '历史机会验证', reviewTriggers: '复核触发项',
   thesis: '投资论点', etfImplications: 'ETF影响',
   scenarios: '情景分析', base: '基准情景', bull: '乐观情景', bear: '悲观情景', evidence: '证据',
   claim: '判断', source: '来源', date: '日期', counterEvidence: '反证', risks: '风险', watchlist: '跟踪清单',
@@ -35,6 +35,6 @@ export function renderValue(value: unknown, depth = 0): string {
 export function fullResearchMarkdown(input: { title: string; sections: Array<{ title: string; value: unknown }>; actions: ETFAction[]; onePageAvailable: boolean; decisionTiming?: DecisionTimingAssessment }) {
   const notice = input.onePageAvailable ? '' : '\n\n> 一页发布版暂不可用。以下为已完成的完整研究与ETF操作建议，不受一页模板字数限制。'
   const timing = input.decisionTiming
-  const timingNotice = timing ? `\n\n> **${timing.label}**：${timing.executionReady ? `本报告在交易时间生成，实时数据有效至 ${timing.validUntil}。` : `${timing.reasons.join('；') || '当前为非交易时间'}。`}\n> 冻结时点：${timing.asOf}；收盘数据基准：${timing.closeDataSession || '未核验'}；事件截点：${timing.eventCutoff}。` : '\n\n> **仅供投资参考**：旧报告没有交易时段时效审计。'
+  const timingNotice = timing ? `\n\n> **${timing.label}**：${timing.executionReady ? '本报告的快照冻结于交易时段，报告生成耗时不改变其执行意义。' : `${timing.reasons.join('；') || '快照冻结于非交易时间'}。`}\n> 冻结时点：${timing.asOf}；收盘数据基准：${timing.closeDataSession || '未核验'}；事件截点：${timing.eventCutoff}。` : '\n\n> **仅供投资参考**：旧报告没有交易时段时效审计。'
   return `# ${input.title}${notice}${timingNotice}\n\n` + input.sections.map(section => `## ${section.title}\n\n${renderValue(section.value)}`).join('\n\n') + '\n\n' + etfActionsMarkdown(input.actions)
 }

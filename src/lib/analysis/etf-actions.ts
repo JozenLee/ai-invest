@@ -17,9 +17,9 @@ export function parseETFActions(text: string, bindings: Array<{ etf_code: string
   })
 }
 export function etfActionsMarkdown(actions: ETFAction[]) {
-  return '## ETF投资建议\n\n以下建议由本轮冻结数据、规则条件与证据覆盖生成，并附置信度；建议不会自动执行交易。\n\n' + actions.map(row => {
+  return '## ETF投资建议\n\n以下建议由本轮冻结数据、规则条件与证据覆盖生成，并附证据覆盖度；建议不会自动执行交易。\n\n' + actions.map(row => {
     const shown=row.evidence.slice(0,8),more=row.evidence.length-shown.length
     const raw=row.ruleAction&&row.ruleAction.unheld!==row.unheldAction||row.ruleAction&&row.ruleAction.held!==row.heldAction?`\n\n原始规则意图：未持有 ${row.ruleAction?.unheld}；已持有 ${row.ruleAction?.held}（仅用于回放验证，不授权执行）`:''
-    return `### ${row.name}（${row.ticker}）\n\n建议置信度：${typeof row.confidencePct==='number'?`${row.confidencePct}%`:'按报告页实时计算'}\n\n未持有：${row.unheldAction}；已持有：${row.heldAction}${raw}\n\n依据：${row.reason}\n\n复核条件：${row.trigger}\n\n失效条件：${row.invalidation}\n\n观察周期：${row.horizon}\n\n代表性证据：${shown.join('；')}${more>0?`；另有 ${more} 条见本轮证据档案`:''}`
+    return `### ${row.name}（${row.ticker}）\n\n决策证据覆盖度：${typeof row.confidencePct==='number'?`${row.confidencePct}/100`:'按报告页实时计算'}\n\n未持有：${row.unheldAction}；已持有：${row.heldAction}${raw}\n\n依据：${row.reason}\n\n复核条件：${row.trigger}\n\n失效条件：${row.invalidation}\n\n观察周期：${row.horizon}\n\n代表性证据：${shown.join('；')}${more>0?`；另有 ${more} 条见本轮证据档案`:''}`
   }).join('\n\n') + '\n\n实验性研究工具，不构成投资建议，不保证收益。'
 }

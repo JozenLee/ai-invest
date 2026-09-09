@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- This module normalizes heterogeneous frozen provider payloads at the AI boundary. */
 export function evidenceText(value: unknown): string {
   if (typeof value === 'string') {
     try { return JSON.stringify(JSON.parse(value.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')), null, 2) } catch { return value }
@@ -37,4 +38,38 @@ export function companyEvidence(rows: any[]) {
       financials: [...new Map<string, any>([...(row.financials || [])].sort((a,b) => String(b.period).localeCompare(String(a.period))).map((report: any) => [report.reportType+':'+report.period, report] as [string, any])).values()].slice(0,6).map(report => ({ evidenceId:report.evidenceId,reportType: report.reportType, period: report.period, publishDate: report.publishDate, source: report.source, currency: report.currency, calculated: report.calculated, metrics: Object.fromEntries((report.metrics || []).map((metric: any) => [metric.label, metric.value])) })),
       announcements: (row.announcements || []).slice(0,2),
     }))
+}
+
+const numeric=(value:unknown):value is number=>typeof value==='number'&&Number.isFinite(value)
+const median=(values:number[])=>{
+  if(!values.length)return null
+  const sorted=[...values].sort((a,b)=>a-b),middle=Math.floor(sorted.length/2)
+  return sorted.length%2?sorted[middle]:(sorted[middle-1]+sorted[middle])/2
+}
+
+/** Aggregate the complete company universe before selecting a bounded set of
+ * examples. The model receives breadth and dispersion instead of inferring an
+ * industry from whichever two rows happened to rank first. */
+export function companyResearchPacket(rows:any[]){
+  const eligible=rows.filter(row=>row&&typeof row==='object')
+  const grouped=new Map<string,any[]>()
+  for(const row of eligible){const key=String(row.segment||'未映射');grouped.set(key,[...(grouped.get(key)||[]),row])}
+  const aggregates=[...grouped.entries()].map(([segment,companies])=>{
+    const profit=companies.map(row=>row.profitGrowthPct).filter(numeric)
+    const cash=companies.map(row=>row.cashConversionPct).filter(numeric)
+    const mapped=companies.filter(row=>row.matchConfidence>=.7||(row.representativeEtfs||[]).some((item:any)=>item.holdingVerified)).length
+    return {
+      segment,companyCount:companies.length,mappedCompanyCount:mapped,
+      multiPeriodFinancialCount:companies.filter(row=>(row.financialPeriods||0)>=2).length,
+      profitGrowthKnown:profit.length,positiveProfitGrowth:profit.filter(value=>value>0).length,medianProfitGrowthPct:median(profit),
+      cashQualityKnown:cash.length,healthyCashConversion:cash.filter(value=>value>=50).length,medianCashConversionPct:median(cash),
+      evidenceIds:[...new Set(companies.flatMap(row=>row.evidenceIds||[]))].slice(0,16),
+    }
+  }).sort((a,b)=>b.companyCount-a.companyCount||a.segment.localeCompare(b.segment,'zh-CN'))
+  const selected=companyEvidence(eligible).slice(0,6)
+  return {
+    coverage:{companyCount:eligible.length,multiPeriodFinancialCount:eligible.filter(row=>(row.financialPeriods||0)>=2).length,profitGrowthKnown:eligible.filter(row=>numeric(row.profitGrowthPct)).length,cashQualityKnown:eligible.filter(row=>numeric(row.cashConversionPct)).length,segmentCount:grouped.size,evidenceIds:[...new Set(eligible.flatMap(row=>row.evidenceIds||[]))].slice(0,24)},
+    segmentAggregates:aggregates.slice(0,12),representativeCompanies:selected,
+    boundary:'聚合指标覆盖完整冻结企业池；“ETF持仓补充样本（图谱外）”表示真实披露持仓但不属于当前图谱核心节点，不是数据缺失。代表企业仅用于解释分化，不代表个股推荐。中位数按公司等权统计，ETF持仓权重另由产品规则计算。',
+  }
 }

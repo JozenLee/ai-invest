@@ -1,7 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Versioned graph projections contain legacy camel/snake case payloads. */
 import { createHash } from 'node:crypto'
 
 type UnknownRow = Record<string, any>
-type ResearchEventLike = { id: string; title: string; segments: string[] }
+type ResearchEventLike = { id: string; title: string; segments: string[];companies?:string[] }
 
 export type GraphETFRef = {
   code: string
@@ -39,6 +40,7 @@ export type FrozenGraphContext = {
   mappingRevisionId: string | null
   mappingContentHash: string
   mappingPublishedAt: string | null
+  mappingSource?: string | null
   sourceFetchedAt: string | null
   industry: { id: string; code: string; name: string }
   stages: Array<{ code: string; name: string; segments: Array<{ code: string; name: string; companies: GraphCompanyCandidate[]; etfs: GraphETFRef[]; indices: GraphIndexRef[] }> }>
@@ -233,7 +235,9 @@ function eventPaths(events: ResearchEventLike[], stages: ReturnType<typeof norma
   const adjacency = new Map<string, typeof relations>()
   for (const relation of relations) adjacency.set(relation.sourceCode, [...(adjacency.get(relation.sourceCode) || []), relation])
   return events.slice(0, 24).flatMap(event => {
-    const direct = [...new Set(event.segments.map(segment => aliases.get(segment)).filter((code): code is string => !!code))]
+    const affectedCompanies=new Set((event.companies||[]).map(stockCode))
+    const companySegments=segments.filter(segment=>segment.companies.some(company=>affectedCompanies.has(company.code))).map(segment=>segment.code)
+    const direct = [...new Set([...event.segments.map(segment => aliases.get(segment)).filter((code): code is string => !!code),...companySegments])]
     if (!direct.length) return []
     const paths: FrozenGraphContext['eventMappings'][number]['paths'] = []
     for (const source of direct) {
@@ -289,6 +293,7 @@ export function buildFrozenGraphContext(
     mappingRevisionId: String(value(group, 'mappingRevisionId', 'mapping_revision_id') || '') || null,
     mappingContentHash,
     mappingPublishedAt: String(value(group, 'mappingPublishedAt', 'mapping_published_at') || value(group, 'mappingUpdatedAt', 'mapping_updated_at') || '') || null,
+    mappingSource: String(group.mappingSource||group.mapping_source||'')||null,
     sourceFetchedAt: source.fetchedAt ? new Date(source.fetchedAt).toISOString() : null,
     industry: { id: group.id, code: String(group.code || ''), name: group.name },
     stages,

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Persisted AI artifacts are runtime-normalized heterogeneous JSON. */
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepContext, StepDefinition } from '../types'
@@ -21,9 +22,11 @@ function timeoutFallback(context:StepContext){
       conclusion:`当前${signal}。市场规则、产业链证据与事件材料尚未形成足以提高配置强度的一致信号；现阶段应以冻结规则状态为行动边界，并等待关键数据在后续交易日完成复核。`,
       allocationStance:riskOff?'优先压降超出风险预算的已核验暴露，未核验持仓先补齐映射与费用。':'维持现有风险预算，不因单一事件扩大仓位。',
       keyDrivers:Array.isArray(overview.drivers)?overview.drivers.slice(0,3):[],
+      opportunities:[],
       mainRisks:['智能投资建议请求超时，未形成新增模型判断。','数据缺失不补零，未验证映射不作为交易依据。'],
-      actionPlan:{unheld:'等待规则、产品比较和数据门禁共同满足后再评估建仓。',held:riskOff?'结合个人风险预算复核并分批降低超限暴露。':'保持仓位并跟踪结论成立条件。'},
-      reviewTriggers:Array.isArray(overview.watchlist)?overview.watchlist.slice(0,3):['下一交易日复核市场与事件数据'],
+      watchPoints:Array.isArray(overview.watchlist)?overview.watchlist.slice(0,3):['下一交易日复核市场与事件数据'],
+      actionPlan:{priority:riskOff?'先处理已触发的风险收缩条件。':'先等待数据与规则条件形成一致确认。',unheld:'等待规则、产品比较和数据门禁共同满足后再评估建仓。',held:riskOff?'结合个人风险预算复核并分批降低超限暴露。':'保持仓位并跟踪结论成立条件。'},
+      historyComparison:[],
     },
     recommendation:{unheld:'观望',held:riskOff?'复核风险敞口':'持有',reason:'智能投资建议请求超时，动作仅沿用冻结规则状态。'},
     tacticalView:{horizon:(evaluation?.profile?.horizonDays||20)+'个交易日',signal,conditions:'等待交易时段时效、市场信号与关键数据门禁重新核验。'},
@@ -57,8 +60,8 @@ export const investmentAdviceStep: StepDefinition = {
     let result:string
     try{
       const response = await runAnalysisPrompt(context, {
-        max_tokens:8192,
-        timeoutMs:300000,
+        max_tokens:6144,
+        timeoutMs:180000,
         maxAttempts:2,
         validateOutput:(text)=>validateResearchOutput(text,'investment-advice'),
       system: RESEARCH_SYSTEM,
