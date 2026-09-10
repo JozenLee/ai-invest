@@ -31,6 +31,7 @@ export type ETFInput = {
   ticker: string; name: string; bars: Bar[]; evidenceIds: string[];
   factors: Array<{ date: string; factor: number }>; adjustmentSource?: string;
   indexCode: string | null; indexName?: string; indexBars: Bar[];
+  fieldStatus?: Record<string,{status:string;detail?:string;expectedAt?:string}>;
   navHistory?: Array<{date:string;nav:number}>;
   indexConstituents?: Array<{code:string;weight:number;date:string}>;
   holdings: Array<{ code: string; name: string; weight: number | null; period: string | null; publishedAt: string | null; observedAt?: string | null; source: string; evidenceId: string }>;

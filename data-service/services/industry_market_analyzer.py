@@ -5,6 +5,7 @@ Industry Market Analyzer - 产业大盘分析服务
 修复版本：使用MultiSourceProvider提供多数据源智能降级
 增强版本：集成完整技术指标库
 """
+from core.ai_settings import scene_client, get_ai_settings
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
@@ -123,7 +124,7 @@ class IndustryMarketAnalyzer:
         self.neo4j_service = Neo4jService()
 
         # 初始化Anthropic客户端，使用环境变量配置
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        api_key = get_ai_settings('comprehensive')['api_key']
         base_url = os.getenv("ANTHROPIC_BASE_URL")
 
         self.ai_timeout_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_AI_TIMEOUT_SECONDS", "180")))
@@ -135,7 +136,7 @@ class IndustryMarketAnalyzer:
         }
         if base_url:
             client_kwargs["base_url"] = base_url
-        self.anthropic = Anthropic(**client_kwargs)
+        self.anthropic = scene_client('comprehensive', **client_kwargs)
 
         self.analysis_cache_ttl_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_CACHE_TTL_SECONDS", "900")))
         self.analysis_timeout_seconds = max(60, int(os.getenv("MARKET_ANALYSIS_TIMEOUT_SECONDS", "480")))
@@ -535,6 +536,7 @@ class IndustryMarketAnalyzer:
             return [], []
 
     @staticmethod
+
     def _rank_graph_etfs(
         node_candidates: List[Dict[str, Any]],
         etf_analysis: List[Dict[str, Any]],
@@ -634,6 +636,7 @@ class IndustryMarketAnalyzer:
         return rows
 
     @staticmethod
+
     def _number_from_record(record: Dict[str, Any], keys: tuple[str, ...], default: float = 0.0) -> float:
         """从中英文/Tushare字段中读取有限数值，避免 NaN 和 0 值误判。"""
         for key in keys:
@@ -647,6 +650,7 @@ class IndustryMarketAnalyzer:
         return default
 
     @staticmethod
+
     def _normalize_etf_kline_record(record: Dict[str, Any], index: int, history_records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """统一 ETF K 线字段，兼容 Tushare vol/amount 与旧中文字段。"""
         close_val = IndustryMarketAnalyzer._number_from_record(record, ("收盘", "close"))
@@ -668,6 +672,7 @@ class IndustryMarketAnalyzer:
             "涨跌幅": pct_chg,
         }
     @staticmethod
+
     def _select_graph_etfs(
         node_candidates: List[Dict[str, Any]],
         available_codes: Optional[set] = None,
@@ -751,6 +756,7 @@ class IndustryMarketAnalyzer:
         return []
 
     @staticmethod
+
     def _normalize_market_index_codes(codes: Optional[List[str]]) -> List[str]:
         """接受市场页面传入的指数代码，兼容 sh/sz 前缀和 Tushare 代码。"""
         if not isinstance(codes, list):
@@ -896,6 +902,7 @@ class IndustryMarketAnalyzer:
             return []
 
     @staticmethod
+
     def _validate_etf_history(kline: List[Dict[str, Any]]) -> Dict[str, Any]:
         """在指标计算前识别复权、单位切换或拼接造成的历史序列断点。"""
         closes = []
@@ -1575,6 +1582,7 @@ class IndustryMarketAnalyzer:
         return analyzed
 
     @staticmethod
+
     def _transform_to_nested_structure(flat_data: Dict[str, Any]) -> Dict[str, Any]:
         """
         将扁平化的技术指标数据转换为嵌套结构
@@ -1860,7 +1868,7 @@ class IndustryMarketAnalyzer:
 
             def generate() -> Any:
                 return self.anthropic.messages.create(
-                    model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                    model=get_ai_settings('comprehensive')['model'],
                     max_tokens=2500,
                     messages=[
                         {
@@ -1984,6 +1992,7 @@ class IndustryMarketAnalyzer:
             raise RuntimeError(f"市场 AI 报告生成失败：{type(e).__name__}: {e}") from e
 
     @staticmethod
+
     def _reconcile_market_report(
         report: str,
         data_quality: Dict[str, Any],

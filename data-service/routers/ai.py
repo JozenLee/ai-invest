@@ -2,6 +2,7 @@
 AI 分析服务 - 统一入口
 提供事件分析、批量分析、投资理念提取等功能
 """
+from core.ai_settings import scene_client, get_ai_settings
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -27,16 +28,13 @@ def get_anthropic_client():
     _client_initialized = True
 
     # 读取环境变量
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = get_ai_settings('news')['api_key']
     base_url = os.getenv("ANTHROPIC_BASE_URL")
 
     print(f"[AI] 初始化 Anthropic 客户端...")
     print(f"[AI] API Key: {'已设置' if api_key else '未设置'}")
     print(f"[AI] Base URL: {base_url}")
 
-    if not api_key:
-        print(f"[AI] ❌ API Key 未配置")
-        return None
 
     try:
         from anthropic import Anthropic
@@ -49,8 +47,8 @@ def get_anthropic_client():
             client_kwargs["base_url"] = base_url
             print(f"✓ 使用第三方 Anthropic API: {base_url}")
 
-        anthropic_client = Anthropic(**client_kwargs)
-        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        anthropic_client = scene_client('news', **client_kwargs)
+        model = get_ai_settings('news')['model']
         print(f"✓ Anthropic API 已配置，模型: {model}")
 
         return anthropic_client
@@ -129,9 +127,9 @@ async def health_check():
         健康状态和配置信息
     """
     client = get_anthropic_client()
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
-    provider = os.getenv("AI_PROVIDER", "anthropic").strip().lower()
+    api_key = get_ai_settings('news')['api_key']
+    model = get_ai_settings('news')['model']
+    provider = "anthropic"
 
     return {
         "status": "healthy" if client else "unavailable",
@@ -164,7 +162,7 @@ async def analyze_event(request: EventAnalysisRequest):
 
     try:
         prompt = build_event_analysis_prompt(request)
-        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        model = get_ai_settings('news')['model']
 
         message = client.messages.create(
             model=model,
@@ -292,7 +290,7 @@ async def extract_investment_ideas(request: InvestmentIdeasRequest):
   "confidence": "置信度(0-1)"
 }}"""
 
-        model = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+        model = get_ai_settings('news')['model']
 
         message = client.messages.create(
             model=model,

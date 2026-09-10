@@ -4,6 +4,7 @@ import { dateKey } from './time'
 export function securityCode(value: unknown): string {
   const text = String(value || '').trim()
   const hk = text.match(/^(?:hk(\d+)|(\d+)\.hk)$/i)
+  if (/^00[4-9]\d{3}$/.test(text)) return `${Number(text)}.hk`
   if (hk) return `${Number(hk[1] || hk[2])}.hk`
   return text.replace(/^(sh|sz|bj)(?=\d)/i, '').replace(/\.(sh|sz|bj)$/i, '')
 }
@@ -11,7 +12,7 @@ export function securityCode(value: unknown): string {
 export function securityAliases(code: string): string[] {
   if (!code.endsWith('.hk')) return [code]
   const digits = code.slice(0, -3)
-  return [...new Set([code, ...[digits, digits.padStart(4, '0'), digits.padStart(5, '0')].flatMap(value => [`${value}.HK`, `${value}.hk`])])]
+  return [...new Set([code, digits.padStart(6, '0'), ...[digits, digits.padStart(4, '0'), digits.padStart(5, '0')].flatMap(value => [`${value}.HK`, `${value}.hk`])])]
 }
 
 export function holdingPeriod(value: unknown): string | null {

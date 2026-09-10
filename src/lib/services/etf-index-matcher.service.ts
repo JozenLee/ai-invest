@@ -1,7 +1,7 @@
 // ETF/指数智能匹配服务
 // 结合关键词过滤和AI分析，为图谱节点匹配相关的ETF和指数
 
-import { aiClient, type AIClient } from '@/lib/ai/ai-factory'
+import { matchingAIClient as aiClient, type AIClient } from '@/lib/ai/ai-factory'
 import { prisma } from '@/lib/db'
 import { etfIndexFetcher, type ETFItem } from './etf-index-fetcher.service'
 import { keywordMatcher } from '@/lib/utils/keyword-matcher'

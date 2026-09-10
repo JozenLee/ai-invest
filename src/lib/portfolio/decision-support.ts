@@ -81,6 +81,7 @@ export type PortfolioDecisionSupport = {
     appliedToAllocation: string
   }
   allocationBasis?: string
+  unknownSignalPct?: number
   totalAssets: number
   cashWeightPct: number
   cashTargetFloorPct: number
@@ -163,7 +164,7 @@ export function resolveHoldingMapping(holding: PortfolioHoldingInput, evaluation
   if (holding.targetEtfCode || holding.targetIndexCode) return {
     ticker: holding.ticker, fundType: inferFundType(holding.name, holding.fundType), targetEtfCode: holding.targetEtfCode || explicitDecision?.ticker || null,
     targetIndexCode: holding.targetIndexCode || explicitDecision?.indexCode || null, decisionTicker: explicitDecision?.ticker || null,
-    method: 'manual', confidence: clamp01(holding.mappingConfidence ?? 1), verified: (holding.mappingConfidence ?? 1) >= .8,domainVerified:true,scope:'product',
+    method: 'manual', confidence: clamp01(holding.mappingConfidence ?? 1), verified: !!explicitDecision && (holding.mappingConfidence ?? 1) >= .8,domainVerified:true,scope:'product',
   }
   const direct = decisions.find(item => item.ticker === holding.ticker)
   if (direct) return { ticker: holding.ticker, fundType: 'etf', targetEtfCode: direct.ticker, targetIndexCode: direct.indexCode, decisionTicker: direct.ticker, method: 'direct-etf', confidence: 1, verified: true,domainVerified:true,scope:'product' }
@@ -222,7 +223,11 @@ export function buildPortfolioDecisionSupport(input: {
   const riskDiagnostics={concentrationHhi:round(concentrationHhi),effectiveFundCount:concentrationHhi>0?round(1/concentrationHhi):0,volatilityCoveragePct:currentIndustryWeightPct>0?round(volatilityCovered/currentIndustryWeightPct*100):100,unverifiedExposurePct:currentIndustryWeightPct>0?round(Math.max(0,currentIndustryWeightPct-verifiedWeight)/currentIndustryWeightPct*100):0,contributions:riskRows.map(row=>({ticker:row.ticker,weightPct:round(row.weightPct),volatilityPct:round(row.volatilityPct),riskSharePct:riskTotal>0?round(row.riskUnits/riskTotal*100):0})).sort((a,b)=>b.riskSharePct-a.riskSharePct),basis:'按持仓权重×单基金年化波动率估算独立风险份额；未纳入相关系数，不能替代协方差边际风险贡献。'}
   const completeMapping=verifiedWeight>=currentIndustryWeightPct&&currentIndustryWeightPct>0
   const riskFraction=completeMapping?mappedSignals.reduce((n,row)=>n+(row.state==='risk-off'?row.weight:0),0)/currentIndustryWeightPct:ruleSummary.total?ruleSummary.riskOff/ruleSummary.total:0
-  const signalFactor = 1-.25*riskFraction-(signal==='watch'||signal==='blocked'?.1:0)
+  const unknownFraction=completeMapping?mappedSignals.reduce((sum,row)=>sum+(!row.state||row.state==='blocked'?row.weight:0),0)/currentIndustryWeightPct:ruleSummary.total?ruleSummary.blocked/ruleSummary.total:1
+  const watchFraction=completeMapping?mappedSignals.reduce((sum,row)=>sum+(row.state==='watch'?row.weight:0),0)/currentIndustryWeightPct:ruleSummary.total?ruleSummary.watch/ruleSummary.total:0
+  // Reserve budget for unknown exposure; do not count missing signals as risk improvement.
+  // The unknown reserve uses the maximum existing discount, not a bearish market vote.
+  const signalFactor = 1 - .25 * (riskFraction + unknownFraction) - .1 * watchFraction
   const upper = round(maxIndustryPct * signalFactor)
   const lower = signal === 'eligible' ? round(upper * .6) : 0
   const fundCapReduction = relevant.reduce((sum, row) => sum + Math.max(0, (row.holding.weightPct || 0) - maxFundPct), 0)
@@ -235,7 +240,7 @@ export function buildPortfolioDecisionSupport(input: {
   const ruleRequestedDelta = rawTarget - currentIndustryWeightPct
   // The model may conservatively veto new exposure, but it cannot veto a
   // deterministic risk reduction or relax portfolio limits.
-  const researchAllowsIncrease = !researchAvailable || rating === '积极'
+  const researchAllowsIncrease = researchAvailable && rating === '积极' && unknownFraction === 0
   const increaseVetoed = ruleRequestedDelta > 0 && !researchAllowsIncrease
   const requestedDelta = ruleRequestedDelta > 0 && !researchAllowsIncrease ? 0 : ruleRequestedDelta
   const maxChangePct = policy.maxSingleAdjustmentRatio * 100
@@ -285,7 +290,7 @@ export function buildPortfolioDecisionSupport(input: {
     { key: 'fund-cap', label: '单基金仓位上限', met: projectedFundCapMet, detail: `单只基金不高于 ${maxFundPct.toFixed(1)}%` },
     { key: 'research-conclusion', label: '综合投资结论', met: ruleRequestedDelta <= 0 || researchAllowsIncrease, detail: ruleRequestedDelta <= 0 ? `本轮不新增风险，模型评级${rating}不阻止风控调整` : researchAllowsIncrease ? `模型评级${rating}，允许在规则与产品门禁内评估加仓` : `模型评级${rating}，本轮不新增风险暴露` },
   ]
-  const executable = gates.every(gate => gate.met)
+  const executable = gates.every(gate => gate.met || (gate.key === 'cash-floor' && desiredDelta < 0 && proposedCashWeightPct > input.cashWeightPct))
   const readiness: PortfolioDecisionSupport['readiness'] = signal === 'blocked' || !relevant.length ? 'blocked' : executable ? 'advice-ready' : 'limited-advice'
   const actions: PortfolioAction[] = relevant.map(row => {
     const current = row.holding.weightPct || 0
@@ -294,7 +299,7 @@ export function buildPortfolioDecisionSupport(input: {
     const amount = round(Math.abs(delta) / 100 * input.totalAssets)
     const feeKnown = typeof row.holding.redemptionFeePct === 'number'
     const reducing = delta < -.005, adding = delta > .005
-    const gaps = [!row.mapping.verified && (row.mapping.domainVerified?'产业领域已确认；正式底层ETF/指数未纳入本轮产品池':'产业领域与底层产品均待核验'), reducing && !feeKnown && '赎回费率或持有期缺失', !row.holding.costNav && '持仓成本净值缺失'].filter(Boolean) as string[]
+    const gaps = [!row.mapping.verified && (row.mapping.domainVerified?'产业领域已确认；正式底层ETF/指数未纳入本轮产品池':'产业领域与底层产品均待核验'), desiredDelta < 0 && !feeKnown && '赎回费率或持有期缺失', !row.holding.costNav && '持仓成本净值缺失'].filter(Boolean) as string[]
     const action: PortfolioAction['action'] = !resolved?'补充数据':reducing ? '减仓' : adding ? '加仓' : increaseVetoed ? '观望' : signal === 'risk-off' ? '观望' : '持有'
     return {
       ticker: row.holding.ticker, name: row.holding.name, action, currentWeightPct: round(current), targetWeightPct: resolved?round(current + delta):null, changeWeightPct: resolved?delta:null,
@@ -317,7 +322,7 @@ export function buildPortfolioDecisionSupport(input: {
       {
         stage: 1,
         label: '本领域风险预算复核',
-        detail: `按单次调整上限，将领域仓位由 ${currentIndustryWeightPct.toFixed(1)}% 复核至 ${proposedIndustryWeightPct.toFixed(1)}%，现金比例预计变为 ${proposedCashWeightPct.toFixed(1)}%。`,
+        detail: Math.abs(proposedIndustryWeightPct-currentIndustryWeightPct)<.01 ? '本轮未生成可落实的仓位变化；先补齐产品映射、费用与交易条件，再计算调整方案。' : `按单次调整上限，将领域仓位由 ${currentIndustryWeightPct.toFixed(1)}% 复核至 ${proposedIndustryWeightPct.toFixed(1)}%，现金比例预计变为 ${proposedCashWeightPct.toFixed(1)}%。`,
         executable,
       },
       ...(remainingCashGapPct > .01 ? [{
@@ -335,9 +340,9 @@ export function buildPortfolioDecisionSupport(input: {
     ],
   }
   return {
-    version: 1, allocationVersion:2, allocationBasis:`${completeMapping?'已按正式产品穿透映射聚合信号':domainMappingCoveragePct>=95?'产业领域归属已核验；因场外联接或主动基金未落入本轮场内ETF决策池，领域信号暂按唯一指数汇总':'产业领域归属覆盖不足，暂按唯一指数信号估算领域预算'}；风险收缩暴露${(riskFraction*100).toFixed(1)}%，预算系数${signalFactor.toFixed(3)}。待分配${remaining.toFixed(2)}个百分点；只有正式产品映射和成本完整时才输出逐基金金额。`, asOf: input.portfolioAsOf || null, industry: evaluation.profile.name, readiness, signal,
+    version: 1, allocationVersion:2, unknownSignalPct:round(unknownFraction*100), allocationBasis:`${completeMapping?'已按正式产品穿透映射聚合信号':domainMappingCoveragePct>=95?'产业领域归属已核验；因场外联接或主动基金未落入本轮场内ETF决策池，领域信号暂按唯一指数汇总':'产业领域归属覆盖不足，暂按唯一指数信号估算领域预算'}；风险收缩暴露${(riskFraction*100).toFixed(1)}%，未知信号占比${(unknownFraction*100).toFixed(1)}%，为其预留预算而非判为看空；预算系数${signalFactor.toFixed(3)}。待分配${remaining.toFixed(2)}个百分点；只有正式产品映射和成本完整时才输出逐基金金额。`, asOf: input.portfolioAsOf || null, industry: evaluation.profile.name, readiness, signal,
     researchConclusion: researchAvailable ? { rating, conclusion: String(executive.conclusion || advice.thesis || ''), allocationStance: String(executive.allocationStance || modelRecommendation.reason || ''), appliedToAllocation: ruleRequestedDelta > 0 && !researchAllowsIncrease ? '综合结论未达到积极评级，本轮已取消规则层面的新增风险建议；减仓和硬约束不受模型否决。' : '综合结论已作为新增风险门禁；仓位上限、现金底仓、费用和减仓仍由确定性规则计算。' } : undefined,
-    summary: readiness === 'advice-ready' ? `已生成可执行的分批投资建议，置信度 ${confidencePct.toFixed(1)}%。` : readiness === 'blocked' ? '核心持仓或市场数据不足，建议观望并补齐数据。' : `已生成投资建议，置信度 ${confidencePct.toFixed(1)}%；${gates.filter(gate => !gate.met).map(gate => gate.label).join('、')}缺失已计入置信度。`,
+    summary: readiness === 'advice-ready' ? `已生成可执行的分批投资建议，置信度 ${confidencePct.toFixed(1)}%。` : readiness === 'blocked' ? '核心持仓或市场数据不足，建议观望并补齐数据。' : `已生成投资建议，置信度 ${confidencePct.toFixed(1)}%；待补资料：${gates.filter(gate => !gate.met&&!['cash-floor','fund-cap','research-conclusion'].includes(gate.key)).map(gate => gate.label).join('、')||'无'}；未满足约束：${gates.filter(gate=>!gate.met&&['cash-floor','fund-cap','research-conclusion'].includes(gate.key)).map(gate=>gate.label).join('、')||'无'}。`,
     totalAssets: round(input.totalAssets), cashWeightPct: round(input.cashWeightPct), cashTargetFloorPct: round(minCashPct), currentIndustryWeightPct: round(currentIndustryWeightPct),
     targetIndustryRangePct: [lower, upper], proposedIndustryWeightPct, proposedCashWeightPct, mappingCoveragePct, verifiedMappingCoveragePct,domainMappingCoveragePct,productMappingCoveragePct,costCoveragePct,confidencePct,riskDiagnostics, adjustmentPlan,
     actions, gates, policy, disclaimer: `这是基于本轮冻结证据、当前持仓和风险预算生成的投资建议，并附数据置信度；系统不会自动执行交易。`,

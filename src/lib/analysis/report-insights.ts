@@ -194,7 +194,7 @@ function eventFingerprint(title: string) {
 export function decisionEvents(evaluation?: Evaluation, limit = 12) {
   if (!evaluation) return []
   const seen = new Set<string>()
-  const candidates=[...evaluation.events]
+  const candidates=[...(evaluation.events||[])]
     .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && !digestTitle.test(item.title) && !nonMaterialRiskTitle.test(item.title) && item.priority >= 4 && !['C','D'].includes(item.evidenceGrade||'B') && (item.materialityScore??70)>=65)
     .sort((a, b) => (b.materialityScore??0)-(a.materialityScore??0) || b.priority - a.priority || b.publishedAt.localeCompare(a.publishedAt))
     .filter(item => {
@@ -258,8 +258,8 @@ export function indexRuleSummary(evaluation?: Evaluation) {
   for(const row of evaluation?.decisions||[]) {const key=row.indexCode||row.ticker;grouped.set(key,[...(grouped.get(key)||[]),row])}
   const states=[...grouped.values()].map(rows=>rows.every(row=>row.state==='blocked')?'blocked':rows.filter(row=>row.state!=='blocked').every(row=>row.state==='risk-off')?'risk-off':rows.some(row=>row.state==='eligible')?'eligible':'watch')
   const riskOff=states.filter(state=>state==='risk-off').length,eligible=states.filter(state=>state==='eligible').length
-  return {total:states.length,riskOff,eligible,signal:!states.length||states.every(state=>state==='blocked')?'blocked' as const:riskOff>=Math.ceil(states.length/2)?'risk-off' as const:eligible?'eligible' as const:'watch' as const,
-    reason:`${states.length}个唯一指数：${riskOff}个风险收缩，${eligible}个满足条件；同指数产品不重复投票。`}
+  return {total:states.length,riskOff,eligible,blocked:states.filter(state=>state==='blocked').length,watch:states.filter(state=>state==='watch').length,signal:!states.length||states.every(state=>state==='blocked')?'blocked' as const:riskOff>=Math.ceil(states.length/2)?'risk-off' as const:eligible?'eligible' as const:'watch' as const,
+    reason:`${states.length}个唯一指数：${riskOff}个风险收缩，${eligible}个满足条件，${states.filter(state=>state==='blocked').length}个不可判；同指数产品不重复投票。`}
 }
 
 export function consolidateWatchlist(items:string[]){

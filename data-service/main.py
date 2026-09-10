@@ -341,7 +341,8 @@ async def health_check():
 
     # 检查AI分析器状态
     ai_enabled = os.getenv('ENABLE_AI_ANALYSIS', 'true').lower() == 'true'
-    api_key = os.getenv('ANTHROPIC_API_KEY')
+    from core.ai_settings import get_ai_settings
+    api_key = get_ai_settings('news')['api_key']
     api_configured = bool(api_key)
 
     # 从全局实例获取AI分析器状态
@@ -349,7 +350,7 @@ async def health_check():
     segments_loaded = 0
 
     if global_ai_analyzer is not None:
-        ai_ready = global_ai_analyzer.claude_client is not None
+        ai_ready = bool(global_ai_analyzer.claude_client)
         segments_loaded = len(global_ai_analyzer.industry_segments)
 
     return {

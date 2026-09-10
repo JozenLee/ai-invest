@@ -1,4 +1,5 @@
 # data-service/services/industry_explorer.py
+from core.ai_settings import async_scene_client, get_ai_settings
 import os
 import yaml
 import json
@@ -33,14 +34,14 @@ class IndustryExplorerService:
     """AI驱动的产业链探索引擎"""
 
     def __init__(self):
-        self.anthropic = AsyncAnthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
+        self.anthropic = async_scene_client('graph',
+            api_key=get_ai_settings('graph')['api_key'],
             base_url=os.getenv("ANTHROPIC_BASE_URL")
         )
         self.tavily = TavilyClient(
             api_key=os.getenv("TAVILY_API_KEY")
         )
-        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
+        self.model = get_ai_settings('graph')['model']
         self.company_resolver = RepresentativeCompanyResolver()
 
     async def explore_structure(
@@ -1203,6 +1204,7 @@ relationships:
         return detail
 
     @staticmethod
+
     def _retain_search_evidence(detail: SegmentDetail, search_context: str) -> None:
         """Reject model-supplied URLs that were not present in the search evidence."""
         import re

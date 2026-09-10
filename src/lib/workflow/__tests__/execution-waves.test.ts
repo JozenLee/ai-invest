@@ -5,10 +5,10 @@ import type {StepDefinition} from '../types'
 const step=(name:string):StepDefinition=>({name,description:name,dependencies:[],execute:async()=>{}})
 
 describe('comprehensive analysis execution waves',()=>{
-  it('runs independent market, event and company research in one wave',()=>{
+  it('serializes model requests sharing upstream capacity',()=>{
     const waves=executionWaves(['freeze-research','market-analysis','news-analysis','company-analysis','industry-overview','investment-advice'].map(step))
     expect(waves.map(wave=>wave.map(item=>item.name))).toEqual([
-      ['freeze-research'],['market-analysis','news-analysis'],['company-analysis'],['industry-overview'],['investment-advice'],
+      ['freeze-research'],['market-analysis'],['news-analysis'],['company-analysis'],['industry-overview'],['investment-advice'],
     ])
   })
 })

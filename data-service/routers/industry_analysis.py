@@ -2,6 +2,7 @@
 Industry Analysis Router - 产业分析API路由
 提供企业分析和市场分析接口
 """
+from core.ai_settings import scene_client, get_ai_settings
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 from typing import Any, Dict, List, Optional, Set
@@ -69,7 +70,7 @@ async def _generate_ai_comprehensive_report(
             raise _comprehensive_stage_error("ai_report", "综合分析 AI 客户端未配置", {"provider": provider})
         report = await asyncio.to_thread(client.complete, prompt, "你是严谨的产业研究员。", 3000)
     else:
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+        api_key = get_ai_settings('comprehensive')['api_key']
         if not api_key:
             raise _comprehensive_stage_error("ai_report", "综合分析 AI 客户端未配置", {"provider": provider})
         client = getattr(company_analyzer, "anthropic", None)
@@ -77,10 +78,10 @@ async def _generate_ai_comprehensive_report(
             client_kwargs: Dict[str, Any] = {"api_key": api_key, "max_retries": 0}
             if os.getenv("ANTHROPIC_BASE_URL"):
                 client_kwargs["base_url"] = os.getenv("ANTHROPIC_BASE_URL")
-            client = Anthropic(**client_kwargs)
+            client = scene_client('comprehensive', **client_kwargs)
         message = await asyncio.to_thread(
             client.messages.create,
-            model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+            model=get_ai_settings('comprehensive')['model'],
             max_tokens=3000,
             messages=[{"role": "user", "content": prompt}],
             system="你是严谨的产业研究员。",

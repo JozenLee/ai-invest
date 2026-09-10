@@ -15,8 +15,10 @@ function fallback(context:Parameters<NonNullable<StepDefinition['execute']>>[0])
     return {code:String(company.stockCode||''),name:String(company.stockName||'代表企业'),graphPath:[mapping.stage,mapping.segment].filter(Boolean).map(String),selectionReason:String(mapping.selectionReason||'来自冻结产业图谱与指数基金持仓样本'),mappingConfidence:mapping.matchConfidence??'待核验',matchedProducts:products,operatingEvidence:`已冻结${financials.length}组最近报告期财务材料，智能经营判断待复核。`,counterEvidence:list(company.financialGaps).length?list(company.financialGaps).join('；'):'智能分析未完成，不新增企业经营推断。'}
   })
   const evidence=companies.slice(0,4).flatMap(company=>rows(company.financials).slice(0,1).map(financial=>({claim:`${String(company.stockName||company.stockCode||'代表企业')}财务材料已冻结，智能解读待复核。`,source:String(list(financial.sources)[0]||financial.source||'冻结财务数据'),date:String(financial.period||financial.publishDate||''),evidenceIds:list(financial.evidenceIds).length?list(financial.evidenceIds):financial.evidenceId?[String(financial.evidenceId)]:[]})))
+  const coverage=row(input.coverage)
+  const breadth=typeof coverage.companyCount==='number'?`全池${coverage.companyCount}家，盈利增长${coverage.positiveProfitGrowth??'未知'}/${coverage.profitGrowthKnown??'未知'}家可判样本，现金健康${coverage.healthyCashConversion??'未知'}/${coverage.cashQualityKnown??'未知'}家可判样本；缺失项不计为零。`:''
   const chain=[...new Set(keyCompanies.map(item=>item.graphPath.join(' → ')).filter(Boolean))]
-  return {analysis:`企业分析智能请求未完成；已保留${keyCompanies.length}家代表样本的图谱位置、产品映射和冻结财务材料，本节不新增个股判断。`,key_companies:keyCompanies,chain_structure:chain,evidence,counterEvidence:['智能企业分析未完成，不能从有限样本外推全产业景气。'],watchlist:keyCompanies.map(item=>`${item.name}后续财报与现金流`)}
+  return {coverage,segmentAggregates:input.segmentAggregates,analysis:`企业分析智能请求未完成；${breadth}已保留${keyCompanies.length}家代表样本的图谱位置、产品映射和冻结财务材料，本节不新增个股判断。`,key_companies:keyCompanies,chain_structure:chain,evidence,counterEvidence:['智能企业分析未完成，不能从有限样本外推全产业景气。'],watchlist:keyCompanies.map(item=>`${item.name}后续财报与现金流`)}
 }
 
 /**
@@ -35,7 +37,7 @@ export const companyAnalysisStep: StepDefinition = {
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:2560,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'company-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'company-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('company-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

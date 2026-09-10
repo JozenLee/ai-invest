@@ -144,7 +144,7 @@ async def test_analyze_post_success(mock_db, mock_post, mock_influencer, mock_cl
     mock_db.get_connection.return_value = mock_conn
 
     # Mock Claude API
-    with patch('services.influencer_analysis_service.AsyncAnthropic') as MockAnthropic:
+    with patch('core.ai_settings.anthropic.AsyncAnthropic') as MockAnthropic:
         mock_client = AsyncMock()
         mock_client.messages.create.return_value = mock_claude_response
         MockAnthropic.return_value = mock_client
@@ -189,7 +189,7 @@ async def test_analyze_post_invalid_json(mock_db, mock_post, mock_influencer):
         MagicMock(spec=TextBlock, text="这不是有效的JSON格式")
     ]
 
-    with patch('services.influencer_analysis_service.AsyncAnthropic') as MockAnthropic:
+    with patch('core.ai_settings.anthropic.AsyncAnthropic') as MockAnthropic:
         mock_client = AsyncMock()
         mock_client.messages.create.return_value = mock_message
         MockAnthropic.return_value = mock_client
@@ -218,7 +218,7 @@ async def test_analyze_post_api_error(mock_db, mock_post, mock_influencer):
     mock_db.get_connection.return_value = mock_conn
 
     # Mock Claude API抛出异常
-    with patch('services.influencer_analysis_service.AsyncAnthropic') as MockAnthropic:
+    with patch('core.ai_settings.anthropic.AsyncAnthropic') as MockAnthropic:
         mock_client = AsyncMock()
         mock_client.messages.create.side_effect = Exception("API timeout")
         MockAnthropic.return_value = mock_client
@@ -251,7 +251,7 @@ async def test_analyze_post_saves_all_fields(mock_db, mock_post, mock_influencer
     mock_db.get_connection.return_value = mock_conn
 
     # Mock Claude API
-    with patch('services.influencer_analysis_service.AsyncAnthropic') as MockAnthropic:
+    with patch('core.ai_settings.anthropic.AsyncAnthropic') as MockAnthropic:
         mock_client = AsyncMock()
         mock_client.messages.create.return_value = mock_claude_response
         MockAnthropic.return_value = mock_client
@@ -298,7 +298,7 @@ async def test_analyze_post_with_markdown_wrapped_json(mock_db, mock_post, mock_
     mock_db.get_connection.return_value = mock_conn
 
     # Mock Claude API
-    with patch('services.influencer_analysis_service.AsyncAnthropic') as MockAnthropic:
+    with patch('core.ai_settings.anthropic.AsyncAnthropic') as MockAnthropic:
         mock_client = AsyncMock()
         mock_client.messages.create.return_value = mock_claude_response_with_markdown
         MockAnthropic.return_value = mock_client

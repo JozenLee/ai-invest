@@ -45,6 +45,7 @@ export async function GET(
       metadata: parseJson(run.metadata) || {},
       steps: run.steps.map((step) => ({
         ...step,
+        dependencies: comprehensiveAnalysisWorkflow.getStepDependencies(step.stepName),
         progress: parseJson(step.progress),
         artifacts: step.artifacts.map((artifact) => {
           const parsed=parseJson(artifact.data)

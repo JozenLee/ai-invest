@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
       companySource: companySource === 'graph' ? 'graph' : 'etf',
       portfolioAiConsent: body.portfolioAiConsent === new URL(process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').origin ? body.portfolioAiConsent : null,
       verificationMode,
-      refreshResearchData: verificationMode ? false : true,
+      refreshResearchData: false,
       createdBy: 'user', // TODO: 从session获取用户信息
       timestamp: new Date().toISOString()
     })

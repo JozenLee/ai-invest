@@ -1,3 +1,4 @@
+import type { ResearchOpportunity } from '@/lib/analysis/opportunity-ledger'
 import type { Profile } from './contracts'
 import { normalizeExecutiveConclusion, type ExecutiveInvestmentConclusion } from '@/lib/analysis/investment-conclusion'
 
@@ -19,10 +20,12 @@ export type HistoricalReportContext = {
   createdAt: string
   title: string
   comprehensiveConclusion: ExecutiveInvestmentConclusion
+  opportunityLedger?: ResearchOpportunity[]
   role: 'historical-comprehensive-conclusion'
 }
 
 type ReportData = {
+  opportunityLedger?: ResearchOpportunity[]
   researchEvaluation?: { expectedSession?: string | null; decisions?: Array<{state?:string}> }
   investmentAdvice?: string | Record<string,unknown>
   metadata?: { verificationMode?: string | null }
@@ -67,7 +70,7 @@ export function selectHistoricalReports(input:{
   }
   return [...latestBySession.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([sessionDate,candidate])=>{
     const data=parse<ReportData>(candidate.dataJson),investment=advice(data?.investmentAdvice)
-    return {reportId:candidate.id,industryId:candidate.industryId,industryName:candidate.industryName,sessionDate,createdAt:iso(candidate.createdAt),title:candidate.title,comprehensiveConclusion:normalizeExecutiveConclusion(investment,String(candidate.summary||'').slice(0,800)),role:'historical-comprehensive-conclusion'}
+    return {reportId:candidate.id,industryId:candidate.industryId,industryName:candidate.industryName,sessionDate,createdAt:iso(candidate.createdAt),title:candidate.title,opportunityLedger:data?.opportunityLedger,comprehensiveConclusion:normalizeExecutiveConclusion(investment,String(candidate.summary||'').slice(0,800)),role:'historical-comprehensive-conclusion'}
   })
 }
 

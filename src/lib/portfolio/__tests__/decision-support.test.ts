@@ -35,9 +35,9 @@ describe('portfolio decision support', () => {
     expect(support.targetIndustryRangePct).toEqual([0, 15])
     expect(support.proposedIndustryWeightPct).toBe(15)
     expect(support.proposedCashWeightPct).toBe(7)
-    expect(support.actions[0]).toMatchObject({ action: '减仓', amount: 4000, executable: false })
+    expect(support.actions[0]).toMatchObject({ action: '减仓', amount: 4000, executable: true })
     expect(support.gates.find(item => item.key === 'validation')).toBeUndefined()
-    expect(support.readiness).toBe('limited-advice')
+    expect(support.readiness).toBe('advice-ready')
     expect(support.adjustmentPlan).toMatchObject({ completed: false, remainingCashGapPct: 3 })
     expect(support.adjustmentPlan.steps.some(item=>item.label==='组合级现金底仓修复')).toBe(true)
   })
@@ -72,6 +72,13 @@ describe('portfolio decision support', () => {
     expect(support.actions[0]).toMatchObject({ action: '加仓', amount: 5000, targetWeightPct: 10 })
     expect(support.gates.find(item => item.key === 'research-conclusion')).toMatchObject({ met: true })
   })
+
+  it('applies a ten percent budget discount to watch signals', () => {
+    const support = buildPortfolioDecisionSupport({ evaluation: evaluation('watch'), totalAssets: 100000, cashWeightPct: 20, policy, dataQualityAvailable: true, portfolioAsOf: new Date().toISOString(), holdings: [
+      { ticker: '017470', name: '嘉实芯片ETF联接C', targetEtfCode: '159995', targetIndexCode: '980017.SZ', mappingConfidence: 1, redemptionFeePct: 0, costNav: 1, unitNav: 2, weightPct: 10, marketValue: 10000 },
+    ] })
+    expect(support.targetIndustryRangePct).toEqual([0, 18])
+  })
 })
 
 it('withholds exact amounts for proxy holdings while retaining the domain budget',()=>{
@@ -88,4 +95,24 @@ it('allocates reductions by verified risk and costs rather than pro rata',()=>{
   ]})
   expect(support.actions[0].amount).toBeNull()
   expect(support.actions[1].amount).toBe(4000)
+})
+
+it('never widens the budget when a known signal becomes unknown',()=>{
+  const ev=evaluation('risk-off')
+  ev.decisions=Array.from({length:4},(_,i)=>({...decision(String(i),'risk-off'),indexCode:`index${i}`}))
+  const input={evaluation:ev,totalAssets:100000,cashWeightPct:3,policy,dataQualityAvailable:false,portfolioAsOf:new Date().toISOString(),holdings:[{ticker:'017470',name:'芯片联接',industry:ev.profile.name,weightPct:19.02,marketValue:19020}]}
+  const complete=buildPortfolioDecisionSupport(input)
+  ev.decisions.slice(1).forEach(d=>d.state='blocked')
+  const partial=buildPortfolioDecisionSupport(input)
+  expect(complete.targetIndustryRangePct[1]).toBe(15)
+  expect(partial.targetIndustryRangePct[1]).toBeLessThanOrEqual(complete.targetIndustryRangePct[1])
+  expect(partial.unknownSignalPct).toBe(75)
+  expect(partial.signal).toBe('watch')
+  expect(partial.actions[0].amount).toBeNull()
+  expect(partial.adjustmentPlan.steps[0].detail).toContain('未生成可落实')
+  expect(partial.actions[0].gaps).toContain('赎回费率或持有期缺失')
+  expect(partial.summary).toContain('未满足约束：现金底仓')
+})
+it('does not verify an explicit mapping when its product is outside the evaluated universe',()=>{
+  expect(resolveHoldingMapping({ticker:'017470',name:'联接基金',targetEtfCode:'588200',weightPct:10,marketValue:10000},evaluation()).verified).toBe(false)
 })

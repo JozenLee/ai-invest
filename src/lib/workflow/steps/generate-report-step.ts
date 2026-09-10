@@ -1,3 +1,6 @@
+import { buildOpportunityLedger, type ResearchOpportunity } from '@/lib/analysis/opportunity-ledger'
+import { auditResearchConsistency } from '@/lib/analysis/research-consistency'
+import { enrichCatalysts } from '@/lib/analysis/disclosed-exposure'
 import { prisma } from '@/lib/db'
 import { fullResearchMarkdown } from '@/lib/analysis/full-research-report'
 import { applyContinuityReview, normalizeSocialReport, type SocialReport } from '@/lib/analysis/social-report'
@@ -11,6 +14,7 @@ import type { StepDefinition } from '../types'
 import { refreshEventPaths } from '../event-paths'
 
 type ArchivedReportData = {
+  opportunityLedger?: ResearchOpportunity[]
   socialReport?: SocialReport | null
   researchEvaluation?: Evaluation
   marketAnalysis?: unknown
@@ -65,7 +69,7 @@ async function reviewLineage(parentRunId?: string | null) {
 export const generateReportStep: StepDefinition = {
   name: 'generate-report',
   description: '生成综合分析报告',
-  dependencies: ['social-report', 'portfolio-analysis', 'portfolio-decision', 'etf-actions'],
+  dependencies: ['social-report', 'portfolio-decision', 'assess-data-quality'],
   estimatedDuration: 5000,
 
   async execute(context) {
@@ -80,7 +84,7 @@ export const generateReportStep: StepDefinition = {
     const industryAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.industryAnalysis : context.artifacts.get('industry-overview'),evidenceSources)
     const companyAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.companyAnalysis : context.artifacts.get('company-analysis'),evidenceSources)
     const inheritedSentiment = context.input.rulesOnly ? inheritedData.sentimentAnalysis : context.artifacts.get('news-analysis')
-    const investmentAdvice = auditEvidenceTree(context.input.rulesOnly ? inheritedData.investmentAdvice : context.artifacts.get('investment-advice'),evidenceSources)
+    let investmentAdvice = auditEvidenceTree(context.input.rulesOnly ? inheritedData.investmentAdvice : context.artifacts.get('investment-advice'),evidenceSources)
     const investmentRecord = record(investmentAdvice)
     const executiveSummary = record(investmentRecord.executiveSummary)
     const executiveConclusion = String(executiveSummary.conclusion || investmentRecord.thesis || '').replace(/\s+/g, ' ').trim()
@@ -91,7 +95,7 @@ export const generateReportStep: StepDefinition = {
     const researchPreflight = context.artifacts.get('research-preflight')
     const graphContext = (context.artifacts.get('graph-context') || context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext | undefined
     const graphMappingValidation = context.artifacts.get('graph-mapping-validation')
-    const sentimentAnalysis = auditEvidenceTree(refreshEventPaths(inheritedSentiment,graphContext),evidenceSources)
+    const sentimentAnalysis = auditEvidenceTree(enrichCatalysts(record(refreshEventPaths(enrichCatalysts(record(inheritedSentiment),context.artifacts.get('etf-holdings'),context.artifacts.get('research-snapshot')?.companies),graphContext)),context.artifacts.get('etf-holdings'),context.artifacts.get('research-snapshot')?.companies),evidenceSources)
     const graphReportSection = graphContext ? {
       revisions: {
         structureRevisionId: graphContext.revisionId,
@@ -129,7 +133,11 @@ export const generateReportStep: StepDefinition = {
       industry: context.artifacts.get('industry-overview-ai-status') || null,
       investment: context.artifacts.get('investment-advice-ai-status') || null,
     }
-    const reportQuality = buildReportQuality({ evaluation, dataQuality, preflight: researchPreflight, decisionTiming, analysisStatuses })
+    const consistencyIssues=[...new Set([
+      ...['market-analysis','news-analysis','company-analysis','industry-overview','investment-advice'].flatMap(key=>(context.artifacts.get(`${key}-consistency`)||[]).filter((issue:{severity:string})=>issue.severity==='error').map((issue:{detail:string})=>issue.detail)),
+      ...[marketAnalysis,companyAnalysis,sentimentAnalysis,industryAnalysis,investmentAdvice].flatMap(value=>auditResearchConsistency(value,context.artifacts.get('company-market-data')).map(issue=>issue.detail)),
+    ])] as string[]
+    const reportQuality = buildReportQuality({ consistencyIssues, evaluation, dataQuality, preflight: researchPreflight, decisionTiming, analysisStatuses })
     const reviewDelta = context.input.rulesOnly ? buildReportReviewDelta({
       current: evaluation,
       previous: parentData.researchEvaluation,
@@ -147,7 +155,13 @@ export const generateReportStep: StepDefinition = {
     const social = draft ? normalizeSocialReport(applyContinuityReview(draft, context.artifacts.get('data-quality')),evaluation,companyAnalysis) : null
     await context.saveArtifact('public-report-validation', { continuityGuard: true, validatedReport: social }, 'DATA')
     const actions = context.artifacts.get('etf-actions') || []
+    if(!context.input.rulesOnly)await context.saveArtifact('opportunity-ledger',buildOpportunityLedger({asOf:evaluation?.asOf||generatedAt,news:sentimentAnalysis,events:context.artifacts.get('news-events'),holdings:context.artifacts.get('etf-holdings'),decisions:evaluation?.decisions,graph:graphContext,history:context.artifacts.get('historical-report-context'),snapshot:context.artifacts.get('research-snapshot')}),'DATA')
+    if(context.input.rulesOnly)await context.saveArtifact('opportunity-ledger',buildOpportunityLedger({asOf:evaluation?.asOf||generatedAt,news:sentimentAnalysis,events:context.artifacts.get('news-events'),holdings:context.artifacts.get('etf-holdings'),decisions:evaluation?.decisions,graph:graphContext,history:[{opportunityLedger:parentData.opportunityLedger||inheritedData.opportunityLedger||[]}],snapshot:context.artifacts.get('research-snapshot')}),'DATA')
+    const finalInvestment={...record(investmentAdvice),opportunityLedger:context.artifacts.get('opportunity-ledger')||[]}
+    investmentAdvice=typeof investmentAdvice==='string'?JSON.stringify(finalInvestment):finalInvestment
     const reportContent = fullResearchMarkdown({ title, onePageAvailable: !!social, actions, decisionTiming, sections: [
+      { title: '核心判断与行动条件', value: executiveSummary },
+      { title: '机会跟踪与验证', value: context.artifacts.get('opportunity-ledger') || [] },
       { title: '市场分析', value: marketAnalysis },
       { title: '产业资讯分析', value: sentimentAnalysis },
       { title: '产业链企业分析', value: companyAnalysis },
@@ -164,11 +178,12 @@ export const generateReportStep: StepDefinition = {
         industryId: industryInfo.id,
         industryName: industryInfo.name,
         title: context.input.verificationMode==='graph-e2e' ? title : social?.title || title,
-        summary: `${context.input.verificationMode==='graph-e2e'?'仅用于验证知识图谱到综合报告的传递，不构成最新市场分析或交易依据。 ':''}${decisionTiming.executionReady ? '快照冻结于交易时段，具有执行意义。' : `${decisionTiming.label}：${decisionTiming.reasons[0] || '使用最近完整收盘数据'}。`} ${context.input.rulesOnly
+        summary: `${context.input.verificationMode==='graph-e2e'?'仅用于验证知识图谱到综合报告的传递，不构成最新市场分析或交易依据。 ':''}${decisionTiming.executionReady ? '冻结研究基准已保存；交易前需复核当前报价和公告。' : `${decisionTiming.label}：${decisionTiming.reasons[0] || '使用最近完整收盘数据'}。`} ${context.input.rulesOnly
           ? `${reviewDelta?.summary || '本地规则复核已完成。'}${lineage.narrative ? ` 正文继承自${lineage.narrative.createdAt.toISOString()}的完整分析，本轮未重新调用AI。` : ''}`
           : executiveConclusion || social?.subtitle || '完整研究与ETF操作建议已生成；一页发布版暂不可用。'}`,
         content: reportContent,
         dataJson: JSON.stringify({
+          opportunityLedger: context.artifacts.get('opportunity-ledger') || [],
           socialReport: social,
           socialReportStatus: context.artifacts.get('social-report-status'),
           etfActions: actions,
@@ -183,6 +198,7 @@ export const generateReportStep: StepDefinition = {
             investment: context.artifacts.get('investment-advice-graph-usage-validation'),
           },
           analysisStatuses,
+          aiServiceStatus: context.artifacts.get('ai-service-status') || null,
           researchPreflight,
           dataQuality,
           reportQuality,

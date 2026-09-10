@@ -20,7 +20,7 @@ export function refreshEventPaths(value:unknown,graph?:FrozenGraphContext){
   const catalysts=analysis.catalysts.map(item=>{
     const row=record(item),title=String(row.event||row.title||''),mapping=graph.eventMappings.find(candidate=>candidate.title===title)
     const path=mapping?.paths?.[0]
-    if(path)return {...row,path:`冻结事件 → ${path.segmentNames.join(' → ')} → 相关指数基金（方向待复核）`,affectedCompanies:path.affectedCompanies,affectedEtfs:path.affectedEtfs}
+    if(path)return {...row,path:`冻结事件 → ${path.segmentNames.join(' → ')} → 相关指数基金（方向待复核）`,affectedCompanies:Array.isArray(row.affectedCompanies)?row.affectedCompanies:path.affectedCompanies,graphAffectedCompanies:path.affectedCompanies,affectedEtfs:path.affectedEtfs}
 
     const catalystCompanies=Array.isArray(row.affectedCompanies)?row.affectedCompanies.map(normalizedSecurityCode).filter(Boolean):[]
     const companyMappings=graph.companyMappings.filter(company=>catalystCompanies.includes(normalizedSecurityCode(company.code))&&company.segmentCode)

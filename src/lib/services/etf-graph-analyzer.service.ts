@@ -1,8 +1,8 @@
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 import { prisma } from '@/lib/db'
 import { ETFGraphMapperService, type NodeExposure } from './etf-graph-mapper.service'
-import Anthropic from '@anthropic-ai/sdk'
 
-const anthropic = new Anthropic({
+const anthropic = sceneAnthropic('matching', {
   apiKey: process.env.ANTHROPIC_API_KEY
 })
 

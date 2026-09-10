@@ -1,4 +1,8 @@
 "use client";
+import { TechnicalReadinessPanel } from '@/components/analysis/TechnicalReadinessPanel';
+import type { TechnicalReadiness } from '@/lib/research/technical-readiness';
+import { OpportunityLedger } from '@/components/analysis/OpportunityLedger';
+import type { ResearchOpportunity } from '@/lib/analysis/opportunity-ledger';
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
@@ -68,6 +72,8 @@ type Report = {
   createdAt: string;
 };
 type Structured = {
+  aiServiceStatus?: {status?:string;reason?:string};
+  opportunityLedger?: ResearchOpportunity[];
   socialReport?: SocialReport;
   researchEvaluation?: Evaluation;
   researchPreflight?: {
@@ -79,7 +85,7 @@ type Structured = {
     warnings?: string[];
     publicationNotes?: string[];
   };
-  dataQuality?: { status?: string };
+  dataQuality?: { status?: string; technicalReadiness?:TechnicalReadiness };
   reportQuality?: ReportQualityAssessment;
   strategyValidation?: {status?:string;validation?:string;reason?:string;snapshots?:number;trades?:number;observations?:number;limitations?:string[];results?:Array<{ticker:string;status:string;returnPct:number|null;excessReturnPct?:number|null;maxDrawdownPct:number|null;sharpeRatio?:number|null;informationRatio?:number|null}>};
   decisionTiming?: DecisionTimingAssessment;
@@ -244,11 +250,13 @@ export default function ComprehensiveReportPage() {
     coverage = reportCoverage(evaluation),
     groups = productGroups(evaluation);
   const quality = evaluation
-    ? buildReportQuality({
+      ? buildReportQuality({
         evaluation,
+        consistencyIssues: structured.reportQuality?.consistencyIssues,
         dataQuality: structured.dataQuality,
         preflight: structured.researchPreflight,
         decisionTiming: timing,
+        analysisStatuses: structured.analysisStatuses,
       })
     : structured.reportQuality;
   const decisions = evaluation?.decisions || [],
@@ -333,6 +341,7 @@ export default function ComprehensiveReportPage() {
           {decisions.length}只产品 / {coverage.indexCount}个指数
         </p>
       </header>
+      {structured.aiServiceStatus?.status==='billing-blocked'&&<p role="status" className="mb-5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm leading-6">模型服务状态：{structured.aiServiceStatus.reason} 这不表示市场证据不足。恢复模型账户额度后可新建完整分析。</p>}
       <div className="grid items-start gap-6 print:grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
         <nav
           aria-label="报告子页面"
@@ -374,12 +383,14 @@ export default function ComprehensiveReportPage() {
                 <Badge variant={investmentFallback ? "outline" : "default"}>{investmentFallback ? "超时降级汇编" : "AI 综合研判"}</Badge>
               </div>
               {investmentFallback && <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">综合模型请求未在时限内完成；本结论由已完成的市场、事件、企业、行业总览和冻结规则结构化汇编，不新增模型推断。</p>}
+              {!!quality?.consistencyIssues?.length && <div role="alert" className="mt-4 rounded-xl border border-destructive/40 p-4 text-sm leading-6"><p className="font-semibold">报告存在待修复的事实口径冲突，暂不作为执行依据</p><ul>{quality.consistencyIssues.map((issue,index)=><li key={index}>{issue}</li>)}</ul></div>}
               <ComprehensiveConclusionView
                 advice={advice}
                 fallbackSummary={summary}
                 industryOutlook={industry.outlook}
                 decisionSummary={`${decisions.filter((item) => item.state === "risk-off").length}只产品风险收缩，${decisions.filter((item) => item.state === "eligible").length}只满足条件。`}
               />
+              <OpportunityLedger items={structured.opportunityLedger || []} />
               {structured.inheritedFromReportId && (
                 <p className="mt-4 text-xs text-amber-700">
                   本轮为规则复核，研究正文继承自{" "}
@@ -460,7 +471,7 @@ export default function ComprehensiveReportPage() {
                 {decisions.map((decision) => {
                   const action = safeDecisionAction(
                     decision,
-                    timing.executionReady && readiness.level === "advice-ready",
+                    timing.executionReady && readiness.level === "advice-ready" && !quality?.consistencyIssues?.length,
                   );
                   return (
                     <details
@@ -665,12 +676,13 @@ export default function ComprehensiveReportPage() {
               support={portfolio}
               analysis={structured.privatePortfolioAnalysis}
               executionReady={
-                timing.executionReady && readiness.level === "advice-ready"
+                timing.executionReady && readiness.level === "advice-ready" && !quality?.consistencyIssues?.length
               }
             />
           )}
           {activePage === "readiness" && (
             <section id="readiness" className="scroll-mt-20 space-y-4">
+              <TechnicalReadinessPanel data={structured.dataQuality?.technicalReadiness}/>
               {title("数据、时效与复盘附录")}
               <p className="text-sm leading-6 text-muted-foreground">这里集中保留数据健康度、字段限制、完整来源目录和版本链，供核对与复盘；用于形成结论的模块数据已放回对应研究页面。</p>
               <div className="grid gap-3 md:grid-cols-3">
@@ -802,8 +814,9 @@ export default function ComprehensiveReportPage() {
               {quality && (
                 <details className="rounded-xl border p-4">
                   <summary className="cursor-pointer text-sm font-medium">
-                    质量评分：{quality.overallScore}分 · {quality.grade}级
+                    证据质量评分：{quality.overallScore}分 · {quality.grade}级
                   </summary>
+                  <p className="mt-2 text-sm text-muted-foreground">{quality.scoreMeaning || '评分反映证据覆盖，不是投资胜率或收益预测。'}</p>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {quality.dimensions.map((item) => (
                       <div key={item.key} className="text-sm">

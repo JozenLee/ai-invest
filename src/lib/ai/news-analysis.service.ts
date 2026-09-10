@@ -1,9 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 import { tagCacheService } from '@/lib/services/tag-cache.service'
 import { buildTagExtractionPrompt, type TagExtractionResult } from './prompts/news-tag-extraction'
 import { prisma } from '@/lib/db/prisma'
 
-const anthropic = new Anthropic({
+const anthropic = sceneAnthropic('news', {
   apiKey: process.env.ANTHROPIC_API_KEY || ''
 })
 

@@ -1,3 +1,4 @@
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 import Anthropic from '@anthropic-ai/sdk'
 import { prisma } from '@/lib/db'
 
@@ -71,11 +72,8 @@ export class EventImpactAnalyzerService {
 
   constructor(apiKey?: string) {
     const key = apiKey || process.env.ANTHROPIC_API_KEY
-    if (!key) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required')
-    }
     const baseURL = process.env.ANTHROPIC_BASE_URL
-    this.client = new Anthropic({
+    this.client = sceneAnthropic('event', {
       apiKey: key,
       ...(baseURL && { baseURL })
     })

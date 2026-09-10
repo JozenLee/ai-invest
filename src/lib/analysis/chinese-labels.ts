@@ -95,4 +95,11 @@ export const analysisFieldLabels:Record<string,string>={
   exposureRationale:'产业暴露依据',evidenceBoundary:'证据边界',confidencePct:'建议置信度',segmentSignals:'产业环节信号',
   companySignal:'企业信号',eventSignal:'事件信号',etfExposure:'指数基金暴露',affectedCompanies:'影响企业',affectedEtfs:'影响的指数基金',path:'传导路径',event:'事件',
   segment:'细分环节',link:'传导作用',publishDates:'发布日期',sources:'来源',evidenceIds:'证据编号',
+  mode:'分析方式',sourceConclusion:'采用的综合投资结论',portfolioView:'组合视图',conclusionApplication:'结论如何作用于仓位',priorities:'逐持仓关注顺序',verificationBoundary:'核验边界',
+  researchConclusion:'综合投资结论',currentIndustryWeightPct:'当前领域仓位',targetIndustryRangePct:'领域风险预算区间',proposedIndustryWeightPct:'本轮可分配领域仓位',cashWeightPct:'当前现金比例',proposedCashWeightPct:'本轮可分配现金比例',
+  domainAction:'领域层判断',productExecution:'逐基金执行状态',verifiedProductCount:'已穿透产品数',pendingProductCount:'待穿透产品数',explanation:'说明',
+  overview:'市场指数概览',indices:'市场指数',capitalFlow:'领域资金',series:'历史序列',latest:'最新截面',latestDate:'最新业务日期',summary:'摘要',scope:'数据范围',
+  previousClose:'前收盘',open:'开盘',high:'最高',low:'最低',close:'收盘',volume:'成交量',changePct:'涨跌幅',sampleCount:'样本数',indicators:'技术指标',history:'历史数据',
+  market:'市场数据',flow:'资金数据',available:'可用',data:'数据',dataDate:'业务日期',fetchedAt:'采集时间',stale:'是否过期',units:'单位口径',metrics:'指标',field:'字段',value:'数值',delta:'较前值变化',previousDate:'前值日期',
+  technicalCoveragePct:'技术数据覆盖率',requestedETFCount:'请求ETF数',availableETFCount:'可用ETF数',limitations:'限制说明',modules:'模块状态',detail:'说明',
 }

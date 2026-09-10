@@ -63,7 +63,7 @@ describe('decision-focused evidence', () => {
     const module={analysis:'结论',evidence:many,counterEvidence:many,watchlist:many,catalysts:many.map(item=>({event:item.name,path:'芯片→服务器',affectedCompanies:many,affectedEtfs:many,conditions:'订单兑现',confidence:.8})),key_companies:many}
     const context={artifacts:new Map<string,any>([['industry-info',{name:'AI算力硬件'}],['graph-context',graph],['market-analysis',module],['news-analysis',module],['company-analysis',module]])} as StepContext
     const evidence=researchEvidence(context,'industry-overview')
-    expect(evidence.graph.stages[0].segments[0].representativeCompanies).toHaveLength(1)
+    expect(evidence.graph.stages[0].segments[0].representativeCompanies).toHaveLength(3)
     expect(evidence.graph.relations).toHaveLength(8)
     expect(evidence.graph.eventMappings).toBeUndefined()
     expect(evidence.companies.keyCompanies).toHaveLength(8)

@@ -9,7 +9,7 @@ const rows=(value:unknown):Row[]=>Array.isArray(value)?value.filter(item=>item&&
 const list=(value:unknown)=>Array.isArray(value)?value.filter((item):item is string=>typeof item==='string'):[]
 
 function fallback(context:Parameters<NonNullable<StepDefinition['execute']>>[0]){
-  const input=row(researchEvidence(context,'market-analysis')),market=row(input.market),etfs=rows(market.etfs)
+  const input=row(researchEvidence(context,'market-analysis')),etfs=rows(input.etfs)
   const evidence=etfs.slice(0,6).map(item=>({claim:`${String(item.name||item.ticker||'指数基金')}最近完整收盘数据已冻结，智能趋势解读待复核。`,source:String(item.source||'冻结行情数据'),date:String(item.date||''),evidenceIds:list(item.evidenceIds).slice(0,3)}))
   return {analysis:`市场分析智能请求未完成；已保留${etfs.length}只产品的冻结行情、技术质量和逐产品规则，本节不新增趋势推断。`,dimensions:[{name:'行情与规则',judgment:'待智能复核',detail:'报告继续使用冻结规则状态；具体价格、流动性和条件可在投资决策页核对。',evidenceIds:evidence.flatMap(item=>item.evidenceIds).slice(0,8)}],dataBoundary:'这是可追溯降级结果，不把缺失或中断解释为市场利空。',score:null,trend:'未知',risk_level:'未知',evidence,counterEvidence:[],watchlist:['下一轮重试市场趋势智能解读']}
 }
@@ -30,7 +30,7 @@ export const marketAnalysisStep: StepDefinition = {
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:3072,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'market-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'market-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('market-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

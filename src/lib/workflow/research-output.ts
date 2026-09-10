@@ -1,3 +1,5 @@
+import { enrichCatalysts } from '@/lib/analysis/disclosed-exposure'
+import { auditResearchConsistency } from '@/lib/analysis/research-consistency'
 import { auditClaim, type EvidenceClaim } from '@/lib/analysis/evidence-references'
 import type { Evidence } from '@/lib/research/contracts'
 import type { StepContext } from './types'
@@ -12,7 +14,7 @@ const required:Record<string,string[]>={
 }
 const financialClaim=/营业收入|营收|净利润|现金流|毛利率|净利率|ROE|资产负债率|应收|存货/u
 
-function parseObject(raw:string){
+export function parseResearchObject(raw:string){
   const clean=raw.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'')
   let value:unknown
   try{value=JSON.parse(clean)}catch(original){
@@ -67,7 +69,7 @@ function validateNestedOutput(value:Record<string,unknown>,key:string,issues:str
 }
 
 export function validateResearchOutput(raw:string,key:string){
-  const value=parseObject(raw),issues:string[]=[]
+  const value=parseResearchObject(raw),issues:string[]=[]
   const missing=(required[key]||[]).filter(field=>!(field in value))
   if(missing.length)throw new Error(`${key}输出缺少字段：${missing.join('、')}`)
   const sanitized=sanitize(value,issues)
@@ -87,6 +89,7 @@ export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:nu
 
 export async function saveValidatedResearchOutput(context:StepContext,key:string,raw:string){
   const result=validateResearchOutput(raw,key)
+  if(key==='news-analysis')result.text=JSON.stringify(enrichCatalysts(JSON.parse(result.text),context.artifacts.get('etf-holdings'),context.artifacts.get('research-snapshot')?.companies))
   const sources=(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]) as Evidence[]
   const audit=(value:unknown):unknown=>{
     if(Array.isArray(value))return value.map(audit)
@@ -96,6 +99,9 @@ export async function saveValidatedResearchOutput(context:StepContext,key:string
     return Object.fromEntries(Object.entries(row).map(([field,item])=>[field,audit(item)]))
   }
   result.text=JSON.stringify(audit(JSON.parse(result.text)))
+  const consistency=auditResearchConsistency(result.text,context.artifacts.get('company-market-data'))
+  result.issues.push(...consistency.map(issue=>issue.detail))
+  await context.saveArtifact(`${key}-consistency`,consistency,'DATA')
   await context.saveArtifact(key,result.text,'DATA')
   await context.saveArtifact(`${key}-validation`,{status:result.issues.length?'limited':'passed',issues:result.issues},'DATA')
   const graph=(context.artifacts.get('graph-context')||context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext|undefined

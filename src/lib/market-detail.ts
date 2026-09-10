@@ -72,7 +72,7 @@ const METRIC_ALIASES: Array<[string, string[]]> = [
   ['毛利率', ['毛利率', 'grossprofit_margin']], ['净利率', ['净利率', 'netprofit_margin']], ['ROE', ['roe', 'ROE']],
   ['经营现金流', ['经营现金流', 'n_cashflow_act', 'Operating Cash Flow', '经营业务现金净额', '经营活动产生的现金流量净额']], ['总资产', ['total_assets', 'Total Assets', '总资产', '资产总额']],
   ['总负债', ['total_liab', 'Total Liabilities Net Minority Interest', '总负债', '负债总额']], ['股东权益', ['total_hldr_eqy_exc_min_int', 'Stockholders Equity', '股东权益', '总权益']],
-  ['每股收益', ['basic_eps', 'diluted_eps', 'Basic EPS', '每股基本盈利']], ['营收同比', ['q_sales_yoy', 'tr_yoy']], ['净利润同比', ['q_netprofit_yoy', 'netprofit_yoy']],
+  ['每股收益', ['basic_eps', 'diluted_eps', 'Basic EPS', '每股基本盈利']], ['营收同比', ['tr_yoy', 'or_yoy']], ['单季度营收同比', ['q_sales_yoy']], ['净利润同比', ['netprofit_yoy']], ['单季度净利润同比', ['q_netprofit_yoy']],
 ]
 
 export function financialView(row: { reportPeriod: string; reportType: string; publishDate: Date | null; source: string | null; metricsJson: string }) {

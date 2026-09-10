@@ -1,5 +1,5 @@
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 import { NextRequest, NextResponse } from 'next/server'
-import Anthropic from '@anthropic-ai/sdk'
 
 type Preferences = {
   riskTolerance?: 'conservative' | 'balanced' | 'aggressive'
@@ -20,7 +20,7 @@ type Position = {
   profitLossPct: number
 }
 
-const anthropic = new Anthropic({
+const anthropic = sceneAnthropic('comprehensive', {
   apiKey: process.env.ANTHROPIC_API_KEY,
   baseURL: process.env.ANTHROPIC_BASE_URL,
 })

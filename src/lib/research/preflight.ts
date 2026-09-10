@@ -45,11 +45,9 @@ export function hasCurrentResearchSeries(payloads: string[], expectedSession: st
 
 export async function ensureResearchInputsFresh(industryId:string, options: { refresh?: boolean; tradingSession?: boolean; asOf?: string } = {}){
   const now=new Date(options.asOf||Date.now())
-  const [subscriptions,graphRow,calendarRow,profileRow]=await Promise.all([
+  const [subscriptions,graphRow]=await Promise.all([
     prisma.dataSubscription.findMany({where:{enabled:true},include:{instrument:true,datasets:true}}),
     prisma.rawPayload.findFirst({where:{datasetKey:'industry_graph'},orderBy:{fetchedAt:'desc'}}),
-    prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'}}),
-    prisma.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}}),
   ])
   const normalize=(value:unknown)=>String(value||'').toLowerCase().replace(/^(sh|sz)/,'').replace(/\.(sh|sz)$/,'')
   let graphCodes=new Set<string>()
@@ -59,6 +57,10 @@ export async function ensureResearchInputsFresh(industryId:string, options: { re
     const warnings = researchDatasetWarnings(selected.flatMap(subscription => subscription.datasets))
     return { status: 'warning', queued: 0, completed: 0, partial: 0, failed: 0, warnings: [...new Set(['本轮未触发外部同步，使用当前本地订阅快照', ...warnings])].slice(0, 8) }
   }
+  const [calendarRow,profileRow]=await Promise.all([
+    prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'}}),
+    prisma.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}}),
+  ])
   let calendarOpen=false
   try{
     const payload=JSON.parse(calendarRow?.payload||'null')

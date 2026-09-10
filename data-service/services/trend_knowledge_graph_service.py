@@ -3,6 +3,7 @@
 基于知识图谱的产业细分领域（segmentCodes）进行趋势分析
 """
 
+from core.ai_settings import scene_client, get_ai_settings
 import os
 import json
 import logging
@@ -19,7 +20,7 @@ class TrendAnalysisServiceV3:
 
     def __init__(self, db):
         self.db = db
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
+        self.model = get_ai_settings('graph')['model']
 
         # 知识图谱缓存
         self.industries = []
@@ -28,19 +29,15 @@ class TrendAnalysisServiceV3:
         self.last_sync_time = None
 
         # 初始化Claude客户端
-        api_key = os.getenv('ANTHROPIC_API_KEY')
+        api_key = get_ai_settings('graph')['api_key']
         base_url = os.getenv('ANTHROPIC_BASE_URL')
 
-        if api_key:
-            if base_url:
-                self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
-                logger.info(f'Claude API客户端初始化成功 (base_url: {base_url})')
-            else:
-                self.client = anthropic.Anthropic(api_key=api_key)
-                logger.info('Claude API客户端初始化成功 (官方API)')
+        if base_url:
+            self.client = scene_client('graph', api_key=api_key, base_url=base_url)
+            logger.info(f'Claude API客户端初始化成功 (base_url: {base_url})')
         else:
-            self.client = None
-            logger.warning('ANTHROPIC_API_KEY未设置，AI深度分析功能不可用')
+            self.client = scene_client('graph', api_key=api_key)
+            logger.info('Claude API客户端初始化成功 (官方API)')
 
     async def sync_knowledge_graph(self):
         """从知识图谱API同步产业结构"""

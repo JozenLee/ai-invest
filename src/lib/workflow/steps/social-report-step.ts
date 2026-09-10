@@ -38,7 +38,7 @@ function buildSocialReport(context:StepContext):SocialReport{
   const evaluation=context.artifacts.get('research-evaluation'),decisions=evaluation?.decisions||[],riskOff=decisions.filter((item:any)=>item.state==='risk-off').length,eligible=decisions.filter((item:any)=>item.state==='eligible').length
   const scenarios=investment.scenarios||{},valuationProducts=(evaluation?.products||[]).filter((item:any)=>Number.isFinite(item.pe)||Number.isFinite(item.pb))
   const valuationCount=new Set(valuationProducts.map((item:any)=>item.indexCode).filter(Boolean)).size
-  const draft={version:2 as const,title:`${industry.name||'产业'}ETF观察`,subtitle:first(overview.analysis||investment.thesis,'产业与市场证据已完成交叉复核。'),takeaways:[
+  const draft={version:2 as const,title:`${industry.name||'产业'}ETF观察`,subtitle:first(investment.executiveSummary?.conclusion||investment.thesis||market.analysis,'产业与市场证据已完成交叉复核。'),takeaways:[
     `产业：${overview.stage||'阶段待核验'}，盈利质量仍需持续验证。`,
     `战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`,
     `估值：${valuationCount?`${valuationCount}个指数有可核验当期值`:'暂无可核验当期估值'}。`,
@@ -48,7 +48,7 @@ function buildSocialReport(context:StepContext):SocialReport{
     {title:REPORT_SECTIONS[2],body:cited(market,'市场与估值证据不足。')},
     {title:REPORT_SECTIONS[3],body:`覆盖${decisions.length}只A股ETF、${evaluation?.indexBreadth?.mappedIndices||0}个跟踪指数；同指数产品按费率、流动性、净值时点和跟踪误差比较，异常值不参与选优。`},
     {title:REPORT_SECTIONS[4],body:`基准：${scenario(scenarios.base?.conditions||scenarios.base)}；上行：${scenario(scenarios.bull?.conditions||scenarios.bull)}；下行：${scenario(scenarios.bear?.conditions||scenarios.bear)}。`},
-    {title:REPORT_SECTIONS[5],body:first(investment.watchlist||news.watchlist,'跟踪订单、盈利、现金流、资金和趋势条件。')},
+    {title:REPORT_SECTIONS[5],body:prose(investment.executiveSummary?.watchPoints||news.watchlist)||'跟踪订单、盈利、现金流、资金和趋势条件。'},
   ],risks:(Array.isArray(investment.risks)?investment.risks:[]).map(prose).filter(Boolean).slice(0,3)}
   while(draft.risks.length<3)draft.risks.push(['数据缺失不补零，未验证规则不形成交易指令。','定期持仓披露与当前指数暴露可能存在偏差。','市场、产业与企业证据可能在报告生成后发生变化。'][draft.risks.length])
   return compactSocialReport(JSON.stringify(draft))

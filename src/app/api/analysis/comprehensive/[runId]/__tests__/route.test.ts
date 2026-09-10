@@ -2,7 +2,7 @@ import {beforeEach,describe,expect,it,vi} from 'vitest'
 import {NextRequest} from 'next/server'
 
 const getRunDetails=vi.hoisted(()=>vi.fn())
-vi.mock('@/lib/workflow/workflows/comprehensive-analysis',()=>({comprehensiveAnalysisWorkflow:{getRunDetails}}))
+vi.mock('@/lib/workflow/workflows/comprehensive-analysis',()=>({comprehensiveAnalysisWorkflow:{getRunDetails,getStepDependencies:vi.fn(()=>[])}}))
 import {GET} from '../route'
 
 describe('comprehensive step detail API',()=>{

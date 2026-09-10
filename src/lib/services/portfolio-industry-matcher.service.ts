@@ -1,4 +1,4 @@
-import { aiClient } from '@/lib/ai/ai-factory'
+import { matchingAIClient as aiClient } from '@/lib/ai/ai-factory'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 

@@ -22,7 +22,12 @@ export function Header({ onMenuOpen }: { onMenuOpen?: () => void }) {
   const [dynamicNames, setDynamicNames] = useState<Record<string, string>>({})
 
   // 生成面包屑
-  const breadcrumbs = pathname
+  const stepDetail = pathname.match(/^\/comprehensive-analysis\/run\/([^/]+)\/step\/([^/]+)$/)
+  const breadcrumbs = stepDetail ? [
+    {href:'/comprehensive-analysis',name:'综合分析'},
+    {href:`/comprehensive-analysis?runId=${encodeURIComponent(stepDetail[1])}`,name:'研究执行链路'},
+    {href:pathname,name:'流程明细'},
+  ] : pathname
     .split('/')
     .filter(Boolean)
     .map((segment, index, array) => {
@@ -163,6 +168,7 @@ function getBreadcrumbName(segment: string, dynamicNames: Record<string, string>
   }
 
   const nameMap: Record<string, string> = {
+    settings: '设置',
     market: '数据概览',
     overview: '概览',
     sectors: '板块轮动',

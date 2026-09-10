@@ -3,6 +3,7 @@
 新闻分类服务（基于知识图谱）
 使用Claude API根据产业图谱的Segment对新闻进行分类
 """
+from core.ai_settings import scene_client, get_ai_settings
 import os
 import json
 import logging
@@ -22,23 +23,18 @@ class NewsClassificationService:
     def __init__(self, neo4j_service: Neo4jService, db):
         self.neo4j = neo4j_service
         self.db = db
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
+        self.model = get_ai_settings('news')['model']
 
         # 初始化Claude客户端
-        api_key = os.getenv('ANTHROPIC_API_KEY')
+        api_key = get_ai_settings('news')['api_key']
         base_url = os.getenv('ANTHROPIC_BASE_URL')
 
-        if api_key:
-            if base_url:
-                self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
-                logger.info(f'Claude API客户端初始化成功 (base_url: {base_url})')
-            else:
-                self.client = anthropic.Anthropic(api_key=api_key)
-                logger.info('Claude API客户端初始化成功 (官方API)')
+        if base_url:
+            self.client = scene_client('news', api_key=api_key, base_url=base_url)
+            logger.info(f'Claude API客户端初始化成功 (base_url: {base_url})')
         else:
-            self.client = None
-            logger.warning('ANTHROPIC_API_KEY未设置，分类功能不可用')
-
+            self.client = scene_client('news', api_key=api_key)
+            logger.info('Claude API客户端初始化成功 (官方API)')
         # Segment缓存（定期刷新）
         self._segment_cache = None
         self._cache_updated_at = None

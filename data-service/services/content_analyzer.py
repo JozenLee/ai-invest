@@ -3,6 +3,7 @@
 使用Claude API分析新闻和大V动态的情感、主题、投资理念
 """
 
+from core.ai_settings import scene_client, get_ai_settings
 import os
 import json
 import re
@@ -26,23 +27,20 @@ class ContentAnalyzer:
 
     def __init__(self):
         self.client = None
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
+        self.model = get_ai_settings('news')['model']
         if HAS_ANTHROPIC:
-            api_key = os.getenv('ANTHROPIC_API_KEY')
+            api_key = get_ai_settings('news')['api_key']
             base_url = os.getenv('ANTHROPIC_BASE_URL')
-            if api_key:
-                # 支持自定义API基础URL（用于第三方代理）
-                if base_url:
-                    self.client = anthropic.Anthropic(
-                        api_key=api_key,
-                        base_url=base_url
-                    )
-                    logger.info(f'Claude API客户端初始化成功 (base_url: {base_url}, model: {self.model})')
-                else:
-                    self.client = anthropic.Anthropic(api_key=api_key)
-                    logger.info(f'Claude API客户端初始化成功 (官方API, model: {self.model})')
+            # 支持自定义API基础URL（用于第三方代理）
+            if base_url:
+                self.client = scene_client('news',
+                    api_key=api_key,
+                    base_url=base_url
+                )
+                logger.info(f'Claude API客户端初始化成功 (base_url: {base_url}, model: {self.model})')
             else:
-                logger.warning('ANTHROPIC_API_KEY未设置，AI分析功能不可用')
+                self.client = scene_client('news', api_key=api_key)
+                logger.info(f'Claude API客户端初始化成功 (官方API, model: {self.model})')
 
     def _extract_json_from_text(self, text: str) -> Optional[str]:
         """

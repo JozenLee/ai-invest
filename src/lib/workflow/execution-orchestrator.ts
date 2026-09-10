@@ -6,8 +6,13 @@ import {executionWaves} from './execution-waves'
 export class ExecutionOrchestrator {
   constructor(
     private workflowId: string,
-    private steps: StepDefinition[]
+    private steps: StepDefinition[],
+    private legacySteps: StepDefinition[] = []
   ) {}
+
+  getStepDependencies(stepName: string): string[] {
+    return [...([...this.steps,...this.legacySteps].find(step => step.name === stepName)?.dependencies || [])]
+  }
 
   /**
    * 创建新的执行轮次
@@ -43,7 +48,13 @@ export class ExecutionOrchestrator {
 
     try {
       await this.applyConditionalSteps(runId)
-      for(const wave of executionWaves(this.steps))await Promise.all(wave.map(step=>this.executeStep(runId,step.name)))
+      const recorded=this.legacySteps.length?await prisma.executionStep.findMany({where:{runId},select:{stepName:true}}):[]
+      const definitions=[...this.steps,...this.legacySteps.filter(step=>recorded.some(row=>row.stepName===step.name))]
+      for(const wave of executionWaves(definitions)){
+        const results=await Promise.allSettled(wave.map(step=>this.executeStep(runId,step.name)))
+        const failure=results.find((result):result is PromiseRejectedResult=>result.status==='rejected')
+        if(failure)throw failure.reason
+      }
 
       await this.updateRunStatus(runId, 'COMPLETED')
     } catch (error) {
@@ -56,7 +67,7 @@ export class ExecutionOrchestrator {
    * 执行单个步骤
    */
   async executeStep(runId: string, stepName: string): Promise<void> {
-    const stepDef = this.steps.find((s) => s.name === stepName)
+    const stepDef = [...this.steps,...this.legacySteps].find((s) => s.name === stepName)
     if (!stepDef) throw new Error(`Step ${stepName} not found`)
 
     const stepRecord = await prisma.executionStep.findUnique({
@@ -86,6 +97,7 @@ export class ExecutionOrchestrator {
       const context: StepContext = {
         runId,
         stepId: stepRecord.id,
+        previousAIRequestAttempt: Math.max(0,...stepRecord.artifacts.map(artifact=>Number(artifact.artifactKey.match(/^ai-request-attempt-(\d+)$/)?.[1]||0))),
         input: await this.loadInput(runId),
         artifacts,
         updateProgress: async (current, total, message) => {
@@ -98,6 +110,7 @@ export class ExecutionOrchestrator {
         },
         saveArtifact: async (key, data, type: 'REFERENCE' | 'DATA' | 'FILE' = 'DATA') => {
           await this.saveArtifact(stepRecord.id, key, data, type)
+          artifacts.set(key, data)
         }
       }
 
@@ -106,7 +119,7 @@ export class ExecutionOrchestrator {
       if (this.workflowId === 'comprehensive-analysis' && stepName !== 'freeze-research' && !snapshot) {
         throw new Error('该轮次没有冻结的研究证据，请新建分析；不使用当前数据改写旧轮次')
       }
-      if (projection) {
+      if (projection && stepName !== 'assess-data-quality') {
         for (const [key, value] of Object.entries(projection)) await context.saveArtifact(key, value, 'DATA')
         await context.updateProgress(1, 1, `读取冻结证据 ${snapshot.asOf}`)
       } else {
@@ -132,6 +145,59 @@ export class ExecutionOrchestrator {
           completedAt: new Date()
         }
       })
+      throw error
+    }
+  }
+
+  /**
+   * 单点执行或重复执行一个步骤。
+   *
+   * 已完成步骤重跑时，所有传递依赖它的下游步骤都会失效，避免新输入与
+   * 旧结论同时出现在同一轮次。下游步骤只会回到待执行状态，不会被自动
+   * 连带执行，便于逐点排查。
+   */
+  async executeSelectedStep(runId: string, stepName: string): Promise<{ invalidated: string[]; remaining: string[] }> {
+    const run = await prisma.executionRun.findUnique({
+      where: { id: runId },
+      include: { steps: { orderBy: { stepIndex: 'asc' } } }
+    })
+    if (!run) throw new Error('Run not found')
+    if (run.steps.some(step => step.status === 'RUNNING')) throw new Error('已有步骤执行中，请勿重复启动')
+
+    const target = run.steps.find(step => step.stepName === stepName)
+    const definition = [...this.steps,...this.legacySteps].find(step => step.name === stepName)
+    if (!target || !definition) throw new Error(`Step ${stepName} not found`)
+
+    const dependencyRows = run.steps.filter(step => definition.dependencies.includes(step.stepName))
+    const incomplete = definition.dependencies.filter(name => !dependencyRows.some(step => step.stepName === name && ['COMPLETED', 'SKIPPED'].includes(step.status)))
+    if (incomplete.length) throw new Error(`依赖步骤尚未完成：${incomplete.join('、')}`)
+
+    const invalidated = ['COMPLETED', 'SKIPPED', 'FAILED'].includes(target.status)
+      ? [stepName, ...this.downstreamSteps(stepName)]
+      : []
+    if (invalidated.length) {
+      const rows = run.steps.filter(step => invalidated.includes(step.stepName))
+      await prisma.$transaction(async tx => {
+        await tx.stepArtifact.deleteMany({ where: { stepId: { in: rows.map(step => step.id) } } })
+        await tx.executionStep.updateMany({
+          where: { id: { in: rows.map(step => step.id) } },
+          data: { status: 'PENDING', startedAt: null, completedAt: null, duration: null, error: null, progress: null }
+        })
+        await tx.executionRun.update({ where: { id: runId }, data: { status: 'PENDING', completedAt: null, error: null } })
+      })
+    }
+
+    await this.updateRunStatus(runId, 'RUNNING')
+    try {
+      await this.executeStep(runId, stepName)
+      const remainingRows = await prisma.executionStep.findMany({
+        where: { runId, status: { notIn: ['COMPLETED', 'SKIPPED'] } },
+        orderBy: { stepIndex: 'asc' }
+      })
+      await this.updateRunStatus(runId, remainingRows.length ? 'PENDING' : 'COMPLETED')
+      return { invalidated: invalidated.filter(name => name !== stepName), remaining: remainingRows.map(step => step.stepName) }
+    } catch (error) {
+      await this.updateRunStatus(runId, 'FAILED', String(error))
       throw error
     }
   }
@@ -229,6 +295,28 @@ export class ExecutionOrchestrator {
 
   // --- 辅助方法 ---
 
+  private downstreamSteps(stepName: string): string[] {
+    // The frozen snapshot is an implicit input to every comprehensive-analysis
+    // step even though the individual projections keep their business
+    // dependencies concise.
+    if (this.workflowId === 'comprehensive-analysis' && stepName === 'freeze-research') {
+      return this.steps.filter(step => step.name !== stepName).map(step => step.name)
+    }
+    const affected = new Set<string>()
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const step of this.steps) {
+        if (affected.has(step.name) || step.name === stepName) continue
+        if (step.dependencies.some(dependency => dependency === stepName || affected.has(dependency))) {
+          affected.add(step.name)
+          changed = true
+        }
+      }
+    }
+    return this.steps.filter(step => affected.has(step.name)).map(step => step.name)
+  }
+
   private async checkDependencies(
     runId: string,
     dependencies: string[]
@@ -283,6 +371,8 @@ export class ExecutionOrchestrator {
     })
 
     for (const step of steps) {
+      // New merged outputs supersede retired historical step artifacts.
+      if (this.workflowId === 'comprehensive-analysis' && ((step.stepName === 'etf-actions' && artifacts.has('research-evaluation')) || (step.stepName === 'portfolio-analysis' && artifacts.has('portfolio-analysis')))) continue
       for (const artifact of step.artifacts) {
         let data: any
 
@@ -387,7 +477,7 @@ export class ExecutionOrchestrator {
         status,
         error: error ?? null,
         completedAt:
-          status === 'COMPLETED' || status === 'FAILED' ? new Date() : undefined
+          status === 'COMPLETED' || status === 'FAILED' ? new Date() : null
       }
     })
   }

@@ -1,3 +1,4 @@
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 // AI智能节点创建服务
 // 功能：
 // 1. 根据节点名称和描述，AI自动匹配相关的ETF和指数
@@ -6,9 +7,8 @@
 // 4. 自动接入市场数据增强
 
 import prisma from '@/lib/db/prisma'
-import { Anthropic } from '@anthropic-ai/sdk'
 
-const anthropic = new Anthropic({
+const anthropic = sceneAnthropic('graph', {
   apiKey: process.env.ANTHROPIC_API_KEY || '',
 })
 

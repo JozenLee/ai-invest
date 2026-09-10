@@ -3,6 +3,7 @@ AI分析工作协程池
 使用Claude API进行新闻内容分析
 """
 
+from core.ai_settings import async_scene_client, get_ai_settings
 import asyncio
 import logging
 import json
@@ -32,27 +33,23 @@ class AIAnalyzer:
         self.logger = logger
 
         # 获取API密钥和配置
-        api_key = anthropic_api_key or os.getenv('ANTHROPIC_API_KEY')
+        api_key = anthropic_api_key or get_ai_settings('news')['api_key']
         base_url = os.getenv('ANTHROPIC_BASE_URL')
 
         if not api_key:
             logger.warning("未配置ANTHROPIC_API_KEY，AI分析功能将不可用")
 
         # 初始化Claude客户端，支持自定义base_url
-        if api_key:
-            client_kwargs = {'api_key': api_key}
-            if base_url:
-                client_kwargs['base_url'] = base_url
-                logger.info(f"使用自定义API端点: {base_url}")
+        client_kwargs = {'api_key': api_key}
+        if base_url:
+            client_kwargs['base_url'] = base_url
+            logger.info(f"使用自定义API端点: {base_url}")
 
-            self.claude_client = AsyncAnthropic(**client_kwargs)
-        else:
-            self.claude_client = None
-
+        self.claude_client = async_scene_client('news', **client_kwargs)
         self.redis_client = None  # 可选Redis客户端
 
         # 获取模型配置
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+        self.model = get_ai_settings('news')['model']
 
         # 知识图谱产业结构缓存
         self.industry_segments: Dict[str, Any] = {}

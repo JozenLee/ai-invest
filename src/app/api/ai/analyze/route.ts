@@ -1,5 +1,5 @@
+import { sceneAnthropic } from '@/lib/ai/scene-client'
 import { NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { buildIndustryNewsInsightPrompt } from '@/lib/analysis/news-insight';
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
@@ -98,7 +98,7 @@ const PUBLISH_REFINEMENT_TEMPLATE = `
 - 语言像有经验的研究员给普通投资者做的清晰解读，少用“综上所述”“值得注意的是”等套话。
 `;
 
-const anthropic = new Anthropic({
+const anthropic = sceneAnthropic('comprehensive', {
   apiKey: process.env.ANTHROPIC_API_KEY,
   baseURL: process.env.ANTHROPIC_BASE_URL,
 });

@@ -1,3 +1,5 @@
+import { sharedIndexSeries } from './shared-index-series'
+import { assessTechnicalReadiness } from './technical-readiness'
 import { withDisclosedHoldings } from '@/lib/graph/holding-mappings'
 import { createHash, randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/db'
@@ -155,7 +157,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const localRows=daily.filter(r=>r.ticker===ticker)
       const liveQuote=freshIntradayQuote(quoteRows.find(row=>row.code===ticker),asOf,chinaDate(asOf))
       const completedPriceRows=[...new Map([...bars(localRows.slice(-profile.rules.minHistory-30)),...bars(research.daily,1000)].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date))
-      const mergedPriceRows=mergeIntradayBar(completedPriceRows,liveQuote)
+      const mergedPriceRows=mergeIntradayBar(completedPriceRows,liveQuote).slice(-profile.rules.minHistory-40)
       records[`${id}:bars:${ticker}`]=mergedPriceRows
       const etfEvidence=[add({id:`${id}:bars:${ticker}`,source:research.daily.length?'Tushare/fund_daily':'frozen-local-daily',dataDate:mergedPriceRows.at(-1)?.date||null,publishedAt:null,fetchedAt:asOf,hash:digest(mergedPriceRows)})]
       if(liveQuote){const quoteId=`${id}:quote:${ticker}`;records[quoteId]=liveQuote;etfEvidence.push(add({id:quoteId,source:liveQuote.source||'realtime-quote',dataDate:liveQuote.tradeDate,publishedAt:null,fetchedAt:liveQuote.fetchedAt.toISOString(),hash:digest(liveQuote)}))}
@@ -188,7 +190,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const info=research.info?.[0]||{}
       const productDate=productNav.date
       const latestAudit=parse<{fieldStatus?:Record<string,{status:string;detail?:string;expectedAt?:string}>}>(researchEntries[0]?.raw.payload)?.fieldStatus||{}
-      const publicationNotes=Object.entries(latestAudit).filter(([,item])=>item.status==='pending-publication').map(([key,item])=>`${key==='shares'?'份额':'净值'}：${item.detail||'等待发布'}${item.expectedAt?'；预期 '+item.expectedAt:''}`)
+      const publicationNotes=Object.entries(latestAudit).filter(([,item])=>item.status==='pending-publication').map(([key,item])=>`${({shares:'份额',nav:'净值',factors:'复权因子',daily:'日线',indexDaily:'指数日线'} as Record<string,string>)[key]||key}：${item.detail||'等待发布'}${item.expectedAt?'；预期 '+item.expectedAt:''}`)
       const localBars=daily.filter(r=>r.ticker===ticker).slice(-profile.rules.minHistory-30)
       // Research collectors explicitly normalize amount to CNY; legacy daily amount is not trusted.
       const researchBars=bars(research.daily||[],1000)
@@ -201,14 +203,22 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
         const fallbackId=`${id}:holding:${ticker}:${code}:${index}`
         return {code,name:String(row.stock_name||row.name||persistedNames.get(code)||code),weight:row.weight_available===false?null:number(row.weight??row.stk_mkv_ratio),period,publishedAt:dateKey(row.ann_date||row.publish_date),observedAt:holdingRaw?.fetchedAt||null,source:String(row.source||'legacy-holdings-period-unknown'),evidenceId:holdingRaw?.id||add({id:fallbackId,source:'legacy-holdings-period-unknown',dataDate:period,publishedAt:null,fetchedAt:holdingRaw?.fetchedAt||asOf,hash:digest(row)})}
       }):persistedHoldings.slice(0,10).map(row=>({code:symbol(row.stockCode),name:String(row.stockName),weight:number(row.weight),period:null,publishedAt:null,source:'legacy-holdings-period-unknown',evidenceId:holdingRaw?.id||add({id:`${id}:holding:${row.id}`,source:'legacy-holdings-period-unknown',dataDate:null,publishedAt:null,fetchedAt:row.updateDate.toISOString(),hash:digest(row)})}))
-      return {ticker,name:s.instrument.name||ticker,bars:mergeIntradayBar([...new Map([...bars(localBars),...researchBars].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date)),liveQuote),evidenceIds:etfEvidence,
-        factors:factorRows,adjustmentSource:research.factors?.length?'Tushare/fund_adj':undefined,
+      return {ticker,name:s.instrument.name||ticker,bars:mergeIntradayBar([...new Map([...bars(localBars),...researchBars].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date)),liveQuote).slice(-profile.rules.minHistory-40),evidenceIds:etfEvidence,
+        fieldStatus:latestAudit,factors:factorRows,adjustmentSource:research.factors?.length?'Tushare/fund_adj':undefined,
         indexCode:/^[A-Z0-9]{6}\.(SH|SZ|CSI)$/.test(mapped)?mapped:null,indexName:typeof info.index_name==='string'?info.index_name:undefined,indexBars:bars(research.indexDaily||[],1000),
         navHistory:(research.nav||[]).filter(r=>dateKey(r.nav_date)&&dateKey(r.nav_date)!<=cutoff&&dateKey(r.ann_date)&&dateKey(r.ann_date)!<=chinaDate(asOf)).flatMap(r=>{const nav=number(r.adj_nav??r.accum_nav);return nav!==null&&nav>0?[{date:dateKey(r.nav_date)!,nav}]:[]}),
         indexConstituents:(research.indexWeights||[]).filter(r=>dateKey(r.trade_date)&&dateKey(r.trade_date)!<=cutoff).map(r=>({code:symbol(r.con_code),weight:Number(r.weight),date:dateKey(r.trade_date)!})),
         holdings:normalizedHoldings,
         product:{publicationNotes,navSource:productNav.source,navStatus:productDate===closeCutoff?'available':latestAudit.nav?.status==='failed'?'failed':!productDate?'missing':calendar.filter(day=>day.open&&day.date>productDate!&&day.date<=closeCutoff).length>1?'stale':'pending-publication',navDetail:productDate===closeCutoff?'最近完整收盘价与净值同日':`最近完整收盘日 ${closeCutoff}；最近净值 ${productDate||'缺失'}，不能计算同日折溢价`,date:productDate,nav:productNav.nav,shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),bookPublishedAt:book?.publishedAt?String(book.publishedAt):null,valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentileHistory:percentileRank(peHistory,currentPe),pbPercentileHistory:percentileRank(pbHistory,currentPb),valuationHistoryStart:dateKey(valuationHistory[0]?.trade_date||valuationHistory[0]?.date),valuationSampleCount,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:number(info.mgt_fee),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
     })
+    for(const shared of sharedIndexSeries(etfs,closeCutoff)){
+      if(shared.sourceTicker===shared.etf.ticker)continue
+      const etf=etfs.find(row=>row.ticker===shared.etf.ticker)!
+      etf.indexBars=shared.etf.indexBars
+      const sharedId=`${id}:shared-index:${etf.ticker}`
+      records[sharedId]={indexCode:etf.indexCode,bars:etf.indexBars,sourceTicker:shared.sourceTicker,sourceEvidenceIds:etfs.find(row=>row.ticker===shared.sourceTicker)?.evidenceIds}
+      etf.evidenceIds.push(add({id:sharedId,source:'冻结同指数产品的正式指数日线',dataDate:etf.indexBars.at(-1)?.date||null,publishedAt:null,fetchedAt:asOf,hash:digest(records[sharedId])}))
+    }
     const mappedGroup=group?withDisclosedHoldings(group,etfs,asOf,cutoff):undefined
     if(mappedGroup&&!mappedGroup.mappingRevisionId&&!mappedGroup.mapping_revision_id){
       const derivedMappingHash=digest({graphRevision:mappedGroup.revisionId||mappedGroup.revision_id,holdings:etfs.map(etf=>({ticker:etf.ticker,holdings:etf.holdings.map(item=>({code:item.code,weight:item.weight,period:item.period,evidenceId:item.evidenceId}))}))})
@@ -290,7 +300,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const marketData=etfs.map(e=>{
       const series=adjustedBars(e,boundary.expectedSession||cutoff),d=evaluation.decisions.find(d=>d.ticker===e.ticker)!,metrics=calculateDetailMetrics(series.bars)
       const quote=freshIntradayQuote(quoteRows.find(row=>row.code===e.ticker),asOf,chinaDate(asOf))
-      return {ticker:e.ticker,name:e.name,price:series.bars.at(-1)?.close||null,changePct:quote?.changePct??metrics.latestChangePct,history:series.bars,keyIndicators:series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:quote?`${e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database'}+${quote.source||'realtime-quote'}`:e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database',dataDate:series.bars.at(-1)?.date,intraday:true,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
+      return {ticker:e.ticker,name:e.name,price:series.bars.at(-1)?.close||null,changePct:quote?.changePct??metrics.latestChangePct,history:series.bars,keyIndicators:d.state!=='blocked'&&series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:d.state!=='blocked'&&series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:quote?`${e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database'}+${quote.source||'realtime-quote'}`:e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database',dataDate:series.bars.at(-1)?.date,intraday:Boolean(quote),quoteFetchedAt:quote?.fetchedAt.toISOString()||null,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
     })
     const [stockDaily,stockQuotes]=await Promise.all([
       tx.stockDaily.findMany({where:{ticker:{in:companyAliases},date:{gte:earliest,lte:new Date(closeCutoff+'T23:59:59Z')}},orderBy:{date:'asc'}}),
@@ -302,19 +312,42 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       if(history.length)add({id:evidenceId,source:quote?.source||'local-company-daily',dataDate:history.at(-1)?.date||null,publishedAt:null,fetchedAt:quote?.fetchedAt.toISOString()||asOf,hash:digest(records[evidenceId])})
       return {...c,stockCode:c.code,stockName:c.name,source:c.pool,marketData:history.at(-1)?.date===cutoff?{...history.at(-1),price:history.at(-1)?.close,changePct:quote?.changePct??metrics.latestChangePct,source:quote?.source||'local-company-daily',quoteFetchedAt:quote?.fetchedAt.toISOString()||null,intraday:Boolean(quote),evidenceId}:null,history,indicators:metrics,financials:reports.filter(r=>r.stockCode===c.code).slice(0,24).map(r=>{const v=financialView(r);return {...v,evidenceId:r.id,calculated:financialRatios(v.metrics)}}),announcements:events.filter(e=>e.companies.includes(c.code)).slice(0,6).map(e=>({...e,publishDate:e.publishedAt,source:e.sources.join(' / '),url:e.urls[0]||null,summary:e.excerpt})),quality:{source:'frozen-research-snapshot'}}
     })
-    const marketIndices=MARKET_INDEXES.map(index=>{const quote=indexQuote(index.code),series=mergeIntradayBar(bars(indexLocal.filter(r=>symbol(r.code)===symbol(index.code))),quote),last=series.at(-1);return {...index,price:last?.date===cutoff?last.close:null,changePct:quote?.changePct??null,dataDate:last?.date||null,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,source:quote?.source||'local-index-daily',intraday:Boolean(quote),aligned:last?.date===cutoff}})
+    const marketIndices=MARKET_INDEXES.map(index=>{
+      const quote=indexQuote(index.code)
+      const series=mergeIntradayBar(bars(indexLocal.filter(r=>symbol(r.code)===symbol(index.code))),quote)
+      const last=series.at(-1),previous=series.at(-2),metrics=calculateDetailMetrics(series,quote||null)
+      const aligned=last?.date===cutoff
+      const change=aligned&&last&&previous?last.close-previous.close:null
+      const changePct=quote?.changePct??(aligned&&last&&previous&&previous.close>0?(last.close/previous.close-1)*100:null)
+      return {...index,price:aligned?last?.close||null:null,previousClose:previous?.close||null,open:aligned?last?.open||null:null,high:aligned?last?.high||null:null,low:aligned?last?.low||null:null,volume:aligned?last?.volume||null:null,change,changePct,dataDate:last?.date||null,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,source:quote?.source||'local-index-daily',intraday:Boolean(quote),aligned,sampleCount:series.length,indicators:metrics.indicators,history:series.slice(-120)}
+    })
     const reference=(key:string)=>{const r=latest(key);if(!r)return null;sourceEvidence(r);const data=rowsOf(r).filter(row=>dateKey(row.trade_date)&&dateKey(row.trade_date)!<=cutoff);return {data,source:parse<Bundle>(r.payload)?.source||r.provider,dataDate:dateKey(data[0]?.trade_date),fetchedAt:r.fetchedAt,stale:!data.length||Date.parse(asOf)-Date.parse(dateKey(data[0]?.trade_date)!)>7*86400000}}
     const references={mainFlow:reference('market_main_flow'),margin:reference('margin_balance')}
+    const latestSectorFlowDate=sectorFlows.map(row=>row.date).sort().at(-1)||null
+    const latestSectorFlows=latestSectorFlowDate?sectorFlows.filter(row=>row.date===latestSectorFlowDate):[]
+    const capitalFlowSnapshot={
+      scope:'配置的领域板块，不代表全市场新增资金',
+      series:sectorFlows,
+      latestDate:latestSectorFlowDate,
+      latest:latestSectorFlows,
+      summary:{
+        sectorCount:profile.sectors.length,
+        coveredSectorCount:new Set(latestSectorFlows.map(row=>row.sector)).size,
+        net:latestSectorFlows.length?latestSectorFlows.reduce((sum,row)=>sum+row.net,0):null,
+        netPct:latestSectorFlows.length&&latestSectorFlows.every(row=>row.netPct!==null)?latestSectorFlows.reduce((sum,row)=>sum+row.netPct!,0)/latestSectorFlows.length:null,
+      },
+    }
     const allHoldings=etfs.flatMap(e=>e.holdings.map(h=>({...h,etfCode:e.ticker,stock_code:h.code,stock_name:h.name,trade_date:h.period})))
     const articleData=events.filter(e=>!e.companies.length&&e.status==='evidence'&&e.category!=='administrative').map(e=>({...e,content:e.excerpt,summary:e.excerpt,publishTime:e.publishedAt,source:e.sources.join(' / '),url:e.urls[0],sentiment:null}))
     const trackingAnomalies=evaluation.products?.filter(product=>typeof product.trackingErrorPct==='number'&&product.trackingErrorPct>20).map(product=>({ticker:product.ticker,metric:'trackingErrorPct',value:product.trackingErrorPct,reason:'年化跟踪误差超过20%，疑似净值或指数序列口径异常'}))||[]
     const perEtf=evaluation.decisions.map(d=>{const dataGaps=[...d.conditions.filter(condition=>condition.status==='unknown').map(condition=>condition.label),...(evaluation.omittedConditions||[]).map(condition=>condition.label)],signalGaps=d.conditions.filter(condition=>condition.status==='unmet').map(condition=>condition.label);return {ticker:d.ticker,status:d.state==='blocked'?'blocked':dataGaps.length?'limited':'available',dataGaps,signalGaps,signalState:d.state}})
     const hasDataGaps=perEtf.some(item=>item.status!=='available')||Boolean(evaluation.omittedConditions?.length)||trackingAnomalies.length>0
-    const quality={status:evaluation.decisions.every(d=>d.state==='blocked')?'blocked':hasDataGaps?'limited':'available',requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable:evaluation.decisions.filter(d=>d.state!=='blocked').length,coverage:etfs.length?evaluation.decisions.filter(d=>d.state!=='blocked').length/etfs.length:0,asOf,expectedSession:boundary.expectedSession,closeDataSession:closeBoundary.expectedSession,intraday:boundary.intraday,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:articleData.length,dataAnomalies:trackingAnomalies}
+    const technicalReadiness=assessTechnicalReadiness(snapshot)
+    const quality={technicalReadiness,status:evaluation.decisions.every(d=>d.state==='blocked')?'blocked':hasDataGaps?'limited':'available',requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable:evaluation.decisions.filter(d=>d.state!=='blocked').length,coverage:etfs.length?evaluation.decisions.filter(d=>d.state!=='blocked').length/etfs.length:0,asOf,expectedSession:boundary.expectedSession,closeDataSession:closeBoundary.expectedSession,intraday:boundary.intraday,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:articleData.length,dataAnomalies:trackingAnomalies}
     snapshot.projections={
       'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-timing':decisionTiming,'graph-context':graphContext},
       'fetch-etfs':{'industry-info':{id:industryId,name:profile.name,source:'frozen-snapshot',graphRevisionId:graphContext?.revisionId,graphVersion:graphContext?.version},'etf-bindings':etfs.map(e=>({etf_code:e.ticker,etf_name:e.name,indexCode:e.indexCode,indexName:e.indexName,holdings:e.holdings})),'etf-codes':tickers.join(',')},
-      'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,decisionTiming,overview:{indices:marketIndices},capitalFlow:{scope:'配置的领域板块，不代表全市场新增资金',series:sectorFlows},quality:evaluation.modules.market},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
+      'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,decisionTiming,overview:{indices:marketIndices},capitalFlow:capitalFlowSnapshot,quality:{market:evaluation.modules.market,flow:evaluation.modules.flow}},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
       'fetch-etf-data':{'etf-market-data':marketData,'etf-data-gaps':{missingCodes:etfs.filter(e=>!e.bars.length).map(e=>e.ticker),requested:etfs.length,available:marketData.length}},
       'fetch-etf-holdings':{'etf-holdings':allHoldings,'holdings-summary':{totalETFs:etfs.length,totalHoldings:allHoldings.length,uniqueStocks:holdingCodes.length}},
       'fetch-companies':{'companies':companyData.map(c=>({stockCode:c.code,stockName:c.name,source:c.pool,stage:c.stage,stageCode:c.stageCode,segment:c.segment,segmentCode:c.segmentCode,matchSource:c.matchSource,matchConfidence:c.matchConfidence,representativenessScore:c.representativenessScore,selectionReason:c.selectionReason,representativeEtfs:c.representativeEtfs,representativeIndices:c.representativeIndices})),'company-codes':companyCodes.join(',')},

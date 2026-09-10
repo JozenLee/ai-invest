@@ -147,6 +147,13 @@ async def collect_calendar(provider, start, end):
     return {'version': 1, 'source': 'Tushare/trade_cal', 'data': [days[day] for day in sorted(days) if start <= day <= end]}
 
 
+def _positive_factor(value):
+    try:
+        return math.isfinite(float(value)) and float(value) > 0
+    except (ValueError, TypeError):
+        return False
+
+
 async def collect_research(provider, key, code, history_points=120, expected_session=None, as_of=None):
     today = as_of or datetime.now(ZoneInfo("Asia/Shanghai"))
     if today.tzinfo is None:
@@ -196,6 +203,11 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
         rows = data.get(field, [])
         if any(str(row.get('trade_date') or row.get('date') or '').replace('-', '') == expected for row in rows):
             return
+        if field == 'factors':
+            due = datetime.strptime(expected, '%Y%m%d').replace(tzinfo=ZoneInfo('Asia/Shanghai')) + timedelta(hours=17)
+            if today < due and rows:
+                field_status[field] = {'status': 'pending-publication', 'expectedDate': expected_session, 'availableDate': max((str(row.get('trade_date') or '') for row in rows), default=None), 'expectedAt': due.isoformat(), 'detail': '基金复权因子通常17:00后更新，保留历史因子但不代替当日因子'}
+                return
         if field == 'shares':
             due = datetime.strptime(expected, '%Y%m%d').replace(tzinfo=ZoneInfo('Asia/Shanghai')) + timedelta(days=1, hours=8, minutes=30)
             if today < due:
@@ -215,7 +227,25 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
             sources[field] = 'Tushare/' + api
             failures.pop(field, None)
         except Exception as error:
+            if field == 'factors':
+                # Narrow-date and market-date queries can bypass a stale wide
+                # gateway page. Bounded attempts, exact security/date matching.
+                for query in ({'ts_code': ts_code, 'start_date': expected, 'end_date': expected}, {'trade_date': expected}):
+                    try:
+                        frame = await provider.request_dataframe('fund_adj', **query)
+                        fresh = [row for row in frame.to_dict('records')
+                                 if str(row.get('ts_code') or '').upper() == ts_code
+                                 and str(row.get('trade_date') or '').replace('-', '') == expected
+                                 and _positive_factor(row.get('adj_factor'))]
+                        if fresh:
+                            data[field] = rows + fresh
+                            sources[field] = 'Tushare/fund_adj'
+                            failures.pop(field, None)
+                            return
+                    except Exception:
+                        continue
             failures[field] = f'{api}: {expected_session}收盘数据待补齐（{type(error).__name__}），保留已取得历史记录'
+            field_status[field] = {'status': 'failed', 'expectedDate': expected_session, 'availableDate': max((str(row.get('trade_date') or '') for row in rows), default=None), 'detail': failures[field]}
 
     # Bounded serial reads: existing subscription worker limits dataset concurrency.
     for field, api, params in [

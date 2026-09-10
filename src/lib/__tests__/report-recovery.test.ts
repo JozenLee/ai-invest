@@ -21,14 +21,17 @@ function context(): StepContext {
 }
 beforeEach(() => { vi.clearAllMocks(); prompt.mockReset(); db.findFirst.mockResolvedValue(null); db.create.mockResolvedValue({id:'saved'}); db.update.mockResolvedValue({id:'saved'}) })
 describe('report recovery', () => {
-  it('uses the configured Opus model for market and company research',async()=>{
+  it('uses the configured Opus model for market, company and event research',async()=>{
     prompt.mockResolvedValueOnce(response({analysis:'市场判断',dimensions:[],dataBoundary:'边界',score:null,trend:'震荡',risk_level:'中',evidence:[],counterEvidence:[],watchlist:[]}))
       .mockResolvedValueOnce(response({analysis:'企业判断',key_companies:[],chain_structure:[],evidence:[],counterEvidence:[],watchlist:[]}))
     const ctx=context()
     await marketAnalysisStep.execute(ctx)
     await companyAnalysisStep.execute(ctx)
+    prompt.mockResolvedValueOnce(response({analysis:'事件判断',sentiment:'中性',catalysts:[],risks:[],evidence:[],watchlist:[]}))
+    await newsAnalysisStep.execute(ctx)
+    expect(prompt.mock.calls[2][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5',timeoutMs:300000,max_tokens:6144})
     expect(prompt.mock.calls[0][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5'})
-    expect(prompt.mock.calls[1][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5'})
+    expect(prompt.mock.calls[1][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144})
   })
   it('keeps the report chain running when early analysis requests are aborted',async()=>{
     prompt.mockRejectedValue(new Error('Request was aborted.'))
@@ -41,7 +44,7 @@ describe('report recovery', () => {
     await newsAnalysisStep.execute(ctx)
     await companyAnalysisStep.execute(ctx)
     expect(ctx.artifacts.get('market-analysis-ai-status')).toMatchObject({status:'fallback'})
-    expect(ctx.artifacts.get('news-analysis-ai-status')).toMatchObject({status:'deterministic'})
+    expect(ctx.artifacts.get('news-analysis-ai-status')).toMatchObject({status:'fallback'})
     expect(ctx.artifacts.get('company-analysis-ai-status')).toMatchObject({status:'fallback'})
     expect(JSON.parse(ctx.artifacts.get('news-analysis'))).toMatchObject({sentiment:'未知',catalysts:[{event:'算力项目进展'}]})
   })
@@ -53,7 +56,7 @@ describe('report recovery', () => {
     ctx.artifacts.set('company-analysis',{analysis:'企业结论',key_companies:[],evidence:[],counterEvidence:[],watchlist:[]})
     await industryOverviewStep.execute(ctx)
     expect(ctx.artifacts.get('industry-overview-ai-status')).toMatchObject({status:'deterministic'})
-    expect(JSON.parse(ctx.artifacts.get('industry-overview'))).toMatchObject({stage:'未知',segmentSignals:[{segment:'芯片'}]})
+    expect(JSON.parse(ctx.artifacts.get('industry-overview'))).toMatchObject({stage:'按环节分别评估，未作统一周期判定',segmentSignals:[{segment:'芯片'}]})
   })
   it('reports exact overflow paths and lengths, invalid JSON and section order', () => {
     expect(() => parseSocialReport(JSON.stringify({...valid,title:'字'.repeat(21)}))).toThrow('title：实际21字，最多20字')

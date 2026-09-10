@@ -27,8 +27,25 @@ async function main(){
       const parsed=JSON.parse(text)
       const meaningful=typeof (parsed.analysis||parsed.thesis)==='string'&&(parsed.analysis||parsed.thesis).trim().length>0&&(stepName!=='company-analysis'||parsed.key_companies?.length>0)
       const status=artifacts.get(stepName+':ai-request-status') as {status?:string;attempt?:number;usage?:{output_tokens?:number}}|undefined
-      check(stepName,meaningful&&status?.status==='completed'&&(status.usage?.output_tokens||0)>0,status?.usage?.output_tokens===undefined?'旧步骤未保存用量；正文已通过结构校验':`真实模型输出 ${status.usage.output_tokens} tokens，第${status?.attempt}次请求`)
+      const moduleStatus=artifacts.get(stepName+':'+stepName+'-ai-status') as {status?:string;reason?:string}|undefined
+      // Industry overview is deliberately assembled from upstream modules unless
+      // intermediate synthesis is enabled. A fallback is never a successful AI check.
+      const deterministic=stepName==='industry-overview'&&moduleStatus?.status==='deterministic'
+      check(stepName,meaningful&&(deterministic||moduleStatus?.status==='completed'&&status?.status==='completed'&&(status.usage?.output_tokens||0)>0),deterministic?`确定性汇编：${moduleStatus.reason}`:status?.usage?.output_tokens===undefined?`模型状态 ${status?.status||'未记录'}，模块状态 ${moduleStatus?.status||'未记录'}`:`真实模型输出 ${status.usage.output_tokens} tokens，第${status?.attempt}次请求`)
+      if(['market-analysis','news-analysis','company-analysis'].includes(stepName)){
+        const model=(status as {model?:string}|undefined)?.model
+        check(stepName+' 模型',model===(process.env.CLAUDE_MODEL||'claude-opus-5'),model||'未记录')
+      }
     }
+    const portfolioAI=artifacts.get('portfolio-decision:portfolio-analysis-ai-status') as {status?:string}|undefined
+    check('组合分析未降级',['completed','local-synthesis'].includes(portfolioAI?.status||''),portfolioAI?.status||'未记录')
+    check('报告章节完整',!!data.socialReport&&!!data.privatePortfolioAnalysis&&report.content.includes('ETF投资建议'),'完整正文、社媒版与私有组合结果已落库')
+    const news=typeof data.sentimentAnalysis==='string'?JSON.parse(data.sentimentAnalysis):data.sentimentAnalysis
+    const frozenEvents=artifacts.get('fetch-news:news-events') as Array<{id:string}>|undefined
+    const frozenEventIds=new Set((frozenEvents||[]).map(event=>event.id))
+    check('事件来源闭环',Array.isArray(news?.catalysts)&&news.catalysts.every((item:{sourceEventIds?:string[]})=>!!item.sourceEventIds?.length&&item.sourceEventIds.every(id=>frozenEventIds.has(id))),'催化剂引用本轮冻结事件，未使用不存在的事件编号')
+    check('机会台账落库',Array.isArray(data.opportunityLedger)&&data.opportunityLedger.length>0&&data.opportunityLedger.every((item:{firstSeenAt:string;reviewedAt:string})=>Date.parse(item.firstSeenAt)<=Date.parse(item.reviewedAt)),`${data.opportunityLedger?.length||0}项机会，保留首次记录和验证时点`)
+    check('最终一致性审计',!(data.reportQuality?.consistencyIssues||[]).length,(data.reportQuality?.consistencyIssues||[]).join('；')||'未发现已覆盖规则内的财务口径冲突')
     check('同日折溢价',evaluation.decisions.every((decision)=>{const product=evaluation.products?.find((item)=>item.ticker===decision.ticker);return decision.metrics.premiumPct==null||product?.navDate===decision.metrics.date}),`${evaluation.decisions.filter((item)=>item.metrics.premiumPct!=null).length}/${evaluation.decisions.length}可计算；禁止跨日配对`)
     const unknown=evaluation.decisions.flatMap((item)=>item.conditions).filter((item)=>item.status==='unknown')
     check('未知与弱势分离',unknown.every((item)=>item.value===null),`${unknown.length}项未知，未填零；未满足条件单独保存`)

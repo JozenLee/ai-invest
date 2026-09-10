@@ -151,11 +151,12 @@ async def test_map_domains():
 
 
 @pytest.mark.asyncio
-async def test_no_api_key():
+async def test_no_api_key(tmp_path, monkeypatch):
     """测试没有API密钥的情况"""
+    monkeypatch.setattr('core.ai_settings.ENV_PATH', tmp_path / '.env')
     with patch.dict('os.environ', {}, clear=True):
         analyzer = AIAnalyzer()
-        assert analyzer.claude_client is None
+        assert not analyzer.claude_client
 
         articles = [
             RawArticle(

@@ -23,8 +23,7 @@ async function main() {
     else if (mode === 'resume') await workflow.resume(runId)
     else if (mode === 'next') await workflow.executeNext(runId)
     else if (mode === 'step' && stepName) {
-      await workflow.executeStep(runId, stepName)
-      await prisma.executionRun.update({ where: { id: runId }, data: { status: 'PENDING' } })
+      await workflow.executeSelectedStep(runId, stepName)
     } else throw new Error('无效执行模式')
   } catch (error) {
     await prisma.executionRun.update({ where: { id: runId }, data: { status: 'FAILED', error: error instanceof Error ? error.message : '分析失败' } })

@@ -16,9 +16,12 @@ export type ReportQualityAssessment = {
   confidenceScore: number
   grade: 'A' | 'B' | 'C' | 'D'
   usability: 'advice-grade' | 'limited-advice' | 'insufficient'
+  technicalCoverage?: { usable:number; total:number; fieldScore:number }
   dimensions: QualityDimension[]
   blockers: string[]
   generatedAt: string
+  consistencyIssues?: string[]
+  scoreMeaning?: string
 }
 
 export type ReviewConditionChange = {
@@ -62,6 +65,7 @@ function conditionCoverage(evaluation: Evaluation | undefined, keys: string[], a
 }
 
 export function buildReportQuality(input: {
+  consistencyIssues?: string[]
   evaluation?: Evaluation
   dataQuality?: DataQualityLike
   preflight?: PreflightLike
@@ -70,6 +74,10 @@ export function buildReportQuality(input: {
 }): ReportQualityAssessment {
   const { evaluation, dataQuality, preflight, decisionTiming, analysisStatuses } = input
   const market = conditionCoverage(evaluation, ['calendar', 'session', 'history', 'continuity', 'adjustment', 'index'])
+  const technicalUsable=(evaluation?.decisions||[]).filter(decision=>['calendar','session','history','continuity','adjustment','index'].every(key=>decision.conditions.some(condition=>condition.key===key&&condition.status==='met'))).length
+  const technicalTotal=evaluation?.decisions.length||0
+  const fieldScore=market.score
+  market.score=Math.min(market.score,round(ratio(technicalUsable,technicalTotal)*100))
   const fundamentals = conditionCoverage(evaluation, ['holdings', 'fundamentals', 'profit-growth', 'cash-quality'])
   const product = conditionCoverage(evaluation, ['premium', 'liquidity', 'spread', 'volatility'])
   if (decisionTiming?.phase === 'trading') {
@@ -79,7 +87,7 @@ export function buildReportQuality(input: {
   }
   const products = evaluation?.products || []
   const indexCodes = [...new Set(products.map(item => item.indexCode).filter(Boolean))]
-  const currentValuation = new Set(products.filter(item => evaluation?.expectedSession && item.valuationDate === evaluation.expectedSession && (finite(item.pe) || finite(item.pb))).map(item => item.indexCode).filter(Boolean)).size
+  const currentValuation = new Set(products.filter(item => (decisionTiming?.closeDataSession || evaluation?.expectedSession) && item.valuationDate === (decisionTiming?.closeDataSession || evaluation?.expectedSession) && (finite(item.pe) || finite(item.pb))).map(item => item.indexCode).filter(Boolean)).size
   const valuationScore = round(ratio(currentValuation, indexCodes.length) * 100)
   const evidence = evaluation?.evidence || []
   const datedEvidence = evidence.filter(item => item.dataDate || item.publishedAt).length
@@ -97,7 +105,7 @@ export function buildReportQuality(input: {
   const evidenceScore = round((ratio(datedEvidence, evidence.length) * .25 + ratio(uniqueEvidence,evidence.length) * .2 + eventTraceability * .15 + gradeScore * .25 + eventIndependence * .15) * 100 * narrativeFactor)
   const syncIntentionallySkipped=preflight?.status==='warning'&&(preflight.queued||0)===0&&preflight.warnings?.some(message=>message.includes('未触发外部同步'))
   const dimensions: QualityDimension[] = [
-    { key: 'market', label: '行情完整性', score: market.score, weight: 28, detail: `${market.known}/${market.total}项关键行情条件可核验` },
+    { key: 'market', label: '行情完整性', score: market.score, weight: 28, detail: `${technicalUsable}/${technicalTotal}只技术链完整；${market.known}/${market.total}项字段可核验（${fieldScore}分），最终取较低覆盖率` },
     { key: 'fundamentals', label: '基本面覆盖', score: fundamentals.score, weight: 22, detail: `${fundamentals.known}/${fundamentals.total}项持仓与财务条件可核验` },
     { key: 'valuation', label: '当期估值有效性', score: valuationScore, weight: 16, detail: `${currentValuation}/${indexCodes.length}个跟踪指数有可核验当期估值` },
     { key: 'product', label: '产品可交易数据', score: product.score, weight: 17, detail: `${product.known}/${product.total}项当期产品交易条件可核验` },
@@ -105,22 +113,24 @@ export function buildReportQuality(input: {
   ]
   const weightedScore = round(dimensions.reduce((sum, item) => sum + item.score * item.weight, 0) / 100)
   const timingFailed = decisionTiming?.phase === 'trading' && !decisionTiming.executionReady
-  const qualityCap = timingFailed ? 69 : dataQuality?.status !== 'available' || (preflight?.failed || 0) > 0 ? 84 : 100
-  const overallScore = Math.min(weightedScore, qualityCap)
+  const qualityCap = timingFailed || fallbackModules.length ? 69 : dataQuality?.status !== 'available' || (preflight?.failed || 0) > 0 ? 84 : 100
+  const overallScore = Math.min(weightedScore, qualityCap, input.consistencyIssues?.length ? 49 : 100)
   const blockers = [
+    ...(input.consistencyIssues || []),
     !evaluation && '缺少冻结研究评估',
     timingFailed && '交易时段时效未通过，综合质量评分上限为69分',
     ...(evaluation?.omittedConditions || []).map(item => `${item.label}：底层数据缺失，仍计入质量覆盖率`),
     dataQuality?.status !== 'available' && '研究数据门禁未完全通过',
+    technicalUsable<technicalTotal&&`当期技术链仅${technicalUsable}/${technicalTotal}只完整，不得外推全领域趋势`,
     preflight?.status && preflight.status !== 'fresh' && !syncIntentionallySkipped && `分析前同步未完全成功${preflight.failed ? `（失败${preflight.failed}项）` : ''}`,
     product.score < 80 && 'ETF产品交易数据覆盖不足',
-    ...fallbackModules.map(module=>`${module==='event'?'事件':module}智能分析已降级，质量评分已扣减`),
+    ...fallbackModules.map(module=>`${({market:'市场',event:'事件',company:'企业',investment:'综合建议'} as Record<string,string>)[module]||module}智能分析已降级，未形成新增模型研判；综合质量最高69分`),
     decisionTiming && !decisionTiming.executionReady && `报告仅供参考：${decisionTiming.reasons[0] || '当前为非交易时间'}`,
   ].filter(Boolean) as string[]
-  const usability = !evaluation || market.score < 50 ? 'insufficient' : dataQuality?.status === 'available' && product.score >= 70 && !(preflight?.failed || 0) && preflight?.status !== 'blocked' && decisionTiming?.executionReady !== false ? 'advice-grade' : 'limited-advice'
+  const usability = input.consistencyIssues?.length || !evaluation || market.score < 50 ? 'insufficient' : !fallbackModules.length && dataQuality?.status === 'available' && product.score >= 70 && !(preflight?.failed || 0) && preflight?.status !== 'blocked' && decisionTiming?.executionReady !== false ? 'advice-grade' : 'limited-advice'
   const confidenceScore = round(Math.min(overallScore, dataQuality?.status === 'available' ? 95 : dataQuality?.status === 'limited' ? 79 : 45))
   const grade = overallScore >= 85 ? 'A' : overallScore >= 70 ? 'B' : overallScore >= 55 ? 'C' : 'D'
-  return { version: 1, overallScore, confidenceScore, grade, usability, dimensions, blockers, generatedAt: new Date().toISOString() }
+  return { version: 1, technicalCoverage:{usable:technicalUsable,total:technicalTotal,fieldScore}, overallScore, confidenceScore, grade, usability, dimensions, blockers, consistencyIssues:input.consistencyIssues||[], scoreMeaning:'评分反映证据覆盖与内部一致性，不是投资胜率、收益预测或策略有效性证明', generatedAt: new Date().toISOString() }
 }
 
 function changedValue(before: Condition['value'] | undefined, after: Condition['value'] | undefined) {

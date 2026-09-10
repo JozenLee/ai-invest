@@ -1,6 +1,7 @@
 export interface StepContext {
   runId: string
   stepId: string
+  previousAIRequestAttempt?: number // Preserve same-step request history across resumes
   input: Record<string, any> // 来自上一步或初始参数
   artifacts: Map<string, any> // 已加载的产物
   updateProgress: (current: number, total: number, message?: string) => Promise<void>

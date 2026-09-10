@@ -11,6 +11,7 @@ StockProvider 是企业资讯底层数据源的适配边界。当前默认实现
 在不改动本分析器和前端协议的情况下替换为 Tushare、Wind 或其他正式数据供应商。
 """
 
+from core.ai_settings import scene_client, get_ai_settings
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 import asyncio
@@ -93,27 +94,26 @@ class IndustryCompanyAnalyzer:
         self.ai_request_timeout_seconds = max(20, int(os.getenv("COMPANY_ANALYSIS_AI_REQUEST_TIMEOUT_SECONDS", "180")))
         self.ai_retries = max(0, int(os.getenv("COMPANY_ANALYSIS_AI_RETRIES", "1")))
         self.ai_max_tokens = max(2048, int(os.getenv("COMPANY_ANALYSIS_AI_MAX_TOKENS", "5000")))
-        self.ai_provider = os.getenv('AI_PROVIDER', 'anthropic').strip().lower()
+        self.ai_provider = 'anthropic'
         self._provider_cache: Dict[str, Any] = {}
         self.last_report_warning: Optional[str] = None
 
         self.anthropic: Optional[Anthropic] = None
         self.chatgpt: Optional[ChatGPTTextClient] = None
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if api_key:
-            kwargs: Dict[str, Any] = {"api_key": api_key}
-            base_url = os.getenv("ANTHROPIC_BASE_URL")
-            if base_url:
-                kwargs["base_url"] = base_url
-            try:
-                # anthropic SDK 的 timeout 必须设置在客户端上，单纯包裹
-                # asyncio.wait_for 无法中止底层同步 HTTP 请求。
-                kwargs["timeout"] = self.ai_request_timeout_seconds
-                # 报告生成由外层控制重试；SDK 默认重试会把一次超时放大成数分钟。
-                kwargs["max_retries"] = 0
-                self.anthropic = Anthropic(**kwargs)
-            except Exception as error:
-                logger.warning("初始化企业趋势分析 AI 客户端失败: %s", error)
+        api_key = get_ai_settings('comprehensive')['api_key']
+        kwargs: Dict[str, Any] = {"api_key": api_key}
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
+        if base_url:
+            kwargs["base_url"] = base_url
+        try:
+            # anthropic SDK 的 timeout 必须设置在客户端上，单纯包裹
+            # asyncio.wait_for 无法中止底层同步 HTTP 请求。
+            kwargs["timeout"] = self.ai_request_timeout_seconds
+            # 报告生成由外层控制重试；SDK 默认重试会把一次超时放大成数分钟。
+            kwargs["max_retries"] = 0
+            self.anthropic = scene_client('comprehensive', **kwargs)
+        except Exception as error:
+            logger.warning("初始化企业趋势分析 AI 客户端失败: %s", error)
         if self.ai_provider in {'chatgpt', 'openai'}:
             chatgpt_key = os.getenv('CHATGPT_API_KEY') or os.getenv('OPENAI_API_KEY')
             chatgpt_base = os.getenv('CHATGPT_BASE_URL') or os.getenv('OPENAI_BASE_URL')
@@ -357,6 +357,7 @@ class IndustryCompanyAnalyzer:
             }
 
     @staticmethod
+
     def _build_graph_nodes(graph: Dict[str, Any]) -> List[Dict[str, Any]]:
         """把现行图谱的阶段/环节展开为分析上下文中的节点列表。"""
         nodes: List[Dict[str, Any]] = []
@@ -375,6 +376,7 @@ class IndustryCompanyAnalyzer:
         return nodes
 
     @classmethod
+
     def _collect_graph_companies(cls, graph: Dict[str, Any]) -> List[Dict[str, Any]]:
         """收集每个图谱环节的全部企业，并按证券标识/名称去重。"""
         companies: Dict[str, Dict[str, Any]] = {}
@@ -419,6 +421,7 @@ class IndustryCompanyAnalyzer:
         return list(companies.values())
 
     @classmethod
+
     def _collect_etf_companies(cls, etf_holdings: Dict[str, List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         """从多个 ETF 持仓提取企业并去重，同时保留每只 ETF 的暴露占比。
 
@@ -475,6 +478,7 @@ class IndustryCompanyAnalyzer:
         return sorted(companies.values(), key=lambda item: item.get('total_etf_weight', 0), reverse=True)
 
     @staticmethod
+
     def _enrich_company_names(
         companies: List[Dict[str, Any]],
         graph_companies: List[Dict[str, Any]],
@@ -662,6 +666,7 @@ class IndustryCompanyAnalyzer:
         return selected_companies
 
     @staticmethod
+
     def _normalize_market(value: Any, symbol: str = "") -> str:
         normalized = str(value or "").strip().lower()
         if normalized in {"us", "usa", "nasdaq", "nyse", "美国"}:
@@ -675,6 +680,7 @@ class IndustryCompanyAnalyzer:
         return "cn"
 
     @staticmethod
+
     def _market_position_label(value: Any) -> str:
         labels = {
             "leader": "头部",
@@ -690,6 +696,7 @@ class IndustryCompanyAnalyzer:
         return labels.get(normalized, str(value or "未标注"))
 
     @classmethod
+
     def _clean_selection_reason(cls, value: str) -> str:
         text = value.strip()
         text = re.sub(r"(?:代表性|综合)?评分\s*[:：]?\s*\d+(?:\.\d+)?\s*[，,；;]?\s*", "", text)
@@ -805,6 +812,7 @@ class IndustryCompanyAnalyzer:
         return selected_companies
 
     @staticmethod
+
     def _build_graph_summary(
         graph: Dict[str, Any],
         nodes: List[Dict[str, Any]],
@@ -936,6 +944,7 @@ class IndustryCompanyAnalyzer:
         return [results_by_index[index] for index in sorted(results_by_index)]
 
     @staticmethod
+
     def _build_evidence_candidates(analyzed_companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """保留至少有财报或公告证据的企业，并按 AI 影响力排序。"""
         candidates = []
@@ -1021,6 +1030,7 @@ class IndustryCompanyAnalyzer:
         raise last_error or RuntimeError(f"provider调用失败: {method_name}")
 
     @staticmethod
+
     def _build_report_candidates(analyzed_companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """只保留同时具备有效财报和公告的企业，作为 AI 重点企业筛选池。"""
         candidates = []
@@ -1181,7 +1191,7 @@ class IndustryCompanyAnalyzer:
             message = await asyncio.wait_for(
                 asyncio.to_thread(
                     self.anthropic.messages.create,
-                    model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                    model=get_ai_settings('comprehensive')['model'],
                     max_tokens=2200,
                     messages=[{"role": "user", "content": prompt}],
                     system="你是严谨的产业研究员，只返回合法JSON。",
@@ -1393,6 +1403,7 @@ class IndustryCompanyAnalyzer:
         return analyzed
 
     @staticmethod
+
     def _is_security_code_name(company: Dict[str, Any]) -> bool:
         name = str(company.get('name') or '').strip()
         symbol = str(company.get('symbol') or '').strip()
@@ -1426,6 +1437,7 @@ class IndustryCompanyAnalyzer:
         }
 
     @classmethod
+
     def _normalize_financial_row(cls, row: Dict[str, Any]) -> Dict[str, Any]:
         """保留可核对的财报原始字段，避免 AI 只看到派生增长率。"""
         fields = [
@@ -1438,6 +1450,7 @@ class IndustryCompanyAnalyzer:
         return {key: cls._json_safe(row[key]) for key in fields if key in row and row[key] is not None}
 
     @staticmethod
+
     def _json_safe(value: Any) -> Any:
         if value is None or isinstance(value, (str, int, bool)):
             return value
@@ -1457,6 +1470,7 @@ class IndustryCompanyAnalyzer:
         return str(value)
 
     @staticmethod
+
     def _infer_growth_basis(latest_period: Any, comparison_period: Any, latest: Dict[str, Any], comparison: Dict[str, Any]) -> str:
         text = " ".join(str(latest.get(key, "")) + " " + str(comparison.get(key, "")) for key in ["报告类型", "报表类型", "period_type", "type"])
         if any(token in text.lower() for token in ["同比", "yoy", "year"]):
@@ -1474,6 +1488,7 @@ class IndustryCompanyAnalyzer:
         return "无法确认"
 
     @staticmethod
+
     def _build_valuation_metrics(info: Dict[str, Any]) -> Dict[str, Any]:
         pe = IndustryCompanyAnalyzer._first_number(info, ["市盈率", "市盈率-动态", "市盈率(动态)", "pe", "PE", "pe_ttm"])
         pb = IndustryCompanyAnalyzer._first_number(info, ["市净率", "市净率(动态)", "pb", "PB"])
@@ -1481,11 +1496,13 @@ class IndustryCompanyAnalyzer:
         return {"pe": pe, "pb": pb, "ps": ps, "source": "info" if any(value is not None for value in [pe, pb, ps]) else None}
 
     @staticmethod
+
     def _build_financial_quality(financial: Dict[str, Any]) -> Dict[str, Any]:
         values = {key: financial.get(key) for key in ["gross_margin", "net_margin", "operating_cash_flow", "capex"]}
         return {**values, "available": any(value is not None for value in values.values())}
 
     @staticmethod
+
     def _normalize_announcement(row: Dict[str, Any]) -> Dict[str, Any]:
         title = str(row.get("公告标题") or row.get("title") or "未命名公告")
         source = str(row.get("source") or "")
@@ -1504,11 +1521,13 @@ class IndustryCompanyAnalyzer:
         }
 
     @staticmethod
+
     def _is_official_announcement(row: Dict[str, Any]) -> bool:
         source = str(row.get("source") or "").lower()
         return not any(token in source for token in ["yfinance", "openbb", "news", "media"])
 
     @staticmethod
+
     def _build_announcement_signal(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         if not rows:
             return {"direction": "unknown", "score": 0, "high_impact_count": 0}
@@ -1519,6 +1538,7 @@ class IndustryCompanyAnalyzer:
         return {"direction": direction, "score": round(score, 2), "high_impact_count": high_impact}
 
     @staticmethod
+
     def _classify_announcement(title: str) -> str:
         categories = [
             ("回购", ["回购"]), ("增持", ["增持"]), ("减持", ["减持"]),
@@ -1534,6 +1554,7 @@ class IndustryCompanyAnalyzer:
         return "例行公告"
 
     @classmethod
+
     def _sort_time_series(cls, rows: List[Dict[str, Any]], descending: bool) -> List[Dict[str, Any]]:
         """统一外部数据顺序；行情旧→新，财报新→旧。"""
         if not isinstance(rows, list) or len(rows) < 2:
@@ -1561,6 +1582,7 @@ class IndustryCompanyAnalyzer:
         return [row for _, _, row in sorted(dated, key=lambda item: (item[0], item[1]), reverse=descending)] if dated else rows
 
     @staticmethod
+
     def _first_value(row: Dict[str, Any], keys: List[str]) -> Any:
         for key in keys:
             value = row.get(key)
@@ -1573,6 +1595,7 @@ class IndustryCompanyAnalyzer:
         return None
 
     @classmethod
+
     def _first_number(cls, row: Dict[str, Any], keys: List[str]) -> Optional[float]:
         for key in keys:
             value = cls._to_float(row.get(key))
@@ -1581,6 +1604,7 @@ class IndustryCompanyAnalyzer:
         return None
 
     @staticmethod
+
     def _to_float(value: Any) -> Optional[float]:
         if value is None or isinstance(value, bool):
             return None
@@ -1609,6 +1633,7 @@ class IndustryCompanyAnalyzer:
         return (variance ** 0.5) * (252 ** 0.5) * 100
 
     @staticmethod
+
     def _calculate_max_drawdown(prices: List[float]) -> float:
         if not prices:
             return 0
@@ -1882,6 +1907,7 @@ class IndustryCompanyAnalyzer:
         return selected[:top_n]
 
     @staticmethod
+
     def _build_investment_signal(
         company: Dict[str, Any],
         growth_is_comparable: bool,
@@ -1917,6 +1943,7 @@ class IndustryCompanyAnalyzer:
         }
 
     @staticmethod
+
     def _calculate_representativeness(company: Dict[str, Any]) -> float:
         """基于图谱元数据计算行业代表性，不用短期行情替代行业地位。"""
         position = str(company.get("market_position") or "").strip().lower()
@@ -1941,6 +1968,7 @@ class IndustryCompanyAnalyzer:
         return round(position_score + coverage_score + product_score + category_score + relevance_score, 1)
 
     @staticmethod
+
     def _representativeness_basis(company: Dict[str, Any]) -> str:
         position = company.get("market_position") or "未标注"
         refs = company.get("node_refs") or []
@@ -1959,6 +1987,7 @@ class IndustryCompanyAnalyzer:
         return "；".join(details)
 
     @staticmethod
+
     def _representativeness_basis_v2(company: Dict[str, Any], score_breakdown: Dict[str, Any]) -> str:
         """优化后的企业影响力描述（v2评分体系）"""
         details = []
@@ -1994,6 +2023,7 @@ class IndustryCompanyAnalyzer:
         return "；".join(details) if details else "数据不足"
 
     @staticmethod
+
     def _build_data_coverage(
         companies: List[Dict[str, Any]],
         company_data: List[Dict[str, Any]],
@@ -2122,7 +2152,7 @@ class IndustryCompanyAnalyzer:
                 if self.ai_provider in {'chatgpt', 'openai'}:
                     return self.chatgpt.complete(user_prompt, system_prompt, self.ai_max_tokens)
                 return self.anthropic.messages.create(
-                    model=os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022"),
+                    model=get_ai_settings('comprehensive')['model'],
                     max_tokens=self.ai_max_tokens,
                     messages=[
                         {
@@ -2197,6 +2227,7 @@ class IndustryCompanyAnalyzer:
             ) from error
 
     @staticmethod
+
     def _clean_ai_report(content: str) -> str:
         """清理AI报告中的格式标记和代码块包装"""
         if not content:
@@ -2213,11 +2244,13 @@ class IndustryCompanyAnalyzer:
         return cleaned.strip()
 
     @staticmethod
+
     def _is_timeout_error(error: Exception) -> bool:
         error_name = type(error).__name__.lower()
         return isinstance(error, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)) or "timeout" in error_name
 
     @staticmethod
+
     def _is_retryable_ai_error(error: Exception) -> bool:
         """重试瞬时网络错误和网关故障，不把模型拒绝或格式错误伪装成成功。"""
         error_name = type(error).__name__.lower()
@@ -2231,11 +2264,13 @@ class IndustryCompanyAnalyzer:
         )
 
     @staticmethod
+
     def _is_valid_trend_report(content: str) -> bool:
         required_sections = ["## 一、趋势判断", "## 二、关注重点", "## 三、投资建议结论"]
         return len(content.strip()) >= 400 and all(section in content for section in required_sections)
 
     @staticmethod
+
     def _extract_core_conclusion(content: str) -> str:
         trend = IndustryCompanyAnalyzer._extract_report_section(content, "## 一、趋势判断")
         advice = IndustryCompanyAnalyzer._extract_report_section(content, "## 三、投资建议结论")
@@ -2256,6 +2291,7 @@ class IndustryCompanyAnalyzer:
         return "\n\n".join(filtered).strip() or conclusion
 
     @staticmethod
+
     def _extract_report_section(content: str, heading: str) -> str:
         match = re.search(re.escape(heading) + r"\s*(.*?)(?=\n##\s|\Z)", content, flags=re.S)
         return match.group(1).strip() if match else ""
@@ -2371,6 +2407,7 @@ class IndustryCompanyAnalyzer:
         return "\n".join(lines)
 
     @staticmethod
+
     def _format_amount(value: Any) -> str:
         """格式化金额为易读格式（亿元）"""
         if value is None:
@@ -2387,6 +2424,7 @@ class IndustryCompanyAnalyzer:
             return "暂无"
 
     @staticmethod
+
     def _financial_evidence_text(financial: Dict[str, Any]) -> str:
         values = [
             f"最新期={financial.get('latest_period') or '暂无'}",
@@ -2399,6 +2437,7 @@ class IndustryCompanyAnalyzer:
         return '；'.join(values)
 
     @staticmethod
+
     def _build_segment_signals(analyzed_companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """按图谱环节聚合行情、财报和公告信号，供 AI 报告引用。"""
         buckets: Dict[str, Dict[str, Any]] = {}
@@ -2446,6 +2485,7 @@ class IndustryCompanyAnalyzer:
         return sorted(signals, key=lambda item: item["companies"], reverse=True)
 
     @staticmethod
+
     def _attach_relative_segment_metrics(analyzed_companies: List[Dict[str, Any]], signals: List[Dict[str, Any]]) -> None:
         averages = {item["segment"]: item.get("average_change") for item in signals}
         latest_averages = {item["segment"]: item.get("latest_average_change") for item in signals}

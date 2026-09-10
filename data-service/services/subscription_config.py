@@ -73,3 +73,20 @@ def next_run(policy, now, market='cn'):
             if candidate > local:
                 return candidate.astimezone(timezone.utc)
     return now + timedelta(days=1)
+
+
+def publication_retry(result, scheduled, now):
+    """Retry known pending releases shortly after publication, without a busy loop."""
+    if not isinstance(result, dict):
+        return scheduled
+    retries = []
+    for item in (result.get('fieldStatus') or {}).values():
+        if item.get('status') != 'pending-publication' or not item.get('expectedAt'):
+            continue
+        try:
+            due = parse_timestamp(item['expectedAt']) + timedelta(minutes=5)
+            if due > now:
+                retries.append(due)
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return min([scheduled, *retries])

@@ -3,6 +3,7 @@ Influencer Analysis Service
 使用Claude API分析大V观点帖子
 """
 
+from core.ai_settings import async_scene_client, get_ai_settings
 import asyncio
 import logging
 import json
@@ -30,23 +31,13 @@ class InfluencerAnalysisService:
         self.db = db
 
         # 获取API密钥和配置
-        api_key = anthropic_api_key or os.getenv('ANTHROPIC_API_KEY')
+        api_key = anthropic_api_key or get_ai_settings('news')['api_key']
         base_url = os.getenv('ANTHROPIC_BASE_URL')
 
-        if not api_key:
-            logger.warning("未配置ANTHROPIC_API_KEY，AI分析功能将不可用")
-            self.claude_client = None
-        else:
-            # 初始化Claude客户端
-            client_kwargs = {'api_key': api_key}
-            if base_url:
-                client_kwargs['base_url'] = base_url
-                logger.info(f"使用自定义API端点: {base_url}")
-
-            self.claude_client = AsyncAnthropic(**client_kwargs)
+        self.claude_client = async_scene_client('news', api_key=api_key, base_url=base_url)
 
         # 获取模型配置
-        self.model = os.getenv('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+        self.model = get_ai_settings('news')['model']
 
         logger.info(f"大V分析服务初始化完成，模型: {self.model}")
 

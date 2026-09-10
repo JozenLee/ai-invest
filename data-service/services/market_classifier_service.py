@@ -1,6 +1,7 @@
 # 市场分类服务
 # 使用AI对指数和ETF进行智能领域分类
 
+from core.ai_settings import scene_client, get_ai_settings
 import os
 import json
 from typing import List, Dict, Optional
@@ -86,16 +87,13 @@ class MarketClassifierService:
 
     def __init__(self):
         self.client = None
-        api_key = os.getenv('ANTHROPIC_API_KEY')
+        api_key = get_ai_settings('matching')['api_key']
         base_url = os.getenv('ANTHROPIC_BASE_URL')
 
-        if api_key:
-            self.client = Anthropic(
-                api_key=api_key,
-                base_url=base_url if base_url else None
-            )
-        else:
-            print("[MarketClassifier] ANTHROPIC_API_KEY 未配置，AI分类功能不可用")
+        self.client = scene_client('matching',
+            api_key=api_key,
+            base_url=base_url if base_url else None
+        )
 
     def _build_classification_prompt(self, items: List[Dict], item_type: str) -> str:
         """构建分类提示词"""
@@ -224,7 +222,7 @@ class MarketClassifierService:
                 prompt = self._build_classification_prompt(batch, item_type)
 
                 # 使用环境变量配置的模型，默认为 claude-sonnet-5
-                model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-5')
+                model = get_ai_settings('matching')['model']
 
                 response = self.client.messages.create(
                     model=model,

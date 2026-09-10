@@ -68,8 +68,8 @@ export function companyResearchPacket(rows:any[]){
   }).sort((a,b)=>b.companyCount-a.companyCount||a.segment.localeCompare(b.segment,'zh-CN'))
   const selected=companyEvidence(eligible).slice(0,6)
   return {
-    coverage:{companyCount:eligible.length,multiPeriodFinancialCount:eligible.filter(row=>(row.financialPeriods||0)>=2).length,profitGrowthKnown:eligible.filter(row=>numeric(row.profitGrowthPct)).length,cashQualityKnown:eligible.filter(row=>numeric(row.cashConversionPct)).length,segmentCount:grouped.size,evidenceIds:[...new Set(eligible.flatMap(row=>row.evidenceIds||[]))].slice(0,24)},
-    segmentAggregates:aggregates.slice(0,12),representativeCompanies:selected,
+    coverage:{positiveProfitGrowth:eligible.filter(row=>numeric(row.profitGrowthPct)&&row.profitGrowthPct>0).length,healthyCashConversion:eligible.filter(row=>numeric(row.cashConversionPct)&&row.cashConversionPct>=50).length,medianProfitGrowthPct:median(eligible.map(row=>row.profitGrowthPct).filter(numeric)),medianCashConversionPct:median(eligible.map(row=>row.cashConversionPct).filter(numeric)),companyCount:eligible.length,multiPeriodFinancialCount:eligible.filter(row=>(row.financialPeriods||0)>=2).length,profitGrowthKnown:eligible.filter(row=>numeric(row.profitGrowthPct)).length,cashQualityKnown:eligible.filter(row=>numeric(row.cashConversionPct)).length,segmentCount:grouped.size,evidenceIds:[...new Set(eligible.flatMap(row=>row.evidenceIds||[]))].slice(0,24)},
+    segmentAggregates:aggregates,representativeCompanies:selected,
     boundary:'聚合指标覆盖完整冻结企业池；“ETF持仓补充样本（图谱外）”表示真实披露持仓但不属于当前图谱核心节点，不是数据缺失。代表企业仅用于解释分化，不代表个股推荐。中位数按公司等权统计，ETF持仓权重另由产品规则计算。',
   }
 }

@@ -49,3 +49,9 @@ export function nextReview(calendar: CalendarDay[], asOf: string) {
   // No future calendar: expire immediately; never silently extend validity.
   return next ? new Date(`${next.date}T09:00:00+08:00`).toISOString() : asOf
 }
+
+/** Explicit offset prevents downstream prose from treating UTC as Beijing time. */
+export function chinaTimestamp(asOf: string | undefined) {
+  if (!asOf || !Number.isFinite(Date.parse(asOf))) return null
+  return new Date(Date.parse(asOf) + 8 * 3600000).toISOString().replace('Z', '+08:00')
+}

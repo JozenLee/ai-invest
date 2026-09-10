@@ -12,7 +12,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const run = await prisma.executionRun.findUnique({ where: { id: runId }, include: { steps: { select: { stepName: true } } } })
   if (!run) return NextResponse.json({ error: '分析轮次不存在' }, { status: 404 })
   if (stepName && !run.steps.some(step => step.stepName === stepName)) return NextResponse.json({ error: '步骤不存在' }, { status: 400 })
-  if (run.status === 'COMPLETED') return NextResponse.json({ success: true, completed: true })
+  if (run.status === 'COMPLETED' && mode !== 'step') return NextResponse.json({ success: true, completed: true })
   try {
     const result = await dispatchAnalysis(runId, mode, stepName)
     return NextResponse.json({ success: true, accepted: true, ...result }, { status: 202 })

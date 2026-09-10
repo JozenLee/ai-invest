@@ -3,21 +3,26 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { AlertTriangle, ArrowLeft, Database, FileText, Loader2, ExternalLink, BarChart3, ChevronDown, CheckCircle2, Clock3, Layers3, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Database, FileText, Loader2, ExternalLink, ChevronDown, CheckCircle2, Clock3 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AnalysisResultView } from '@/components/analysis/AnalysisResultView'
 import { PromptDialog } from '@/components/analysis/PromptDialog'
+import { ExecutionQuality } from '@/components/analysis/ExecutionQuality'
+import { AIExecutionTrace } from '@/components/analysis/AIExecutionTrace'
+import { StructuredDataView } from '@/components/analysis/StructuredDataView'
 import { PortfolioDecisionPanel } from '@/components/analysis/PortfolioDecisionPanel'
 import type { PortfolioDecisionSupport } from '@/lib/portfolio/decision-support'
+import { cleanStructuredValue, fieldLabel } from '@/lib/analysis/structured-data'
+import Link from 'next/link'
 import { analysisFieldLabels, chineseValue } from '@/lib/analysis/chinese-labels'
 
 type Artifact = { artifactKey: string; artifactType: string; data: unknown; size: number; truncated?:boolean }
-type Step = { stepName: string; status: string; startedAt?:string|null;completedAt: string | null;duration?:number|null;error?:string|null;progress?:{current?:number;total?:number;message?:string}|null; artifacts: Artifact[] }
+type Step = { dependencies?:string[]; stepName: string; status: string; startedAt?:string|null;completedAt: string | null;duration?:number|null;error?:string|null;progress?:{current?:number;total?:number;message?:string}|null; artifacts: Artifact[] }
 
 const titles: Record<string, string> = {
-  'freeze-research':'同步并冻结研究证据',
+  'etf-actions':'逐产品规则与动作边界', 'freeze-research':'读取本地数据并冻结研究证据',
   'fetch-portfolio': '邮箱持仓与组合风险', 'portfolio-decision': '本地组合投资建议', 'portfolio-analysis': '私有持仓分析', 'assess-data-quality': '数据质量校验', 'social-report': '社媒报告编辑',
   'fetch-etfs': '定位产业关联指数基金', 'fetch-etf-data': '获取指数基金行情及关键指标', 'fetch-etf-holdings': '解析指数基金成分股持仓',
   'fetch-companies': '提取产业链企业节点', 'fetch-company-data': '采集企业行情数据', 'fetch-news': '采集产业资讯并汇总情绪',
@@ -30,7 +35,7 @@ const purposes:Record<string,string>={
 }
 
 const labels: Record<string, string> = {
-  'research-snapshot':'冻结研究快照','research-manifest':'研究证据清单','research-evaluation':'规则复核结果','etf-actions':'指数基金决策',
+  'overall-score':'综合评级与置信度','portfolio-decision-validation':'组合决策校验','research-snapshot':'冻结研究快照','research-manifest':'研究证据清单','research-evaluation':'规则复核结果','etf-actions':'指数基金决策',
   'etf-bindings': '关联指数基金', 'etf-market-data': '指数基金行情数据', 'report-content': '分析报告',
   'report-id': '报告编号', companies: '产业链企业', 'company-codes': '企业代码',
   'company-market-data': '企业行情数据', news: '产业资讯', 'market-snapshot': '市场概览',
@@ -38,7 +43,7 @@ const labels: Record<string, string> = {
   'etf-holdings':'指数基金持仓','holdings-summary':'持仓摘要','news-articles':'资讯样本','news-events':'归并事件','news-evidence-gaps':'资讯证据缺口',
   'news-trends':'资讯趋势','news-sentiment':'资讯倾向','market-reference-data':'市场参考数据','market-reference-indicators':'市场参考指标',
   'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-decision-support':'组合投资建议','portfolio-analysis':'私有持仓分析','historical-report-context':'纳入分析的历史报告','historical-report-policy':'历史报告回溯规则',
-  'research-preflight':'同步与时效检查','decision-timing':'报告时效','graph-context':'产业图谱快照','graph-context-validation':'图谱结构校验','graph-mapping-validation':'图谱映射校验','strategy-validation':'规则样本外回放','ai-request-status':'模型请求状态','market-analysis-validation':'市场输出校验','news-analysis-validation':'事件输出校验','company-analysis-validation':'企业输出校验','industry-overview-validation':'行业汇编校验','investment-advice-validation':'综合结论校验',
+  'research-preflight':'本地订阅状态检查','decision-timing':'报告时效','graph-context':'产业图谱快照','graph-context-validation':'图谱结构校验','graph-mapping-validation':'图谱映射校验','strategy-validation':'规则样本外回放','ai-request-status':'模型请求状态','market-analysis-validation':'市场输出校验','news-analysis-validation':'事件输出校验','company-analysis-validation':'企业输出校验','industry-overview-validation':'行业汇编校验','investment-advice-validation':'综合结论校验',
   code: '代码', ticker: '代码', name: '名称', description: '描述', weight: '权重',
   bind_type: '绑定类型', bindType: '绑定类型', etf_code: '指数基金代码', etf_name: '指数基金名称',
   change_pct: '涨跌幅', change: '涨跌幅', price: '价格', date: '日期', time: '时间',
@@ -48,7 +53,7 @@ const labels: Record<string, string> = {
 }
 
 const artifactTypes: Record<string, string> = { DATA: '数据', TEXT: '文本', JSON: '结构化数据' }
-const statuses: Record<string, string> = { COMPLETED: '已完成', RUNNING: '进行中', PENDING: '等待中', FAILED: '失败', PAUSED: '已暂停' }
+const statuses: Record<string, string> = { SKIPPED:'已跳过', COMPLETED: '已完成', RUNNING: '进行中', PENDING: '等待中', FAILED: '失败', PAUSED: '已暂停' }
 
 function pretty(value: unknown) {
   if (typeof value === 'string') return value
@@ -61,7 +66,7 @@ function labelFor(key: string) {
   if(/^ai-response/.test(key))return '模型原始响应'
   if(/^ai-error/.test(key))return '模型错误诊断'
   if(key.endsWith('-graph-usage-validation'))return '图谱使用校验'
-  return labels[key] || analysisFieldLabels[key] || labels[key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] || key.replace(/[-_]/g,' ').replace(/([a-z])([A-Z])/g,'$1 $2')
+  return labels[key] || analysisFieldLabels[key] || labels[key.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] || titles[key] || fieldLabel(key)
 }
 
 function formatValue(value: unknown) {
@@ -73,7 +78,7 @@ function formatValue(value: unknown) {
   return String(chineseValue(value))
 }
 
-function formatBytes(value:number){if(value<1024)return `${value} B`;if(value<1024*1024)return `${(value/1024).toFixed(1)} KB`;return `${(value/1024/1024).toFixed(1)} MB`}
+
 
 function compactAnalysisDiagnostics(value:unknown):unknown{
   if(Array.isArray(value))return value.map(compactAnalysisDiagnostics)
@@ -106,7 +111,7 @@ function SectorFlowSummary({ sectors }: { sectors: any[] }) {
     .map((item) => ({
       ...item,
       name: item.sector || item.name,
-      flow: Number(item.mainForceNet ?? item.main_force_net ?? item.netFlow ?? item.net_flow ?? item.net_amount ?? item.netAmount ?? item.mainNet ?? 0),
+      flow: item.net!=null?Number(item.net)/1e8:Number(item.mainForceNet ?? item.main_force_net ?? item.netFlow ?? item.net_flow ?? item.net_amount ?? item.netAmount ?? item.mainNet ?? 0),
     }))
     .filter((item) => item.name)
   const unique=[...new Map(rows.sort((a,b)=>Math.abs(b.flow)-Math.abs(a.flow)).map(item=>[item.name,item])).values()]
@@ -139,7 +144,9 @@ function SnapshotSummary({data}:{data:Record<string,any>}){
 function EvaluationSummary({data}:{data:Record<string,any>}){
   const decisions=Array.isArray(data.decisions)?data.decisions:[]
   const states=decisions.reduce<Record<string,number>>((result,item:any)=>({...result,[item.state]:(result[item.state]||0)+1}),{})
-  return <div className="space-y-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><SummaryCard label="产品数" value={decisions.length}/><SummaryCard label="风险收缩" value={states['risk-off']||0} tone="text-amber-600"/><SummaryCard label="满足条件" value={states.eligible||0} tone="text-emerald-600"/><SummaryCard label="持续观察" value={states.watch||0}/><SummaryCard label="证据受限" value={states.blocked||0}/></div><div className="grid gap-3 lg:grid-cols-2">{decisions.map((decision:any)=><details key={decision.ticker} className="rounded-xl border bg-background"><summary className="min-h-12 cursor-pointer list-none p-4"><span className="font-medium">{decision.name||decision.ticker}</span><Badge variant="outline" className="float-right">{String(chineseValue(decision.state))}</Badge><span className="mt-1 block text-xs text-muted-foreground">{decision.ticker} · {decision.indexCode||'指数待核验'} · {decision.conditions?.filter((item:any)=>item.status==='unknown').length||0}项未知</span></summary><div className="border-t p-4 text-xs leading-6 text-muted-foreground"><p>{decision.reason}</p><p className="mt-2">多因子 {decision.metrics?.factorRegime||'未知'} · 得分 {decision.metrics?.factorScore??'未知'} · 20日相对收益 {decision.metrics?.relative20Pct?.toFixed?.(2)??'未知'}</p></div></details>)}</div></div>
+  const {decisions: ignoredDecisions, ...context} = data
+  void ignoredDecisions
+  return <div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><SummaryCard label="产品数" value={decisions.length}/><SummaryCard label="风险收缩" value={states['risk-off']||0} tone="text-amber-600"/><SummaryCard label="满足条件" value={states.eligible||0} tone="text-emerald-600"/><SummaryCard label="持续观察" value={states.watch||0}/><SummaryCard label="证据受限" value={states.blocked||0}/></div><StructuredDataView value={decisions}/><details className="rounded-xl border"><summary className="min-h-12 cursor-pointer p-4 text-sm font-medium">规则计算依据与校验</summary><div className="border-t p-4"><StructuredDataView value={context}/></div></details></div>
 }
 
 function CompanyDataSummary({rows}:{rows:any[]}){
@@ -175,8 +182,9 @@ function VisualArtifact({ artifact }: { artifact: Artifact }) {
   if (artifact.artifactKey === 'report-content' || artifact.artifactKey.endsWith('analysis') || artifact.artifactKey === 'industry-overview' || artifact.artifactKey === 'investment-advice') {
     let parsed=data
     if(typeof data==='string')try{parsed=JSON.parse(data.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''))}catch{/* Markdown remains a string. */}
-    return <AnalysisResultView value={compactAnalysisDiagnostics(parsed)} />
+    return artifact.artifactKey === 'report-content' ? <AnalysisResultView value={compactAnalysisDiagnostics(parsed)} /> : <StructuredDataView value={parsed} />
   }
+  if (artifact.artifactKey === 'etf-actions') return <StructuredDataView value={data}/>
   if (Array.isArray(data)) {
     if (artifact.artifactKey === 'etf-market-data') {
       return <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data.map((item: any, index) => <div key={item.code || item.ticker || index} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-2"><div><div className="font-medium">{item.name || item.code || item.ticker || '指数基金'}</div><div className="text-xs text-muted-foreground">{item.code || item.ticker || '暂无代码'}</div></div><Badge variant="outline">{String(chineseValue(item.trend || '震荡'))}</Badge></div><div className="mt-3 grid grid-cols-2 gap-3 text-xs"><Metric label="最新价格" value={item.price ?? item.current_price} /><Metric label="涨跌幅" value={item.changePct ?? item.change_pct ?? item.price_change_pct} /><Metric label="20日均线" value={item.keyIndicators?.trend?.ma?.ma20 ?? item.ma20} /><Metric label="相对强弱指标" value={item.keyIndicators?.momentum?.rsi?.rsi12 ?? item.rsi} /><Metric label="波动率" value={item.volatility} /><Metric label="最大回撤" value={item.max_drawdown} /></div></div>)}</div>
@@ -188,17 +196,22 @@ function VisualArtifact({ artifact }: { artifact: Artifact }) {
   }
   if (data && typeof data === 'object') {
     const record = data as Record<string, unknown>
-    const nestedArrays = Object.entries(record).filter(([, value]) => Array.isArray(value)&&value.length>0)
     if (artifact.artifactKey === 'market-snapshot' && Array.isArray((record.overview as any)?.indices)) {
       const indices = (record.overview as any).indices
-      return <div className="space-y-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{indices.map((item: any, index: number) => <div key={item.code || index} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-2"><div><div className="font-medium">{item.name || item.code}</div><div className="text-xs text-muted-foreground">{item.code}</div></div><Badge variant="outline">{item.changePct > 0 ? '上涨' : item.changePct < 0 ? '下跌' : '震荡'}</Badge></div><div className="mt-3 grid grid-cols-2 gap-3 text-xs"><Metric label="最新价格" value={item.price} /><Metric label="涨跌幅" value={item.changePct} /><Metric label="20日均线" value={item.indicators?.trend?.ma?.ma20} /><Metric label="相对强弱指标" value={item.indicators?.momentum?.rsi?.rsi12} /><Metric label="指数平滑异同移动平均线" value={item.indicators?.trend?.macd?.macd} /><Metric label="成交量比" value={item.indicators?.volume?.volumeRatio} /></div></div>)}</div><SectorFlowSummary sectors={Array.isArray(record.sectors) ? record.sectors : []} /></div>
+      const flows=Array.isArray((record.capitalFlow as any)?.latest)?(record.capitalFlow as any).latest:Array.isArray((record.capitalFlow as any)?.series)?(record.capitalFlow as any).series:Array.isArray(record.sectors)?record.sectors:[]
+      return <div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{indices.map((item: any, index: number) => <div key={item.code || index} className="rounded-xl border p-4"><div className="flex items-start justify-between gap-2"><div><div className="font-medium">{item.name || item.code}</div><div className="text-xs text-muted-foreground">{item.code} · {item.dataDate||'日期未提供'}</div></div><Badge variant="outline">{item.changePct > 0 ? '上涨' : item.changePct < 0 ? '下跌' : item.changePct==null?'涨跌待补':'平盘'}</Badge></div><div className="mt-3 grid grid-cols-2 gap-3 text-xs"><Metric label="收盘/最新" value={item.price} /><Metric label="涨跌幅" value={item.changePct} /><Metric label="开盘" value={item.open}/><Metric label="最高 / 最低" value={item.high!=null&&item.low!=null?`${item.high} / ${item.low}`:null}/><Metric label="20日均线" value={item.indicators?.trend?.ma?.ma20} /><Metric label="相对强弱指标" value={item.indicators?.momentum?.rsi?.rsi12} /><Metric label="指数平滑异同移动平均线" value={item.indicators?.trend?.macd?.macd} /><Metric label="成交量比" value={item.indicators?.volume?.volumeRatio} /></div><details className="mt-3 rounded-lg border bg-muted/10"><summary className="min-h-9 cursor-pointer px-3 py-2 text-xs text-primary">查看完整指标与历史摘要</summary><div className="border-t p-3"><StructuredDataView value={{source:item.source,intraday:item.intraday,aligned:item.aligned,sampleCount:item.sampleCount,previousClose:item.previousClose,change:item.change,volume:item.volume,indicators:item.indicators,history:Array.isArray(item.history)?item.history.slice(-10):[]}}/></div></details></div>)}</div><section><h3 className="mb-2 text-sm font-semibold">领域资金流向</h3><SectorFlowSummary sectors={flows}/><div className="mt-3"><StructuredDataView value={{summary:(record.capitalFlow as any)?.summary,latestDate:(record.capitalFlow as any)?.latestDate,quality:record.quality,scope:(record.capitalFlow as any)?.scope}}/></div></section></div>
     }
-    return <div className="space-y-4"><ObjectGrid data={record} />{nestedArrays.map(([key, value]) => <section key={key}><h3 className="mb-2 flex items-center gap-2 text-sm font-semibold"><BarChart3 className="h-4 w-4 text-primary" />{labelFor(key)}</h3>{(value as unknown[]).every(item=>typeof item!=='object'||item===null)?<ul className="space-y-2 rounded-lg border bg-muted/15 p-4">{(value as unknown[]).slice(0,30).map((item,index)=><li className="text-sm leading-6 text-muted-foreground" key={index}>{formatValue(item)}</li>)}</ul>:<DataTable rows={value as unknown[]} hiddenColumns={artifact.artifactKey === 'etf-bindings' ? ['bind_type', 'bindType','holdings'] : []}/>}</section>)}</div>
+    return <StructuredDataView value={record}/>
   }
   return <div className="rounded-lg bg-muted/30 p-4 text-sm">{formatValue(data)}</div>
 }
 
 export default function StepResultPage() {
+  const params = useParams<{ runId: string; stepName: string }>()
+  return <StepResultContent key={`${params.runId}/${params.stepName}`} />
+}
+
+function StepResultContent() {
   const params = useParams<{ runId: string; stepName: string }>()
   const router = useRouter()
   const [step, setStep] = useState<Step | null>(null)
@@ -206,11 +219,13 @@ export default function StepResultPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetch(`/api/analysis/comprehensive/${params.runId}?view=step&stepName=${encodeURIComponent(decodeURIComponent(params.stepName))}`)
+    const controller = new AbortController()
+    fetch(`/api/analysis/comprehensive/${params.runId}?view=step&stepName=${encodeURIComponent(decodeURIComponent(params.stepName))}`, { signal: controller.signal })
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('读取流程结果失败')))
       .then((run) => setStep(run.steps.find((item: Step) => item.stepName === decodeURIComponent(params.stepName)) || null))
-      .catch((reason) => setError(reason instanceof Error ? reason.message : '读取流程结果失败'))
-      .finally(() => setLoading(false))
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : '读取流程结果失败') })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    return () => controller.abort()
   }, [params.runId, params.stepName])
 
   const reportId = useMemo(() => {
@@ -219,8 +234,9 @@ export default function StepResultPage() {
   }, [step])
 
   const artifactGroups=useMemo(()=>{
-    const all=(step?.artifacts||[]).filter(artifact=>!['etf-codes','industry-info','portfolio-decision-validation'].includes(artifact.artifactKey))
-    const diagnostics=all.filter(artifact=>diagnosticArtifact(artifact.artifactKey))
+    const all=(step?.artifacts||[]).filter(artifact=>!['etf-codes','industry-info'].includes(artifact.artifactKey) && cleanStructuredValue(artifact.data) !== undefined)
+    const traceKeys=new Set(all.filter(item=>/^ai-(?:prompt|response|error|request-attempt|input-audit)/.test(item.artifactKey)).map(item=>item.artifactKey))
+    const diagnostics=all.filter(artifact=>diagnosticArtifact(artifact.artifactKey)&&!traceKeys.has(artifact.artifactKey))
     const quality=all.filter(artifact=>!diagnosticArtifact(artifact.artifactKey)&&qualityArtifact(artifact.artifactKey))
     const primary=all.filter(artifact=>!diagnosticArtifact(artifact.artifactKey)&&!qualityArtifact(artifact.artifactKey))
     return {primary,quality,diagnostics,totalSize:all.reduce((sum,item)=>sum+item.size,0)}
@@ -231,12 +247,16 @@ export default function StepResultPage() {
 
   if (error || !step) return <div className="space-y-4 p-6"><Button variant="ghost" onClick={() => router.push(analysisUrl)}><ArrowLeft className="mr-2 h-4 w-4" />返回综合分析</Button><Card><CardContent className="p-8 text-center text-muted-foreground">{error || '未找到该子流程结果'}</CardContent></Card></div>
 
+  const hasAI=step.artifacts.some(item=>item.artifactKey==='ai-prompt'||/^ai-request-attempt-/.test(item.artifactKey))
   const completed=step.status==='COMPLETED',duration=step.duration==null?'—':step.duration<1000?`${step.duration}毫秒`:`${(step.duration/1000).toFixed(1)}秒`
-  return <div className="mx-auto max-w-[1500px] space-y-6 p-4 sm:p-6">
+  return <div className="mx-auto max-w-[1500px] space-y-4 p-4 sm:p-5">
     <Button variant="ghost" onClick={() => router.push(analysisUrl)}><ArrowLeft className="mr-2 h-4 w-4" />返回综合分析</Button>
-    <header className="rounded-2xl border bg-card p-5 shadow-sm sm:p-6"><div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"><div className="max-w-3xl"><div className="flex flex-wrap items-center gap-2">{completed?<CheckCircle2 className="size-5 text-emerald-600"/>:step.status==='FAILED'?<AlertTriangle className="size-5 text-destructive"/>:<Database className="size-5 text-primary"/>}<Badge variant="secondary">研究步骤</Badge><Badge variant="outline">{statuses[step.status] || step.status}</Badge><span className="font-mono text-xs text-muted-foreground">{step.stepName}</span></div><h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">{titles[step.stepName] || step.stepName}</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">{purposes[step.stepName]||'查看该步骤的输入边界、关键结果、质量校验与审计信息。'}</p>{step.error&&<p className="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">{step.error}</p>}</div><div className="flex flex-wrap gap-2">{step.artifacts.some(artifact => artifact.artifactKey === 'ai-prompt') && <PromptDialog artifacts={step.artifacts} />}{reportId && <Button onClick={() => router.push(`/comprehensive-analysis/report/${reportId}`)}><FileText className="mr-2 h-4 w-4" />打开完整报告</Button>}</div></div><div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="flex items-center gap-3 rounded-xl border bg-muted/15 p-3"><Clock3 className="size-4 text-primary"/><div><p className="text-xs text-muted-foreground">执行耗时</p><p className="font-semibold tabular-nums">{duration}</p></div></div><div className="flex items-center gap-3 rounded-xl border bg-muted/15 p-3"><Layers3 className="size-4 text-primary"/><div><p className="text-xs text-muted-foreground">主要产物</p><p className="font-semibold tabular-nums">{artifactGroups.primary.length} 项</p></div></div><div className="flex items-center gap-3 rounded-xl border bg-muted/15 p-3"><Database className="size-4 text-primary"/><div><p className="text-xs text-muted-foreground">归档体积</p><p className="font-semibold tabular-nums">{formatBytes(artifactGroups.totalSize)}</p></div></div></div></header>
-    {!!artifactGroups.quality.length&&<section className="rounded-2xl border bg-card p-5 sm:p-6"><div className="mb-4 flex items-center gap-2"><ShieldCheck className="size-5 text-primary"/><div><h2 className="font-semibold">运行与质量</h2><p className="text-xs text-muted-foreground">先确认数据和模型状态，再阅读研究结论。</p></div></div><div className="grid gap-3 lg:grid-cols-2">{artifactGroups.quality.map(artifact=><div key={artifact.artifactKey} className="rounded-xl border bg-background p-4"><div className="mb-3 flex items-center justify-between gap-2"><h3 className="text-sm font-medium">{labelFor(artifact.artifactKey)}</h3><span className="text-xs text-muted-foreground">{formatBytes(artifact.size)}</span></div><VisualArtifact artifact={artifact}/></div>)}</div></section>}
-    {artifactGroups.primary.length===0?<Card><CardContent className="p-8 text-center text-muted-foreground">该步骤没有主要研究产物；请查看上方运行状态。</CardContent></Card>:<section className="space-y-4"><div><h2 className="text-xl font-semibold tracking-tight">主要结果</h2><p className="mt-1 text-sm text-muted-foreground">经过筛选的业务内容；大对象已摘要化，避免原始字段干扰阅读。</p></div>{artifactGroups.primary.map(artifact=><Card key={artifact.artifactKey}><CardHeader className="space-y-2"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><CardTitle className="text-base">{labelFor(artifact.artifactKey)}</CardTitle><Badge variant="outline" className="text-[10px]">{artifactTypes[artifact.artifactType] || '数据'}</Badge>{artifact.truncated&&<Badge variant="secondary" className="text-[10px]">摘要展示</Badge>}</div><span className="text-xs text-muted-foreground">{formatBytes(artifact.size)}</span></div>{artifactDescriptions[artifact.artifactKey]&&<p className="text-xs leading-5 text-muted-foreground">{artifactDescriptions[artifact.artifactKey]}</p>}</CardHeader><CardContent className="space-y-4"><VisualArtifact artifact={artifact}/>{artifact.artifactKey==='report-id'&&<Button variant="link" className="px-0" onClick={()=>router.push(`/comprehensive-analysis/report/${reportId}`)}>查看报告 <ExternalLink className="ml-1 size-3"/></Button>}{!artifact.truncated&&artifact.size<500_000&&<details className="group rounded-lg border bg-muted/10"><summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted-foreground"><ChevronDown className="size-3.5 transition-transform group-open:rotate-180"/>查看原始数据（调试用）</summary><pre className="max-h-[360px] overflow-auto whitespace-pre-wrap border-t bg-muted/30 p-3 font-mono text-xs leading-5">{pretty(artifact.data)}</pre></details>}{artifact.truncated&&<p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">原始数据体积较大，本页只返回业务摘要；完整记录仍保存在冻结快照中。</p>}</CardContent></Card>)}</section>}
-    {!!artifactGroups.diagnostics.length&&<details className="group rounded-2xl border bg-card"><summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-5 py-3"><span><span className="block font-medium">高级诊断</span><span className="block text-xs text-muted-foreground">模型响应、输入审计和图谱使用校验，共 {artifactGroups.diagnostics.length} 项</span></span><ChevronDown className="size-4 transition-transform group-open:rotate-180"/></summary><div className="grid gap-3 border-t p-4 lg:grid-cols-2">{artifactGroups.diagnostics.map(artifact=><div key={artifact.artifactKey} className="rounded-xl border p-4"><div className="flex items-center justify-between gap-2"><h3 className="text-sm font-medium">{labelFor(artifact.artifactKey)}</h3><span className="text-xs text-muted-foreground">{formatBytes(artifact.size)}</span></div><details className="mt-3"><summary className="cursor-pointer text-xs text-primary">查看诊断内容</summary><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/30 p-3 font-mono text-xs leading-5">{pretty(artifact.data)}</pre></details></div>)}</div></details>}
+    <header className="rounded-2xl border bg-card p-4 shadow-sm"><div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"><div className="max-w-3xl"><div className="flex flex-wrap items-center gap-2">{completed?<CheckCircle2 className="size-5 text-emerald-600"/>:step.status==='FAILED'?<AlertTriangle className="size-5 text-destructive"/>:<Database className="size-5 text-primary"/>}<Badge variant="secondary">研究步骤</Badge><Badge variant="outline">{statuses[step.status] || step.status}</Badge></div><h1 className="mt-2 text-xl font-semibold tracking-tight sm:text-2xl">{titles[step.stepName] || step.stepName}</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">{purposes[step.stepName]||'查看该步骤的输入边界、关键结果、质量校验与审计信息。'}</p>{step.error&&<p className="mt-3 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">{step.error}</p>}</div><div className="flex flex-wrap gap-2">{step.artifacts.some(artifact => artifact.artifactKey === 'ai-prompt') && <PromptDialog artifacts={step.artifacts} />}{reportId && <Button onClick={() => router.push(`/comprehensive-analysis/report/${reportId}`)}><FileText className="mr-2 h-4 w-4" />打开完整报告</Button>}</div></div><div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 border-t pt-3 text-xs"><span className="inline-flex items-center gap-2 text-muted-foreground"><Clock3 className="size-3.5"/>执行耗时 <strong className="text-foreground">{duration}</strong></span><span className="text-muted-foreground">执行方式 <strong className="ml-2 text-foreground">{hasAI?'模型研判':'规则计算 / 汇编'}</strong></span></div></header>
+    <nav aria-label="明细内容导航" className="flex flex-wrap gap-2 rounded-xl border bg-card p-2">{[['step-quality','运行与校验'],['step-input','输入与模型回复'],...(!hasAI?[['step-results','流程结果']]:[])].map(([id,label])=><a key={id} href={`#${id}`} className="inline-flex min-h-11 items-center rounded-lg px-4 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground">{label}</a>)}</nav>
+    {!!step.dependencies?.length&&<section className="flex flex-wrap items-center gap-3 rounded-xl border bg-card px-4 py-2"><h2 className="text-xs font-semibold">上游依赖</h2><div className="flex flex-wrap gap-2">{step.dependencies.map(name=><Link key={name} href={`/comprehensive-analysis/run/${encodeURIComponent(params.runId)}/step/${encodeURIComponent(name)}`} className="inline-flex min-h-11 items-center gap-2 rounded-lg border px-3 text-sm text-primary hover:bg-muted">{titles[name]||'上游研究步骤'}<ExternalLink className="size-3.5"/></Link>)}</div></section>}
+    {!!artifactGroups.quality.length&&<ExecutionQuality artifacts={artifactGroups.quality}/>}
+    <div id="step-input" className="scroll-mt-6"><AIExecutionTrace key={step.stepName} artifacts={step.artifacts} stepName={step.stepName}/></div>
+    {!hasAI&&(artifactGroups.primary.length===0?<Card><CardContent className="p-8 text-center text-muted-foreground">该步骤没有主要研究产物；请查看上方运行状态。</CardContent></Card>:<section id="step-results" className="space-y-4"><div><h2 className="text-xl font-semibold tracking-tight">流程结果</h2><p className="mt-1 text-sm text-muted-foreground">下游实际使用的研究结果。空字段已过滤；未知条件、否值、零值及异常信息均保留。</p></div>{artifactGroups.primary.map(artifact=><Card key={artifact.artifactKey}><CardHeader className="space-y-2"><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><CardTitle className="text-base">{labelFor(artifact.artifactKey)}</CardTitle><Badge variant="outline" className="text-[10px]">{artifactTypes[artifact.artifactType] || '数据'}</Badge>{artifact.truncated&&<Badge variant="secondary" className="text-[10px]">摘要展示</Badge>}</div></div>{artifactDescriptions[artifact.artifactKey]&&<p className="text-xs leading-5 text-muted-foreground">{artifactDescriptions[artifact.artifactKey]}</p>}</CardHeader><CardContent className="space-y-4"><VisualArtifact artifact={artifact}/>{artifact.artifactKey==='report-id'&&<Button variant="link" className="px-0" onClick={()=>router.push(`/comprehensive-analysis/report/${reportId}`)}>查看报告 <ExternalLink className="ml-1 size-3"/></Button>}{!artifact.truncated&&artifact.size<500_000&&<details className="group rounded-lg border bg-muted/10"><summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs text-muted-foreground"><ChevronDown className="size-3.5 transition-transform group-open:rotate-180"/>查看原始数据（调试用）</summary><pre className="max-h-[360px] overflow-auto whitespace-pre-wrap border-t bg-muted/30 p-3 font-mono text-xs leading-5">{pretty(artifact.data)}</pre></details>}{artifact.truncated&&<p className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">原始数据体积较大，本页只返回业务摘要；完整记录仍保存在冻结快照中。</p>}</CardContent></Card>)}</section>)}
+    {!!artifactGroups.diagnostics.length&&<details className="group rounded-2xl border bg-card"><summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-5 py-3"><span><span className="block font-medium">高级诊断</span><span className="block text-xs text-muted-foreground">模型响应、输入审计和图谱使用校验，共 {artifactGroups.diagnostics.length} 项</span></span><ChevronDown className="size-4 transition-transform group-open:rotate-180"/></summary><div className="grid gap-3 border-t p-4 lg:grid-cols-2">{artifactGroups.diagnostics.map(artifact=><div key={artifact.artifactKey} className="rounded-xl border p-4"><div className="flex items-center justify-between gap-2"><h3 className="text-sm font-medium">{labelFor(artifact.artifactKey)}</h3></div><details className="mt-3"><summary className="cursor-pointer text-xs text-primary">查看诊断内容</summary><div className="mt-3"><StructuredDataView value={artifact.data}/></div></details></div>)}</div></details>}
   </div>
 }

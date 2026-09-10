@@ -81,9 +81,9 @@ export function replayResearch(snapshots: ResearchSnapshot[], evaluations: Evalu
     const portfolioReturns=equityCurve.slice(1).map((row,index)=>row.equity/equityCurve[index].equity-1)
     const benchmarkByDate=new Map(benchmark.map(row=>[row.date,row])),aligned=equityCurve.filter(row=>benchmarkByDate.has(row.date))
     const benchmarkReturns=aligned.slice(1).map((row,index)=>benchmarkByDate.get(row.date)!.close/benchmarkByDate.get(aligned[index].date)!.close-1)
-    const activeReturns=portfolioReturns.slice(-benchmarkReturns.length).map((value,index)=>value-benchmarkReturns[index])
+    const activeReturns=aligned.slice(1).map((row,index)=>row.equity/aligned[index].equity-1-benchmarkReturns[index])
     const benchmarkReturnPct=benchmark.length>1?((benchmark.at(-1)!.close/benchmark[0].open)*(1-rate)-1)*100:null
-    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,benchmarkReturnPct,excessReturnPct:benchmarkReturnPct===null?null:(final-1)*100-benchmarkReturnPct,turnover,maxDrawdownPct:maxDrawdown,annualizedVolatilityPct:(deviation(portfolioReturns)||0)*Math.sqrt(252)*100,sharpeRatio:annualRatio(portfolioReturns),informationRatio:annualRatio(activeReturns),observations:equityCurve.length}
+    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,benchmarkReturnPct,excessReturnPct:benchmarkReturnPct===null?null:(final-1)*100-benchmarkReturnPct,turnover,maxDrawdownPct:maxDrawdown,annualizedVolatilityPct:(deviation(portfolioReturns)||0)*Math.sqrt(252)*100,sharpeRatio:trades.length>=30&&equityCurve.length>=252?annualRatio(portfolioReturns):null,informationRatio:trades.length>=30&&aligned.length>=252?annualRatio(activeReturns):null,observations:equityCurve.length}
   })
   const tested=results.filter(item=>item.status!=='insufficient'),trades=tested.reduce((sum,item)=>sum+item.trades.length,0),observations=tested.length?Math.min(...tested.map(item=>item.observations||0)):0
   const validation=tested.length&&trades>=30&&observations>=252?'candidate-walk-forward' as const:'insufficient-history' as const

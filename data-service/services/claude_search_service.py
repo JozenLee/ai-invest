@@ -1,4 +1,5 @@
 # data-service/services/claude_search_service.py
+from core.ai_settings import async_scene_client, get_ai_settings
 import os
 import time
 import hashlib
@@ -21,11 +22,11 @@ class ClaudeSearchService:
     """Claude原生搜索服务（使用工具调用）"""
 
     def __init__(self):
-        self.anthropic = AsyncAnthropic(
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
+        self.anthropic = async_scene_client('graph',
+            api_key=get_ai_settings('graph')['api_key'],
             base_url=os.getenv("ANTHROPIC_BASE_URL")
         )
-        self.model = os.getenv("CLAUDE_MODEL", "claude-sonnet-5")
+        self.model = get_ai_settings('graph')['model']
 
         # 初始化Tavily作为降级方案
         self.tavily = None

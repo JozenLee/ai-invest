@@ -230,3 +230,42 @@ async def test_empty_share_response_after_release_is_a_real_gap():
     result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,8,9,tzinfo=ZoneInfo('Asia/Shanghai')))
     assert 'shares' in result['failures']
     assert result.get('fieldStatus',{}).get('shares',{}).get('status')!='pending-publication'
+
+@pytest.mark.asyncio
+async def test_factors_wait_for_17_publication_without_fabricating_today():
+    provider = AsyncMock()
+    async def request(api, **params):
+        if api == 'fund_adj':
+            assert 'trade_date' not in params
+            return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260904','adj_factor':1}])
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':1}])
+    provider.request_dataframe.side_effect = request
+    result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,7,16,45,tzinfo=ZoneInfo('Asia/Shanghai')))
+    assert result['fieldStatus']['factors']['status']=='pending-publication'
+    assert result['fieldStatus']['factors']['expectedAt']=='2026-09-07T17:00:00+08:00'
+    assert 'factors' not in result['failures']
+    assert [row['trade_date'] for row in result['data']['factors']]==['20260904']
+
+
+def test_pending_factors_schedule_retry_after_release_not_19():
+    from services.subscription_config import publication_retry
+    tz=ZoneInfo('Asia/Shanghai')
+    now=datetime(2026,9,7,16,45,tzinfo=tz)
+    scheduled=datetime(2026,9,7,19,tzinfo=tz)
+    result={'fieldStatus':{'factors':{'status':'pending-publication','expectedAt':'2026-09-07T17:00:00+08:00'}}}
+    assert publication_retry(result,scheduled,now)==datetime(2026,9,7,17,5,tzinfo=tz)
+    assert publication_retry(result,scheduled,datetime(2026,9,7,18,tzinfo=tz))==scheduled
+
+@pytest.mark.asyncio
+async def test_bulk_factor_fallback_requires_same_security_and_session():
+    provider=AsyncMock()
+    async def request(api,**params):
+        if api=='fund_adj':
+            if params.get('ts_code') and params.get('trade_date'):raise RuntimeError('busy')
+            if params.get('ts_code'):return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260904','adj_factor':1}])
+            return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':2}, {'ts_code':'159801.SZ','trade_date':'20260907','adj_factor':99}])
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260907','adj_factor':1}])
+    provider.request_dataframe.side_effect=request
+    result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,7,18,tzinfo=ZoneInfo('Asia/Shanghai')))
+    assert [row['adj_factor'] for row in result['data']['factors']]==[1,2]
+    assert 'factors' not in result['failures']

@@ -13,6 +13,7 @@ import {
   Send,
   Lightbulb,
   Database,
+  Settings2,
 } from 'lucide-react'
 import {
   Sheet,
@@ -89,6 +90,9 @@ function NavigationContent({ onNavigate }: { onNavigate?: () => void }) {
         {navigation.slice(1).map((item) => (
           <NavigationItem key={item.name} item={item} pathname={pathname} onNavigate={onNavigate} />
         ))}
+      </ul>
+      <ul className="mt-6 border-t border-sidebar-border pt-3">
+        <NavigationItem item={{ name: '设置', href: '/settings', icon: Settings2 }} pathname={pathname} onNavigate={onNavigate} />
       </ul>
     </nav>
   )

@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db'
 
 // Mock Anthropic
 vi.mock('@anthropic-ai/sdk', () => ({
-  default: vi.fn().mockImplementation(() => ({
+  default: vi.fn().mockImplementation(function () { return {
     messages: {
       create: vi.fn().mockResolvedValue({
         content: [{
@@ -29,7 +29,7 @@ vi.mock('@anthropic-ai/sdk', () => ({
         }
       })
     }
-  }))
+  } })
 }))
 
 // Mock prisma

@@ -110,6 +110,38 @@ describe('P0→P2 frozen workflow integration',()=>{
     expect(artifacts.get('research-evaluation').validation).toBe('experimental-not-backtest-validated')
     expect(network).not.toHaveBeenCalled();network.mockRestore()
   })
+  it.each(['success','partial','queued','running'])('freezes existing close data immediately with a %s subscription and legacy refresh flag',async(status)=>{
+    // At 02:00 China time the last close is already present, despite a ten-hour
+    // old fetch timestamp. A background job must not become a workflow dependency.
+    vi.setSystemTime(new Date('2026-09-04T18:00:00Z'))
+    state.subscriptions[0].instrument.type='ETF'
+    const dataset={id:'dataset',datasetKey:'etf_research',enabled:true,status,lastSuccessAt:new Date('2026-09-04T08:00:00Z')}
+    state.subscriptions[0].datasets=[dataset]
+    const artifacts=new Map<string,any>()
+    const ctx:StepContext={runId:'legacy-run',stepId:'freeze',input:{industryId:'ai',refreshResearchData:true},artifacts,updateProgress:vi.fn(),saveArtifact:async(k,v)=>{artifacts.set(k,v)}}
+    const network=vi.spyOn(globalThis,'fetch').mockRejectedValue(new Error('Collection is forbidden'))
+    try {
+      await freezeResearchStep.execute(ctx)
+      expect(artifacts.get('research-preflight')).toMatchObject({queued:0,completed:0})
+      expect(artifacts.get('research-snapshot').etfs[0].bars.at(-1).date).toBe('2026-09-04')
+      expect(dataset.status).toBe(status)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(network).not.toHaveBeenCalled()
+    } finally { network.mockRestore() }
+  })
+  it('blocks missing intraday quotes immediately without collecting or persisting a usable snapshot',async()=>{
+    vi.setSystemTime(new Date('2026-09-07T06:17:00Z'))
+    const artifacts=new Map<string,any>()
+    const ctx:StepContext={runId:'intraday',stepId:'freeze',input:{industryId:'ai',refreshResearchData:true},artifacts,updateProgress:vi.fn(),saveArtifact:async(k,v)=>{artifacts.set(k,v)}}
+    const network=vi.spyOn(globalThis,'fetch').mockRejectedValue(new Error('Collection is forbidden'))
+    try {
+      await expect(freezeResearchStep.execute(ctx)).rejects.toThrow('盘中分析未取得完整实时行情')
+      expect(artifacts.has('research-snapshot')).toBe(false)
+      expect(state.raw.some(row=>row.datasetKey==='research_snapshot')).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+      expect(network).not.toHaveBeenCalled()
+    } finally { network.mockRestore() }
+  })
   it('freezes the latest report per trading day as historical analysis context',async()=>{
     state.historicalReports=[
       {id:'older',industryId:'ai',industryName:'测试领域',title:'旧版',summary:'旧',createdAt:new Date('2026-09-03T08:00:00Z'),dataJson:JSON.stringify({researchEvaluation:{expectedSession:'2026-09-03',decisions:[]}})},
@@ -182,4 +214,21 @@ it('chooses a completed report baseline instead of a newer intermediate evaluati
   state.raw.push({id:'unfinished:evaluation',datasetKey:'research_evaluation',targetCode:'ai',payload:JSON.stringify(intermediate),fetchedAt:new Date('2026-09-04T08:30:00Z')})
   expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z')).toMatchObject({snapshotId:completed.snapshotId,baselineReport:{id:'completed-report'}})
   expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z','unfinished')).toBeNull()
+})
+
+it('uses the same bounded history window for merged prices and factors after close',async()=>{
+ const f=fixture(),bars=f.etfs[0].bars
+ // Older local rows extend beyond the research factor window. They must not
+ // invalidate the recent, fully adjusted 120-session research sample.
+ const early=Array.from({length:30},(_,i)=>({...state.daily[0],id:`early-${i}`,date:new Date(Date.parse(bars[0].date)-(i+1)*86400000)})).reverse()
+ state.daily=[...early,...state.daily]
+ const research=state.raw.find(row=>row.id==='etf')
+ const payload=JSON.parse(research.payload)
+ payload.data.daily=[...early.map(row=>({...row,trade_date:row.date.toISOString().slice(0,10)})),...payload.data.daily]
+ payload.data.factors=payload.data.daily.slice(-160).map((row:any)=>({trade_date:row.trade_date,adj_factor:1}))
+ research.payload=JSON.stringify(payload)
+ const snapshot=await captureResearchSnapshot('ai')
+ expect(snapshot.etfs[0].bars.length).toBeLessThanOrEqual(160)
+ const factors=new Set(snapshot.etfs[0].factors.map(row=>row.date))
+ expect(snapshot.etfs[0].bars.every(row=>factors.has(row.date))).toBe(true)
 })

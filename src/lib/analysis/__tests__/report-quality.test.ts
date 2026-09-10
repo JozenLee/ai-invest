@@ -60,14 +60,14 @@ it('counts omitted missing fields in the quality denominator',()=>{
   expect(quality.blockers.some(item=>item.includes('仍计入质量覆盖率'))).toBe(true)
 })
 
-it('does not downgrade execution meaning after a trading-session snapshot is frozen',async()=>{
+it('caps action readiness when a trading-session snapshot lacks quote and event checks',async()=>{
   const { assessDecisionTiming }=await import('../decision-timing')
   const snapshot=fixture()
   const timing=assessDecisionTiming({asOf:'2026-09-04T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
   const quality=buildReportQuality({evaluation:evaluateResearch(snapshot),dataQuality:{status:'available'},decisionTiming:timing})
-  expect(timing.executionReady).toBe(true)
-  expect(quality.overallScore).toBeGreaterThanOrEqual(70)
-  expect(quality.usability).toBe('advice-grade')
+  expect(timing.executionReady).toBe(false)
+  expect(quality.overallScore).toBeLessThanOrEqual(69)
+  expect(quality.usability).toBe('limited-advice')
 })
 
 it('does not count a previous-session valuation as current evidence',()=>{
@@ -77,4 +77,20 @@ it('does not count a previous-session valuation as current evidence',()=>{
   expect(quality.dimensions.find(item=>item.key==='valuation')?.score).toBe(0)
   evaluation.products![0].valuationDate=evaluation.expectedSession
   expect(buildReportQuality({evaluation,dataQuality:{status:'available'}}).dimensions.find(item=>item.key==='valuation')?.score).toBe(100)
+})
+
+it('does not let individually known fields hide seven broken technical chains',()=>{
+ const evaluation=evaluateResearch(fixture())
+ evaluation.decisions=Array.from({length:8},(_,i)=>({...structuredClone(evaluation.decisions[0]),ticker:String(i)}))
+ evaluation.decisions.slice(1).forEach(d=>{d.state='blocked';d.conditions.find(c=>c.key==='adjustment')!.status='unknown'})
+ const quality=buildReportQuality({evaluation,dataQuality:{status:'limited'}})
+ expect(quality.technicalCoverage).toMatchObject({usable:1,total:8})
+ expect(quality.dimensions.find(d=>d.key==='market')?.score).toBe(13)
+ expect(quality.usability).toBe('insufficient')
+})
+it('does not label a complete dataset as a complete AI report when a model module fell back',()=>{
+ const quality=buildReportQuality({evaluation:evaluateResearch(fixture()),dataQuality:{status:'available'},analysisStatuses:{market:{status:'fallback'}}})
+ expect(quality.usability).toBe('limited-advice')
+ expect(quality.overallScore).toBeLessThanOrEqual(69)
+ expect(quality.blockers.join('')).toContain('市场智能分析已降级')
 })

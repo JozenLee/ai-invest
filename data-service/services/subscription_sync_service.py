@@ -17,7 +17,7 @@ from providers.etf_provider import ETFProvider
 from providers.stock_provider import StockProvider
 from providers.tushare_provider import TushareProvider
 from services.data_service import data_service
-from services.subscription_config import DEFAULTS, INDEXES, get_config, parse_timestamp, next_run, market_open
+from services.subscription_config import DEFAULTS, INDEXES, get_config, parse_timestamp, next_run, market_open, publication_retry
 from providers.stock_symbols import canonical_stock_code, stock_market
 
 logger = logging.getLogger(__name__)
@@ -367,6 +367,8 @@ class SubscriptionSyncService:
                 error = (result.error_json() if isinstance(result, CompanyBatch) else json.dumps(result.get('failures'), ensure_ascii=False)) if partial else None
                 if partial and key != 'northbound_flow':
                     scheduled_next = completed + timedelta(minutes=5 if key.endswith('_realtime') else 30)
+                if key == 'etf_research':
+                    scheduled_next = publication_retry(result, scheduled_next, completed)
                 db.update("UPDATE data_fetch_runs SET status=?, fetchedCount=?, storedCount=?, durationMs=?, qualityStatus=?, error=?, completedAt=? WHERE id=?", (status, len(result) if isinstance(result, list) else len(result['data']) if isinstance(result, dict) and isinstance(result.get('data'), list) else 1, stored, int((completed - started).total_seconds() * 1000), 'partial' if partial else 'verified', error, completed.isoformat(), run_id))
                 # Partial means the bundle contains verified usable fields plus explicit
                 # optional gaps. Record its freshness so every analysis does not refetch

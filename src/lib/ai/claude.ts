@@ -2,8 +2,11 @@
 // 提供事件分析、ETF分析等功能
 
 import Anthropic from '@anthropic-ai/sdk'
+import { sceneAnthropic } from './scene-client'
+import type { AIScene } from './scene-catalog'
 
 export interface ClaudeConfig {
+  scene?: AIScene
   apiKey?: string
   model?: string
   maxTokens?: number
@@ -60,15 +63,33 @@ export class ClaudeClient {
       effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
     }) => {
       if (!this.client) throw new Error('Claude API 未配置，请设置 ANTHROPIC_API_KEY 环境变量')
-      const message = await this.client.messages.create({
-        model: params.model || this.model,
-        max_tokens: params.max_tokens || this.maxTokens,
-        messages: params.messages?.length ? params.messages.map(item=>({role:item.role==='assistant'?'assistant' as const:'user' as const,content:item.content})) : [{role:'user',content:params.prompt||''}],
-        system: params.system,
-        cache_control: { type:'ephemeral', ttl:params.cacheTtl||'1h' },
-        ...(params.effort?{output_config:{effort:params.effort}}:{}),
-        ...(params.temperature===undefined?{}:{temperature:params.temperature}),
-      }, { signal: AbortSignal.timeout(Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS||360000)))) })
+      const timeoutMs = Math.min(600000, Math.max(30000, Number(params.timeoutMs||process.env.AI_ANALYSIS_TIMEOUT_MS||360000)))
+      const controller = new AbortController()
+      let timedOut = false
+      const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+      let message
+      try {
+        message = await this.client.messages.stream({
+          model: params.model || this.model,
+          max_tokens: params.max_tokens || this.maxTokens,
+          messages: params.messages?.length ? params.messages.map(item=>({role:item.role==='assistant'?'assistant' as const:'user' as const,content:item.content})) : [{role:'user',content:params.prompt||''}],
+          system: params.system,
+          cache_control: { type:'ephemeral', ttl:params.cacheTtl||'1h' },
+          ...(params.effort?{output_config:{effort:params.effort}}:{}),
+          ...(params.temperature===undefined?{}:{temperature:params.temperature}),
+        }, { signal: controller.signal, timeout: timeoutMs, maxRetries: 0 }).finalMessage()
+      } catch (error) {
+        // The SDK maps our deadline signal to APIUserAbortError. Preserve the
+        // distinction so workflow retries do not mistake a timeout for cancellation.
+        if (timedOut) {
+          const timeout = new Error(`AI request timed out after ${timeoutMs}ms`, { cause: error })
+          timeout.name = 'TimeoutError'
+          throw timeout
+        }
+        throw error
+      } finally {
+        clearTimeout(timer)
+      }
       // Preserve termination/usage diagnostics, and collect ALL visible text
       // blocks. Thinking/tool blocks are not an answer and are not persisted.
       return {
@@ -84,7 +105,9 @@ export class ClaudeClient {
     this.maxTokens = config?.maxTokens || 4096
 
     const apiKey = config?.apiKey || process.env.ANTHROPIC_API_KEY
-    if (apiKey) {
+    if (config?.scene) {
+      this.client = sceneAnthropic(config.scene)
+    } else if (apiKey) {
       this.client = new Anthropic({ apiKey })
     }
   }
@@ -193,4 +216,4 @@ export class ClaudeClient {
 }
 
 // 全局单例
-export const claudeClient = new ClaudeClient()
+export const claudeClient = new ClaudeClient({ scene: 'comprehensive' })

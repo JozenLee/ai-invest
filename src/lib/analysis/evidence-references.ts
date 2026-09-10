@@ -1,6 +1,6 @@
 import type { Evidence } from '@/lib/research/contracts'
 
-export type EvidenceClaim = {claim:string;source?:string;date?:string;evidenceIds?:string[];referenceIssues?:string[]}
+export type EvidenceClaim = {claim:string;source?:string;date?:string;evidenceIds?:string[];referenceIssues?:string[];references?:Array<{source:string;date:string|null}>}
 const identifier=/\b(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?::[\w.-]+)*|[a-f0-9]{32,64})\b/gi
 export function cleanClaim(text:string){
   return text.replace(identifier,'').replace(/、?:\d{6}/g,'').replace(/^([\u4e00-\u9fff]{2,8})\1(?=投资者|公告)/,'$1').replace(/(?:；?证据[:：]?|〔[\s、]*〕|\[[\s、]*\])(?=[\s、；。]*$)/g,'').replace(/[、；\s]+$/,'').trim()
@@ -27,7 +27,8 @@ export function auditClaim(row:EvidenceClaim,evidence:Evidence[]):EvidenceClaim{
   const mismatched=Boolean(claimedDate&&uniqueDates.length&&!new Set(acceptableDates).has(claimedDate))
   const correctedDate=mismatched?(uniqueDates.length===1?uniqueDates[0]:`${uniqueDates[0]}—${uniqueDates.at(-1)}`):claimedDate
   if(mismatched)issues.push(uniqueDates.length===1?`判断日期已按冻结证据校正为${uniqueDates[0]}`:`多期判断日期已按冻结证据标注为${correctedDate}`)
-  return {...row,claim:cleanClaim(row.claim),date:correctedDate,evidenceIds:validIds,referenceIssues:[...new Set(issues)]}
+  const references=[...new Map(validIds.map(id=>{const item=evidence.find(source=>source.id===id)!;const reference={source:item.source,date:item.dataDate||item.publishedAt?.slice(0,10)||null};return [JSON.stringify(reference),reference]})).values()]
+  return {...row,claim:cleanClaim(row.claim),date:correctedDate,evidenceIds:validIds,references,referenceIssues:[...new Set(issues)]}
 }
 
 /** Re-audit persisted or inherited analysis trees against the evidence frozen for
