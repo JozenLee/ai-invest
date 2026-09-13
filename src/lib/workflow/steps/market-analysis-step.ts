@@ -1,6 +1,7 @@
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
+import { deterministicAnalysisSelected, workflowEffort } from '../method-config'
 import { saveValidatedResearchOutput, validateResearchOutput } from '../research-output'
 
 type Row=Record<string,unknown>
@@ -27,10 +28,16 @@ export const marketAnalysisStep: StepDefinition = {
     await context.updateProgress(0, 1, '正在分析市场趋势...')
 
     const prompt = researchPrompt(context, 'market-analysis')
+    if(deterministicAnalysisSelected(context,'market-analysis')){
+      await context.saveArtifact('market-analysis-ai-status',{status:'deterministic',reason:'本轮方法配置为仅确定性分析'},'DATA')
+      await saveValidatedResearchOutput(context,'market-analysis',JSON.stringify(fallback(context)))
+      await context.updateProgress(1,1,'确定性市场分析完成')
+      return
+    }
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:3072,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'market-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:3072,effort:workflowEffort(context,'market-analysis'),timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'market-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('market-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

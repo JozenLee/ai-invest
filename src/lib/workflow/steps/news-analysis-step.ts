@@ -2,6 +2,7 @@ import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
 import { saveValidatedResearchOutput, validateResearchOutput } from '../research-output'
+import { deterministicAnalysisSelected, workflowEffort } from '../method-config'
 
 type Row=Record<string,unknown>
 const row=(value:unknown):Row=>value&&typeof value==='object'&&!Array.isArray(value)?value as Row:{}
@@ -36,15 +37,15 @@ export const newsAnalysisStep: StepDefinition = {
     const prompt = researchPrompt(context, 'news-analysis')
 
     let result:string
-    if(process.env.AI_ENABLE_EVENT_SYNTHESIS!=='true'){
+    if(deterministicAnalysisSelected(context,'news-analysis')||process.env.AI_ENABLE_EVENT_SYNTHESIS!=='true'){
       result=JSON.stringify(fallback(context))
-      await context.saveArtifact('news-analysis-ai-status',{status:'deterministic',reason:'事件已在采集层完成分级去重，方向交由最终综合模型判断'},'DATA')
+      await context.saveArtifact('news-analysis-ai-status',{status:'deterministic',reason:deterministicAnalysisSelected(context,'news-analysis')?'本轮方法配置为仅确定性分析':'事件已在采集层完成分级去重，方向交由最终综合模型判断'},'DATA')
       await saveValidatedResearchOutput(context,'news-analysis',result)
       await context.updateProgress(1,1,'事件证据筛选完成')
       return
     }
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_FAST_MODEL,max_tokens:4096,timeoutMs:90000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'news-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_FAST_MODEL,max_tokens:4096,effort:workflowEffort(context,'news-analysis'),timeoutMs:90000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'news-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('news-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

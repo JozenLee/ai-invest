@@ -1,17 +1,16 @@
 import type {StepDefinition} from './types'
 
 export function executionWaves(steps:StepDefinition[]){
-  // Event analysis is deterministic and can share the market wave. Two Opus
-  // requests in parallel compete for account inference capacity and repeatedly
-  // starved the company request, so company analysis starts after market.
-  const parallelResearch=new Set(['market-analysis','news-analysis'])
+  const byName=new Map(steps.map(step=>[step.name,step]))
+  const remaining=new Set(steps.map(step=>step.name))
+  const completed=new Set<string>()
   const waves:StepDefinition[][]=[]
-  for(const step of steps){
-    if(parallelResearch.has(step.name)){
-      if(!waves.some(wave=>wave.some(candidate=>parallelResearch.has(candidate.name))))waves.push(steps.filter(candidate=>parallelResearch.has(candidate.name)))
-      continue
-    }
-    waves.push([step])
+  while(remaining.size){
+    const ready=[...remaining].filter(name=>byName.get(name)!.dependencies.every(dependency=>completed.has(dependency)))
+    if(!ready.length)throw new Error(`工作流依赖存在循环或缺失节点：${[...remaining].join(', ')}`)
+    const wave=ready.map(name=>byName.get(name)!)
+    waves.push(wave)
+    ready.forEach(name=>{remaining.delete(name);completed.add(name)})
   }
   return waves
 }

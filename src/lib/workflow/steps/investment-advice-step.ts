@@ -4,6 +4,7 @@ import { researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepContext, StepDefinition } from '../types'
 import { saveValidatedResearchOutput, validateResearchOutput, valuationNarrative } from '../research-output'
 import { reportAdviceConfidence, indexRuleSummary } from '@/lib/analysis/report-insights'
+import { deterministicAnalysisSelected, workflowEffort } from '../method-config'
 
 const record=(value:unknown):Record<string,any>=>{if(value&&typeof value==='object'&&!Array.isArray(value))return value as Record<string,any>;try{const parsed=JSON.parse(String(value||'{}'));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?parsed:{}}catch{return {}}}
 
@@ -58,9 +59,13 @@ export const investmentAdviceStep: StepDefinition = {
     const prompt = researchPrompt(context, 'investment-advice')
 
     let result:string
-    try{
+    if(deterministicAnalysisSelected(context,'investment-advice')){
+      result=JSON.stringify(timeoutFallback(context))
+      await context.saveArtifact('investment-advice-ai-status',{status:'deterministic',reason:'本轮方法配置为仅确定性分析'},'DATA')
+    }else try{
       const response = await runAnalysisPrompt(context, {
         max_tokens:6144,
+        effort:workflowEffort(context,'investment-advice'),
         timeoutMs:180000,
         maxAttempts:2,
         validateOutput:(text)=>validateResearchOutput(text,'investment-advice'),

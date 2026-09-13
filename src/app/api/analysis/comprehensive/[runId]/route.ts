@@ -13,6 +13,11 @@ export async function GET(
     const { runId } = await params
 
     const view=request.nextUrl.searchParams.get('view')
+    if(view==='graph'){
+      const graph=await comprehensiveAnalysisWorkflow.getRunGraph(runId)
+      if(!graph)return NextResponse.json({error:'Run not found'},{status:404})
+      return NextResponse.json(graph)
+    }
     const requestedStep=view==='step'?request.nextUrl.searchParams.get('stepName')||undefined:undefined
     const run = await comprehensiveAnalysisWorkflow.getRunDetails(runId, view === 'workspace',requestedStep)
 

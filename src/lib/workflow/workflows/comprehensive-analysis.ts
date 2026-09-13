@@ -20,6 +20,7 @@ import { industryOverviewStep } from '../steps/industry-overview-step'
 import { investmentAdviceStep } from '../steps/investment-advice-step'
 import { etfActionStep } from '../steps/etf-action-step'
 import { generateReportStep } from '../steps/generate-report-step'
+import { comprehensiveWorkflowDefinition } from '../comprehensive-definition'
 
 /**
  * 综合分析工作流
@@ -73,5 +74,6 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     portfolioAnalysisStep,
     socialReportStep,
     generateReportStep
-  ]
+  ],
+  comprehensiveWorkflowDefinition,
 )

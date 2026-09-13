@@ -3,6 +3,7 @@ import type { StepDefinition } from '../types'
 import { ensureResearchInputsFresh } from '@/lib/research/preflight'
 import { isTradingSessionTime } from '@/lib/analysis/decision-timing'
 import { graphContextIssues, graphMappingIssues } from '@/lib/graph/research-context'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 export const freezeResearchStep: StepDefinition = {
   name:'freeze-research',description:'冻结领域配置、交易日历与全部研究证据',dependencies:[],estimatedDuration:1000,
   async execute(context) {
@@ -30,7 +31,7 @@ export const freezeResearchStep: StepDefinition = {
     await context.saveArtifact('graph-mapping-validation',{status:mappingIssues.length?'limited':'passed',issues:mappingIssues,mappingRevisionId:snapshot.graphContext?.mappingRevisionId||null,mappingContentHash:snapshot.graphContext?.mappingContentHash||null,mappingSource:snapshot.graphContext?.mappingSource||null,coverage:snapshot.graphContext?.coverage||null},'DATA')
     if(graphIssues.length)throw new Error(`产业认知门禁未通过：${graphIssues.join('；')}`)
     snapshot.workflow={runId:context.runId,parentRunId:context.input.parentRunId||null,baselineSnapshotId:context.input.baselineSnapshotId||null}
-    await persistResearchSnapshot(snapshot)
+    await withDatabaseBusyRetry(()=>persistResearchSnapshot(snapshot))
     const transportSnapshot={...snapshot,records:undefined}
     await context.saveArtifact('research-snapshot',transportSnapshot,'DATA')
     await context.saveArtifact('decision-timing',snapshot.decisionTiming,'DATA')

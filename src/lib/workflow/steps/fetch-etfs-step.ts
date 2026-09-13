@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Published graph payloads retain legacy shapes. */
 import { prisma } from '@/lib/db'
 import type { StepDefinition } from '../types'
+import { workflowNodeConfig } from '../method-config'
 export const fetchETFsStep: StepDefinition = {
   name: 'fetch-etfs', description: '读取已订阅ETF与产业映射', dependencies: [], estimatedDuration: 1000,
   async execute(context) {
@@ -9,7 +11,8 @@ export const fetchETFsStep: StepDefinition = {
     const groups = snapshot ? JSON.parse(snapshot.payload) : []
     const group = groups.find((item: any) => item.id === industryId)
     const subscribed = new Set(subscriptions.map((item) => item.instrument.code))
-    const matched = group?.etfs?.filter((item: any) => subscribed.has(item.code)) || []
+    const minimumRelevance=Number(workflowNodeConfig(context,'fetch-etfs')?.parameters.minimumRelevance??0.5)
+    const matched = group?.etfs?.filter((item: any) => subscribed.has(item.code)&&(item.relevance==null||Number(item.relevance)>=minimumRelevance)) || []
     const fallback = subscriptions.filter((item) => { try { return JSON.parse(item.profile || '{}').industryId === industryId } catch { return false } })
     const bindings = matched.length ? matched.map((item: any) => ({ etf_code: item.code, etf_name: item.name })) : fallback.map((item) => ({ etf_code: item.instrument.code, etf_name: item.instrument.name }))
     const industryName = group?.name || (fallback[0] ? JSON.parse(fallback[0].profile!).industryName : null)

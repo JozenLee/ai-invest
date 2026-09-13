@@ -16,6 +16,8 @@ import { chineseNarrative } from '@/lib/analysis/chinese-labels'
 import { reportAdviceConfidence } from '@/lib/analysis/report-insights'
 import { HistoricalReportsDialog, type HistoricalReportSummary } from './HistoricalReportsDialog'
 import type { DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
+import type { WorkflowNodeConfig } from '@/lib/workflow/types'
+import { WorkflowTopology } from './WorkflowTopology'
 
 type Industry={id:string;name:string}
 type ResearchState={profile:Profile;schedule:ResearchSchedule;history:Array<{snapshotId:string;asOf:string}>;evaluation:Evaluation|null}
@@ -38,6 +40,7 @@ export function AnalysisWorkspace(){
   const [tab,setTab]=useState('flow'),[refresh,setRefresh]=useState(0),[showLegacy,setShowLegacy]=useState(false)
   const [historyDialog,setHistoryDialog]=useState(false),[historyLoading,setHistoryLoading]=useState(false),[allReports,setAllReports]=useState<HistoricalReportSummary[]>([]),[historyPolicy,setHistoryPolicy]=useState<NonNullable<Profile['historyReports']>|null>(null)
   const [aiDestination,setAiDestination]=useState(''),[portfolioConsent,setPortfolioConsent]=useState(false)
+  const [nodeConfigs,setNodeConfigs]=useState<Record<string,WorkflowNodeConfig>>({})
   const evaluation=artifact<Evaluation>(run,'research-evaluation')
   const reportId=artifact<string>(run,'report-id')
   const quality=artifact<{usable:number;requested:number;status:string;companyCoverage?:{total:number}}>(run,'data-quality')
@@ -107,7 +110,7 @@ export function AnalysisWorkspace(){
     setBusy(true);setError('');setNotice('')
     try{
       const privateAllowed=!rulesOnly&&portfolioConsent&&!!aiDestination
-      const created=await request<{runId:string}>('/api/analysis/comprehensive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({industryId,parentRunId,rulesOnly,publicOnly:!privateAllowed,portfolioAiConsent:privateAllowed?aiDestination:null})})
+      const created=await request<{runId:string}>('/api/analysis/comprehensive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({industryId,parentRunId,rulesOnly,publicOnly:!privateAllowed,portfolioAiConsent:privateAllowed?aiDestination:null,nodeConfigs})})
       setPortfolioConsent(false)
       selectRun(created.runId);setTab('flow')
       await request(`/api/analysis/comprehensive/${created.runId}/execute?mode=all`,{method:'POST'})
@@ -155,7 +158,7 @@ export function AnalysisWorkspace(){
 
     <div className="flex flex-wrap items-center justify-between gap-3 border-b"><div className="flex gap-5 sm:gap-8" aria-label="研究视图">{[{id:'flow',label:'分析流程',icon:Layers3},{id:'decisions',label:'投资建议与证据',icon:ShieldCheck},{id:'history',label:`历史报告${reports.length?` ${reports.length}`:''}`,icon:History}].map(({id,label,icon:Icon})=><button key={id} type="button" aria-pressed={tab===id} onClick={()=>setTab(id)} className={cn('flex min-h-12 items-center gap-2 border-b-2 text-sm transition-colors',tab===id?'border-primary font-medium text-primary':'border-transparent text-muted-foreground hover:text-foreground')}><Icon className="size-4"/>{label}</button>)}</div><span className="pb-2 text-[11px] text-muted-foreground">{runId?`轮次 ${runId.slice(-8).toUpperCase()}`:'尚未选择轮次'}</span></div>
 
-    {tab==='flow'&&<div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+    {tab==='flow'&&<><WorkflowTopology runId={runId||undefined} locked={locked} configs={nodeConfigs} onConfigsChange={setNodeConfigs} onChanged={()=>{setNotice('模块已按当前配置重新派发；其下游产物已标记为待更新。');setRefresh(value=>value+1)}}/><div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section className="overflow-hidden rounded-2xl border bg-card"><div className="flex items-center justify-between border-b px-5 py-4"><h2 className="font-semibold">研究执行链路</h2><span className="text-xs text-muted-foreground">8 个分析阶段 · 展开查看执行明细</span></div><div className="divide-y">{PHASES.map((phase,index)=>{
         const isScope=phase.steps.length===0,state=isScope?(run?'completed':'pending'):phaseState(run?.steps||[],phase.steps),steps=run?.steps.filter(s=>(phase.steps as readonly string[]).includes(s.stepName))||[],done=isScope&&run?1:steps.filter(s=>['COMPLETED','SKIPPED'].includes(s.status)).length,total=isScope?1:(steps.length||phase.steps.length)
         return <details key={phase.id} open={state==='running'||state==='failed'} className="group px-5 py-5"><summary className="flex min-h-12 cursor-pointer list-none items-center gap-4 [&::-webkit-details-marker]:hidden"><span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl border font-mono text-sm',state==='completed'?'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300':state==='running'?'border-primary/30 bg-primary/10 text-primary':state==='failed'?'border-destructive/20 bg-destructive/10 text-destructive':'bg-muted/30 text-muted-foreground')}>{state==='completed'?<Check className="size-5"/>:state==='running'?<Loader2 className="size-4 animate-spin motion-reduce:animate-none"/>:String(index+1).padStart(2,'0')}</span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{phase.title}</span><span className="mt-1 block text-xs text-muted-foreground">{phase.caption}</span></span><span className="hidden text-xs text-muted-foreground sm:block">{state==='skipped'?'未调用AI':state==='completed'?'已完成':state==='running'?'进行中':state==='failed'?'待恢复':'等待执行'}</span><span className="font-mono text-xs text-muted-foreground">{done}/{total}</span><ChevronDown className="size-4 text-muted-foreground transition-transform group-open:rotate-180"/></summary>
@@ -166,7 +169,7 @@ export function AnalysisWorkspace(){
         <section className="rounded-2xl border bg-card p-5"><div className="mb-4 flex items-center gap-2"><Database className="size-4 text-muted-foreground"/><h2 className="font-semibold">数据准备度</h2></div>{needed.length?<div className="space-y-4">{needed.map(item=><div key={item.label}><div className="flex items-start justify-between gap-3 text-xs"><span className="leading-5 text-muted-foreground">{item.label}</span><span className="shrink-0 rounded bg-amber-500/10 px-2 py-0.5 font-mono text-amber-800 dark:text-amber-300">{item.count} 只</span></div></div>)}</div>:<p className="text-sm leading-6 text-muted-foreground">{evaluation?'当前无未知数据条件，仍需检查未满足项与研究风险。':'冻结后将逐项检查时效、复权、财报与产品信息。'}</p>}<Link className="mt-5 inline-flex min-h-10 items-center gap-1.5 text-xs font-medium text-primary" href="/data-center/subscriptions">前往数据订阅<ArrowUpRight className="size-3.5"/></Link></section>
         <p className="px-1 text-xs leading-6 text-muted-foreground">实验性投研工具，不构成投资建议。执行成功、数据可用与投资条件成立是三个不同状态。</p>
       </aside>
-    </div>}
+    </div></>}
 
     {tab==='decisions'&&(evaluation?<DecisionEvidencePanel key={evaluation.snapshotId} evaluation={evaluation}/>:<div className="rounded-2xl border bg-card p-12 text-center"><ShieldCheck className="mx-auto mb-4 size-8 text-muted-foreground/40"/><h2 className="font-medium">本轮尚未形成规则决策</h2><p className="mt-2 text-sm text-muted-foreground">质量复核完成后，逐只指数基金的条件与证据会出现在这里。</p><Button variant="outline" className="mt-5" onClick={()=>setTab('flow')}>查看执行进度</Button></div>)}
 

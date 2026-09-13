@@ -209,7 +209,10 @@ export const generateReportStep: StepDefinition = {
             graphRevisionId: graphContext?.revisionId || null,
             graphMappingRevisionId: graphContext?.mappingRevisionId || null,
             graphMappingContentHash: graphContext?.mappingContentHash || null,
-            verificationMode: context.input.verificationMode || null
+            verificationMode: context.input.verificationMode || null,
+            workflowVersion: context.input.workflowVersion || 'legacy',
+            workflowDefinitionHash: context.input.definitionHash || null,
+            nodeConfigs: context.input.nodeConfigs || {},
           }
         })
       }

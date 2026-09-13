@@ -3,6 +3,7 @@ import { comprehensiveAnalysisWorkflow } from '@/lib/workflow/workflows/comprehe
 import { reviewBaseline } from '@/lib/workflow/run-lineage'
 import { getResearchProfile } from '@/lib/research/store'
 import { sameOriginRequest } from '@/lib/security/request-origin'
+import { normalizeWorkflowNodeConfigs } from '@/lib/workflow/comprehensive-definition'
 
 /**
  * POST /api/analysis/comprehensive
@@ -12,7 +13,7 @@ export async function POST(request: NextRequest) {
   if(!sameOriginRequest(request))return NextResponse.json({error:'不接受跨站启动分析'},{status:403})
   try {
     const body = await request.json()
-    const { industryId, companySource = 'etf' } = body
+    const { industryId } = body
 
     if (!industryId) {
       return NextResponse.json(
@@ -24,6 +25,9 @@ export async function POST(request: NextRequest) {
     await getResearchProfile(industryId)
     const lineage = await reviewBaseline(industryId, body.parentRunId)
     const verificationMode = body.verificationMode === 'graph-e2e' ? 'graph-e2e' : null
+    const nodeConfigs=normalizeWorkflowNodeConfigs(body.nodeConfigs)
+    if(body.companySource==='graph'&&!body.nodeConfigs?.['fetch-companies'])nodeConfigs['fetch-companies']={methodId:'graph-intersection-selection',parameters:{maxCompanies:30}}
+    const companySource=nodeConfigs['fetch-companies']?.methodId==='graph-intersection-selection'?'graph':'etf'
     const runId = await comprehensiveAnalysisWorkflow.createRun({
       industryId,
       ...lineage,
@@ -35,7 +39,8 @@ export async function POST(request: NextRequest) {
       verificationMode,
       refreshResearchData: verificationMode ? false : true,
       createdBy: 'user', // TODO: 从session获取用户信息
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      nodeConfigs,
     })
 
     return NextResponse.json({ runId })
