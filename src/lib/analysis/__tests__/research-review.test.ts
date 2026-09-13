@@ -47,7 +47,7 @@ describe('investment research review regressions', () => {
     const second=buildOpportunityLedger({...input,asOf:'2026-09-11T05:00:00Z',history:[{opportunityLedger:first}]})
     expect(second[0]).toMatchObject({firstSeenAt:input.asOf,newEvidenceIds:[],state:'待基本面与价格共同验证'})
     expect(second[0].outcome).toContain('不能重复计为新机会')
-    const third=buildOpportunityLedger({...input,news:{catalysts:[]},history:[{opportunityLedger:second}]})
+    const third=buildOpportunityLedger({...input,asOf:'2026-09-12T05:00:00Z',news:{catalysts:[]},history:[{opportunityLedger:second}]})
     expect(third[0].outcome).toContain('不视为已兑现')
   })
   it('starts forward observations strictly after the first report and excludes the frozen-day open', () => {

@@ -6,7 +6,10 @@ export function securityCode(value: unknown): string {
   const hk = text.match(/^(?:hk(\d+)|(\d+)\.hk)$/i)
   if (/^00[4-9]\d{3}$/.test(text)) return `${Number(text)}.hk`
   if (hk) return `${Number(hk[1] || hk[2])}.hk`
-  return text.replace(/^(sh|sz|bj)(?=\d)/i, '').replace(/\.(sh|sz|bj)$/i, '')
+  const normalized = text.replace(/^(sh|sz|bj)(?=\d)/i, '').replace(/\.(sh|sz|bj)$/i, '')
+  if (/^\d{6}$/.test(normalized)) return normalized
+  const embedded = [...text.matchAll(/(?<!\d)(\d{6})(?!\d)/g)].map(match => match[1])
+  return new Set(embedded).size === 1 ? embedded[0] : normalized
 }
 
 export function securityAliases(code: string): string[] {

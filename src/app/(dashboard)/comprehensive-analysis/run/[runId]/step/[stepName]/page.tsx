@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { AnalysisResultView } from '@/components/analysis/AnalysisResultView'
 import { PromptDialog } from '@/components/analysis/PromptDialog'
 import { ExecutionQuality } from '@/components/analysis/ExecutionQuality'
-import { AIExecutionTrace } from '@/components/analysis/AIExecutionTrace'
+import { AIExecutionTrace, aiTraceScopes } from '@/components/analysis/AIExecutionTrace'
 import { StructuredDataView } from '@/components/analysis/StructuredDataView'
 import { PortfolioDecisionPanel } from '@/components/analysis/PortfolioDecisionPanel'
 import type { PortfolioDecisionSupport } from '@/lib/portfolio/decision-support'
@@ -92,8 +92,9 @@ function compactAnalysisDiagnostics(value:unknown):unknown{
   }))
 }
 
-const diagnosticArtifact=(key:string)=>/^ai-(?:prompt|response|error|input-audit|request-attempt)|-graph-usage-validation$/.test(key)||key==='public-report-validation'
-const qualityArtifact=(key:string)=>key==='ai-request-status'||key==='research-preflight'||key==='decision-timing'||key==='data-quality'||key==='strategy-validation'||/validation$|-ai-status$/.test(key)
+const modelTraceArtifact=(key:string)=>(/(^|-)ai-(?:prompt|response|error|input-audit|request-attempt)/.test(key))
+const diagnosticArtifact=(key:string)=>modelTraceArtifact(key)||/-graph-usage-validation$/.test(key)||key==='public-report-validation'
+const qualityArtifact=(key:string)=>/(^|-)ai-request-status$/.test(key)||key==='research-preflight'||key==='decision-timing'||key==='data-quality'||key==='strategy-validation'||/validation$|-ai-status$/.test(key)
 const artifactDescriptions:Record<string,string>={
   'research-snapshot':'本轮所有研究模块共享的冻结输入摘要。','research-manifest':'证据数量、主要来源和图谱版本。','research-evaluation':'逐产品规则状态、条件和多因子诊断。','etf-actions':'由确定性规则生成的逐产品动作边界。','etf-bindings':'本领域纳入研究的ETF及其正式跟踪指数。','etf-market-data':'复权行情、趋势、波动率和流动性指标。','etf-holdings':'最新披露前十大持仓及披露期。','companies':'图谱、持仓与研究配置合并后的企业池。','company-market-data':'企业行情、财务覆盖与产业环节聚合输入。','news-events':'已归并并分级的产业事件。','market-snapshot':'市场基准、板块资金与时效快照。','data-quality':'数据可用、有限或缺失的原因。','portfolio-evidence':'本地组合比例、领域映射和风险预算。','portfolio-decision-support':'领域预算与逐基金执行门禁。','strategy-validation':'历史冻结决策的纸面回放结果。','investment-advice':'最终综合论点、反证、情景和配置立场。','report-content':'归档的完整研究正文。'
 }
@@ -235,7 +236,7 @@ function StepResultContent() {
 
   const artifactGroups=useMemo(()=>{
     const all=(step?.artifacts||[]).filter(artifact=>!['etf-codes','industry-info'].includes(artifact.artifactKey) && cleanStructuredValue(artifact.data) !== undefined)
-    const traceKeys=new Set(all.filter(item=>/^ai-(?:prompt|response|error|request-attempt|input-audit)/.test(item.artifactKey)).map(item=>item.artifactKey))
+    const traceKeys=new Set(all.filter(item=>modelTraceArtifact(item.artifactKey)).map(item=>item.artifactKey))
     const diagnostics=all.filter(artifact=>diagnosticArtifact(artifact.artifactKey)&&!traceKeys.has(artifact.artifactKey))
     const quality=all.filter(artifact=>!diagnosticArtifact(artifact.artifactKey)&&qualityArtifact(artifact.artifactKey))
     const primary=all.filter(artifact=>!diagnosticArtifact(artifact.artifactKey)&&!qualityArtifact(artifact.artifactKey))
@@ -247,7 +248,7 @@ function StepResultContent() {
 
   if (error || !step) return <div className="space-y-4 p-6"><Button variant="ghost" onClick={() => router.push(analysisUrl)}><ArrowLeft className="mr-2 h-4 w-4" />返回综合分析</Button><Card><CardContent className="p-8 text-center text-muted-foreground">{error || '未找到该子流程结果'}</CardContent></Card></div>
 
-  const hasAI=step.artifacts.some(item=>item.artifactKey==='ai-prompt'||/^ai-request-attempt-/.test(item.artifactKey))
+  const hasAI=aiTraceScopes(step.artifacts,step.stepName).length>0
   const completed=step.status==='COMPLETED',duration=step.duration==null?'—':step.duration<1000?`${step.duration}毫秒`:`${(step.duration/1000).toFixed(1)}秒`
   return <div className="mx-auto max-w-[1500px] space-y-4 p-4 sm:p-5">
     <Button variant="ghost" onClick={() => router.push(analysisUrl)}><ArrowLeft className="mr-2 h-4 w-4" />返回综合分析</Button>

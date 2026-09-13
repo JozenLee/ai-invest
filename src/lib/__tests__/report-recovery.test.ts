@@ -16,7 +16,7 @@ import type { SocialReport } from '../analysis/social-report'
 const valid = { version: 2, title: '产业观察', subtitle: '来源与日期待核验', takeaways: ['需求','盈利','风险'], sections: REPORT_SECTIONS.map(title => ({title,body:'有依据的分析'})), risks: ['风险一','风险二','风险三'] }
 const response = (value: unknown) => ({ content: [{type:'text',text:JSON.stringify(value)}] })
 function context(): StepContext {
-  const artifacts = new Map<string, any>([['industry-info', {id:'industry',name:'AI硬件'}], ['market-analysis',JSON.stringify({analysis:'完整市场证据',evidence:[{source:'交易所',date:'2026-09-04'}]})], ['portfolio-analysis','PRIVATE'], ['etf-actions',[]]])
+  const artifacts = new Map<string, unknown>([['industry-info', {id:'industry',name:'AI硬件'}], ['market-analysis',JSON.stringify({analysis:'完整市场证据',evidence:[{source:'交易所',date:'2026-09-04'}]})], ['portfolio-analysis','PRIVATE'], ['etf-actions',[]]])
   return {runId:'run',stepId:'step',input:{},artifacts,saveArtifact:vi.fn(async (key,data) => { artifacts.set(key,data) }),updateProgress:vi.fn()}
 }
 beforeEach(() => { vi.clearAllMocks(); prompt.mockReset(); db.findFirst.mockResolvedValue(null); db.create.mockResolvedValue({id:'saved'}); db.update.mockResolvedValue({id:'saved'}) })
@@ -69,7 +69,7 @@ describe('report recovery', () => {
   })
   it('repairs archived social valuation counts and resolvable company sources',()=>{
     const archived={...valid,takeaways:['战术：7只风险收缩，0只满足实验条件。','盈利','估值：18只产品有底层数据，仍为观察级。'],sections:valid.sections.map((section,index)=>index===1?{...section,body:'【来源待核验】澜起科技：现金流改善。'}:index===3?{...section,body:'覆盖18只A股ETF、11个跟踪指数；同指数产品按数据质量比较。'}:section)}
-    const normalized=normalizeSocialReport(archived as SocialReport,{decisions:[{state:'risk-off'},{state:'eligible'}],indexBreadth:{mappedIndices:1},products:[{ticker:'A',indexCode:'IDX',feePct:null,navDate:null,shareChangePct:null,trackingErrorPct:null,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]}]} as unknown as Evaluation,JSON.stringify({evidence:[{claim:'澜起科技现金流改善',source:'公司公告',date:'2026-09-03'}]}))
+    const normalized=normalizeSocialReport(archived as SocialReport,{decisions:[{state:'risk-off'},{state:'eligible'}],indexBreadth:{mappedIndices:1},products:[{ticker:'A',indexCode:'IDX',feePct:null,navDate:null,shareChangePct:null,trackingErrorPct:null,pe:20,valuationSampleCount:1,exposure:[],alternatives:[]}]} as unknown as Evaluation,JSON.stringify({evidence:[{claim:'澜起科技现金流改善',source:'公司公告',date:'2026-09-03',evidenceIds:['company-announcement'],referenceIssues:[]}]}))
     expect(normalized.takeaways[2]).toContain('1个指数有可核验当期值')
     expect(normalized.takeaways[0]).toBe('战术：1只风险收缩，1只满足实验条件。')
     expect(normalized.sections[3].body).toContain('覆盖2只A股指数基金、1个跟踪指数')
@@ -87,7 +87,7 @@ describe('report recovery', () => {
   })
   it('uses company evidence sources and counts valuation once per index',async()=>{
     const ctx=context()
-    ctx.artifacts.set('company-analysis',JSON.stringify({key_companies:[{name:'澜起科技',code:'688008',fact:'经营现金流改善。'}],evidence:[{claim:'澜起科技经营现金流改善。',source:'公司公告',date:'2026-09-03'}]}))
+    ctx.artifacts.set('company-analysis',JSON.stringify({key_companies:[{name:'澜起科技',code:'688008',fact:'经营现金流改善。'}],evidence:[{claim:'澜起科技经营现金流改善。',source:'公司公告',date:'2026-09-03',evidenceIds:['company-announcement'],referenceIssues:[]}]}))
     ctx.artifacts.set('research-evaluation',{decisions:[],indexBreadth:{mappedIndices:1},products:[
       {ticker:'A',indexCode:'IDX',pe:20,valuationSampleCount:1},
       {ticker:'B',indexCode:'IDX',pe:20,valuationSampleCount:1},
@@ -109,7 +109,7 @@ describe('report recovery', () => {
     await generateReportStep.execute(ctx)
     const saved = db.create.mock.calls[0][0].data
     expect(saved.content).toContain('完整市场证据')
-    expect(saved.content).toContain('ETF投资建议')
+    expect(saved.content).toContain('ETF技术规则对照')
     expect(saved.content).not.toContain('PRIVATE')
     expect(JSON.parse(saved.dataJson).privatePortfolioAnalysis).toBe('PRIVATE')
     expect(ctx.artifacts.get('report-id')).toBe('saved')

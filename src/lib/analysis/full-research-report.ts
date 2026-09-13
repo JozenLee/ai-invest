@@ -1,8 +1,10 @@
 import { readableResearchData } from './readable-data'
 import { etfActionsMarkdown, type ETFAction } from './etf-actions'
 import type { DecisionTimingAssessment } from './decision-timing'
+import { analysisFieldLabels } from './chinese-labels'
 
 const labels: Record<string, string> = {
+  ...analysisFieldLabels,
   analysis: '分析', score: '评分', rating: '评级', executiveSummary: '综合投资结论', conclusion: '综合判断',
   allocationStance: '配置立场', keyDrivers: '关键驱动', opportunities: '机会与兑现状态', mainRisks: '主要风险', watchPoints: '重点关注', actionPlan: '建议操作', priority: '操作优先级', historyComparison: '历史机会验证', reviewTriggers: '复核触发项',
   thesis: '投资论点', etfImplications: 'ETF影响',
@@ -13,7 +15,7 @@ const labels: Record<string, string> = {
   revisions: '版本', structureRevisionId: '图谱结构版本', structureVersion: '图谱结构序号', structureContentHash: '图谱结构哈希',
   mappingRevisionId: '企业与ETF匹配版本', mappingContentHash: '企业与ETF匹配哈希', mappingPublishedAt: '匹配发布时间', sourceFetchedAt: '冻结数据获取时间',
   coverage: '覆盖度', stages: '产业阶段', segments: '细分环节', matchedEtfs: '匹配ETF', matchedIndices: '匹配指数',
-  companies: '企业数量', relations: '传导关系数量', evidencedRelations: '有证据关系数', relationEvidencePct: '关系证据覆盖率',
+  companies: '关联企业', relations: '传导关系', evidencedRelations: '有证据关系数', relationEvidencePct: '关系证据覆盖率',
   segmentEtfCoveragePct: '环节ETF覆盖率', segmentIndexCoveragePct: '环节指数覆盖率', companySegmentCoveragePct: '企业环节归属率',
   companyEtfCoveragePct: '企业ETF映射率', holdingVerifiedCoveragePct: '持仓验证覆盖率',
   representativeCompanies: '代表企业', representativeEtfs: '企业对应ETF', representativeIndices: '企业对应指数',

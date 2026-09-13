@@ -44,7 +44,7 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     companyAnalysisStep,
     industryOverviewStep,
     investmentAdviceStep,
-    // 组合建议在最终综合结论之后生成；AI可以否决新增风险，但不能覆盖规则减仓与硬约束。
+    // 组合建议比较独立研究、不交易和技术规则；硬约束校验独立于策略信号。
     portfolioDecisionStep,
     socialReportStep,
     generateReportStep

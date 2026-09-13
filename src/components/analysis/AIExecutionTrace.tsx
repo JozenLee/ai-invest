@@ -8,13 +8,33 @@ import { displayValue, isRecord, parseStructuredValue } from '@/lib/analysis/str
 
 type Artifact = { artifactKey: string; data?: unknown }
 const record = (value: unknown) => { const parsed = parseStructuredValue(value); return isRecord(parsed) ? parsed : {} }
+const traceKey = /^(.*?)(ai-(?:prompt|input-audit|request-status|response|request-attempt-\d+|response-attempt-\d+|error-attempt-\d+))$/
+
+export function aiTraceScopes(artifacts: Artifact[], stepName?: string) {
+  const groups = new Map<string, Artifact[]>()
+  for (const artifact of artifacts) {
+    const match = artifact.artifactKey.match(traceKey)
+    if (!match) continue
+    const prefix = match[1]
+    groups.set(prefix, [...(groups.get(prefix) || []), { ...artifact, artifactKey: match[2] }])
+  }
+  return [...groups].map(([prefix, scopedArtifacts]) => {
+    const scope = prefix.replace(/-$/, '').replace(stepName ? new RegExp(`^${stepName}-`) : /^$/, '')
+    const label = scope === 'hypotheses' ? '独立投资假设' : scope === 'synthesis' ? '综合交叉研判' : scope ? scope.replaceAll('-', ' ') : '模型研判'
+    return { prefix, label, artifacts: scopedArtifacts }
+  })
+}
 
 export function AIExecutionTrace({ artifacts, stepName }: { artifacts: Artifact[]; stepName?:string }) {
-  const attempts = [...new Set(artifacts.flatMap(item => { const match = item.artifactKey.match(/^ai-(?:request|response|error)-attempt-(\d+)$/); return match ? [Number(match[1])] : [] }))].sort((a, b) => a - b)
+  const scopes = aiTraceScopes(artifacts, stepName)
+  const [selectedScope, setSelectedScope] = useState(scopes.at(-1)?.prefix || '')
+  const activeScope = scopes.find(scope => scope.prefix === selectedScope) || scopes.at(-1)
+  const traceArtifacts = activeScope?.artifacts || []
+  const attempts = [...new Set(traceArtifacts.flatMap(item => { const match = item.artifactKey.match(/^ai-(?:request|response|error)-attempt-(\d+)$/); return match ? [Number(match[1])] : [] }))].sort((a, b) => a - b)
   const [selected, setSelected] = useState<number | null>(null)
   const [panel, setPanel] = useState('input')
-  const attempt = selected ?? attempts.at(-1)
-  const find = (key: string) => artifacts.find(item => item.artifactKey === key)?.data
+  const attempt = selected != null && attempts.includes(selected) ? selected : attempts.at(-1)
+  const find = (key: string) => traceArtifacts.find(item => item.artifactKey === key)?.data
   const promptData = attempt ? find(`ai-request-attempt-${attempt}`) : find('ai-prompt')
   const prompt = record(promptData)
   const responseData = attempt ? find(`ai-response-attempt-${attempt}`) : find('ai-response')
@@ -26,10 +46,10 @@ export function AIExecutionTrace({ artifacts, stepName }: { artifacts: Artifact[
   const responseBlocks = Array.isArray(response.content) ? response.content.filter(block => isRecord(block) && block.type === 'text') : []
   const adopted=find(stepName==='portfolio-decision'?'portfolio-analysis':stepName||'')
   const portfolioSupport=stepName==='portfolio-decision'?find('portfolio-decision-support'):undefined
-  const moduleStatus = record(artifacts.find(item => item.artifactKey.endsWith('-ai-status'))?.data)
+  const moduleStatus = record(artifacts.find(item => item.artifactKey === `${stepName}-ai-status`)?.data || artifacts.find(item => item.artifactKey.endsWith('-ai-status'))?.data)
   if (promptData == null && responseData == null && !attempts.length) return <section className="rounded-2xl border bg-card p-5"><div className="flex items-center gap-2"><ShieldCheck className="size-5 text-primary" /><h2 className="font-semibold">执行方式</h2><Badge variant="secondary">{moduleStatus.status === 'deterministic' ? '确定性规则 / 汇编' : '未归档模型调用'}</Badge></div><p className="mt-3 text-sm leading-7 text-muted-foreground">{String(moduleStatus.reason || '本步骤没有已归档的模型请求与回复；请核对下方规则结果及上游依赖。')}</p></section>
   return <section className="min-w-0 overflow-hidden rounded-2xl border bg-card">
-    <div className="flex flex-wrap items-start justify-between gap-4 border-b px-4 py-3"><div className="flex gap-3"><span className="h-fit rounded-xl bg-primary/10 p-2.5 text-primary"><Bot className="size-5" /></span><div><h2 className="text-lg font-semibold">模型执行明细</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">按同一次请求核对输入与回复，再与最终采用结果对照。</p></div></div>{attempts.length > 0 && <label className="flex items-center gap-2 text-sm">请求轮次<select aria-label="请求轮次" value={attempt} onChange={event => setSelected(Number(event.target.value))} className="min-h-11 rounded-lg border bg-background px-3">{attempts.map(number => <option key={number} value={number}>第 {number} 次请求{find(`ai-error-attempt-${number}`) ? ' · 异常' : ''}</option>)}</select></label>}</div>
+    <div className="flex flex-wrap items-start justify-between gap-4 border-b px-4 py-3"><div className="flex gap-3"><span className="h-fit rounded-xl bg-primary/10 p-2.5 text-primary"><Bot className="size-5" /></span><div><h2 className="text-lg font-semibold">模型执行明细</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">按阶段和请求轮次核对输入、回复与最终采用结果。</p></div></div><div className="flex flex-wrap gap-3">{scopes.length > 1 && <label className="flex items-center gap-2 text-sm">模型阶段<select aria-label="模型阶段" value={activeScope?.prefix} onChange={event => { setSelectedScope(event.target.value); setSelected(null); setPanel('input') }} className="min-h-11 rounded-lg border bg-background px-3">{scopes.map(scope=><option key={scope.prefix} value={scope.prefix}>{scope.label}</option>)}</select></label>}{attempts.length > 0 && <label className="flex items-center gap-2 text-sm">请求轮次<select aria-label="请求轮次" value={attempt} onChange={event => setSelected(Number(event.target.value))} className="min-h-11 rounded-lg border bg-background px-3">{attempts.map(number => <option key={number} value={number}>第 {number} 次请求{find(`ai-error-attempt-${number}`) ? ' · 异常' : ''}</option>)}</select></label>}</div></div>
     <div className="space-y-4 p-4">
       {Object.keys(failure).length > 0 && <div role="alert" className="flex gap-3 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm"><CircleAlert className="size-5 shrink-0 text-destructive" /><div><p className="font-semibold text-destructive">本次请求异常</p><p className="mt-1 break-words leading-6">{displayValue(failure.message)}</p></div></div>}
       {moduleStatus.status === 'fallback' && <p role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm leading-6">最终结果已降级：{displayValue(moduleStatus.reason)}。本次模型回复不等于最终采用结果。</p>}

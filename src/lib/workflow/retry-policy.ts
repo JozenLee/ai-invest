@@ -22,7 +22,7 @@ export function retryableAnalysisError(error:unknown){
   if(upstreamAnalysisGatewayError(error))return true
   if(transientAnalysisTransportError(error))return true
   if(/timed?\s*out|timeout/i.test(message))return true
-  return /overload|rate.?limit|429|502|503|504|connection|network|AI返回空内容|AI输出被截断|unterminated string|unexpected end of json|unexpected token|not valid json|智能分析输出必须是JSON对象|输出缺少字段|JSON at position/i.test(message)
+  return /overload|rate.?limit|429|502|503|504|connection|network|AI返回空内容|AI输出被截断|unterminated string|unexpected end of json|unexpected token|not valid json|智能分析输出必须是JSON对象|输出缺少字段|输出字段类型错误|输出包含|输出校验失败|JSON at position/i.test(message)
 }
 
 /** Billing failures are not market evidence and must not trigger another paid retry. */

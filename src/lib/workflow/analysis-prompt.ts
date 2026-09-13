@@ -6,14 +6,15 @@ import {retryableAnalysisError,transientAnalysisTransportError,upstreamAnalysisG
 
 export function recoverableAnalysisError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return analysisAccountUnavailable(error)||upstreamAnalysisGatewayError(error)||transientAnalysisTransportError(error)||/timed?\s*out|timeout|aborted|aborterror|AI返回空内容|AI输出被截断|unterminated string|unexpected end of json|智能分析输出必须是JSON对象|输出缺少字段|JSON at position/i.test(message)
+  return analysisAccountUnavailable(error)||upstreamAnalysisGatewayError(error)||transientAnalysisTransportError(error)||/timed?\s*out|timeout|aborted|aborterror|AI返回空内容|AI输出被截断|unterminated string|unexpected end of json|智能分析输出必须是JSON对象|输出缺少字段|输出字段类型错误|输出包含|输出校验失败|JSON at position/i.test(message)
 }
 export async function runAnalysisPrompt(context: StepContext, params: { model?: string; max_tokens?: number; system?: string; messages: Array<{ role: string; content: string }>; temperature?: number; effort?:'low'|'medium'|'high'|'xhigh'|'max';timeoutMs?:number; maxAttempts?:number; validateOutput?:(text:string)=>unknown }) {
   const scene = getSceneSettings('comprehensive')
   params = { ...params, model: scene.model, max_tokens: Math.min(params.max_tokens || 4096, scene.maxTokens) }
+  for(const [key,value] of context.artifacts)if(key.startsWith('research-citations-'))await context.saveArtifact(key,value,'DATA')
   const audit = auditPrompt(params.messages)
   await context.saveArtifact('ai-input-audit', audit, 'DATA')
-  if (!audit.passed) throw new Error('AI输入审计失败：内容过短或存在未展开对象/数组占位符')
+  if (!audit.passed) throw new Error(audit.budgetExceeded ? 'AI输入审计失败：证据包超过120000字符，请先按相关性、业务日期和完整引用筛选，不允许截断JSON后调用模型' : 'AI输入审计失败：内容过短或存在未展开对象/数组占位符')
   const prompt = { system: params.system, messages: params.messages, max_tokens: params.max_tokens, model: params.model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',effort:params.effort||null, capturedAt: new Date().toISOString() }
   await context.saveArtifact('ai-prompt', prompt, 'DATA')
   const priorBillingFailure=[...context.artifacts.entries()].find(([key,value])=>key.startsWith('ai-error-attempt-')&&analysisAccountUnavailable(value?.message))
@@ -31,6 +32,7 @@ export async function runAnalysisPrompt(context: StepContext, params: { model?: 
   const timeoutMs=Math.min(300000,Math.max(30000,Number(params.timeoutMs||process.env.AI_WORKFLOW_TIMEOUT_MS||240000)))
   const maxAttempts=Math.min(3,Math.max(1,Number(params.maxAttempts||2)))
   const {validateOutput}=params
+  let correction:string|undefined
   const request={model:params.model,system:params.system,messages:params.messages,temperature:params.temperature,effort:params.effort}
   let lastError:unknown
   let attemptsUsed=0
@@ -45,8 +47,8 @@ export async function runAnalysisPrompt(context: StepContext, params: { model?: 
     const attemptStarted=Date.now()
     try{
       await context.saveArtifact('ai-request-status',{status:'running',attempt,timeoutMs,maxTokens:outputBudget,model:params.model||process.env.CLAUDE_MODEL||null},'DATA')
-      await context.saveArtifact(`ai-request-attempt-${attempt}`,{...prompt,max_tokens:outputBudget,temperature:params.temperature},'DATA')
-      const result = await claudeClient.messages.create({...request,max_tokens:outputBudget,timeoutMs})
+      await context.saveArtifact(`ai-request-attempt-${attempt}`,{...prompt,messages:correction?[...request.messages,{role:'user',content:correction}]:request.messages,max_tokens:outputBudget,temperature:params.temperature},'DATA')
+      const result = await claudeClient.messages.create({...request,messages:correction?[...request.messages,{role:'user',content:correction}]:request.messages,max_tokens:outputBudget,timeoutMs})
       // Preserve the response before any caller-specific parsing can reject it.
       await context.saveArtifact(`ai-response-attempt-${attempt}`, result, 'DATA')
       await context.saveArtifact('ai-response', result, 'DATA')
@@ -61,6 +63,8 @@ export async function runAnalysisPrompt(context: StepContext, params: { model?: 
       return result
     }catch(error){
       lastError=error
+      const detail=error instanceof Error?error.message:String(error)
+      if(/JSON|输出|字段/.test(detail))correction='上次输出未通过校验：'+detail.slice(0,800)+'。请重新生成完整JSON，严格遵守字段类型；只输出JSON，不使用Markdown，不附加说明，字符串内部引号必须转义。不得新增输入中没有的交易目标。'
       if(analysisAccountUnavailable(error))await context.saveArtifact('ai-service-status',{status:'billing-blocked',reason:'模型账户余额不足；本轮停止后续付费请求，保留冻结证据与已完成的模型结果。'},'DATA')
       consecutiveAccessDenials=upstreamAnalysisGatewayError(error)&&/access forbidden/i.test(error instanceof Error?error.message:String(error))?consecutiveAccessDenials+1:0
       await context.saveArtifact(`ai-error-attempt-${attempt}`,{attempt,errorType:error instanceof Error?error.name:'Error',transportCode:error instanceof Error&&error.cause&&typeof error.cause==='object'&&'code' in error.cause?String(error.cause.code):null,message:error instanceof Error?error.message:'AI请求失败',timeoutMs,durationMs:Date.now()-attemptStarted,model:params.model||process.env.CLAUDE_MODEL||null},'DATA')

@@ -7,6 +7,7 @@ import { annotateHistoricalReports, isVerificationReport, selectHistoricalReport
 import { getResearchProfile } from '@/lib/research/store'
 import { sessionBoundary } from '@/lib/research/time'
 import { effectiveDecisionTiming, normalizeReportTimingText } from '@/lib/analysis/decision-timing'
+import { applyDecisionTimingGate } from '@/lib/portfolio/decision-support'
 
 const MAX_REPORTS = 100
 
@@ -34,6 +35,7 @@ function serializeReport(report: {
   const data = parseData(report.dataJson)
   const timing=data?.decisionTiming?effectiveDecisionTiming(data.decisionTiming,new Date().toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null}):null
   if(timing)data.decisionTiming=timing
+  if(timing&&data?.portfolioDecisionSupport)data.portfolioDecisionSupport=applyDecisionTimingGate(data.portfolioDecisionSupport,timing)
   if(['comprehensive','verification'].includes(report.type)&&data?.socialReport){
     try{data.socialReport=normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)}catch{/* Keep the stored payload inspectable. */}
   }

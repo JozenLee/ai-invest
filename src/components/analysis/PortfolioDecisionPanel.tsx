@@ -3,11 +3,14 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Badge } from '@/components/ui/badge'
 import type { PortfolioDecisionSupport } from '@/lib/portfolio/decision-support'
+import { portfolioDisplayText, portfolioDisplayData } from '@/lib/portfolio/display-text'
 import { cn } from '@/lib/utils'
 import { AnalysisResultView } from './AnalysisResultView'
+import { PortfolioAlternativesPanel, PortfolioProductResearchPanel } from './PortfolioAlternativesPanel'
+import { riskBudgetSourceLabel } from '@/lib/portfolio/risk-budget'
 
 const money = (value: number | null) => value == null ? '—' : new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', maximumFractionDigits: 0 }).format(value)
-const pct = (value: number) => `${value.toFixed(1)}%`
+const pct = (value: number) => Number.isFinite(value) ? `${value.toFixed(1)}%` : '待确认'
 const mappingLabels: Record<string, string> = { manual: '正式产品映射', 'direct-etf': '场内ETF直连', 'name-inference': '产品候选映射', 'domain-proxy': '领域映射已确认', unmapped: '待映射' }
 
 function AllocationBar({ label, current, proposed, range }: { label: string; current: number; proposed: number; range?: [number, number] }) {
@@ -16,6 +19,17 @@ function AllocationBar({ label, current, proposed, range }: { label: string; cur
 }
 
 export function PortfolioDecisionPanel({ support, executionReady = true, analysis }: { support: PortfolioDecisionSupport; executionReady?: boolean; analysis?: unknown }) {
+  const selectedAlternative = support.alternatives?.alternatives.find(item => item.id === support.alternatives?.selectedId)
+  const selectedHasTrades = Boolean(selectedAlternative?.trades.length)
+  if ((support.allocationVersion ?? 0) >= 3) return <section id="portfolio-decision" className="min-w-0 scroll-mt-20 space-y-4">
+    <div><h2 className="text-xl font-semibold tracking-tight">个人组合投资建议</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">先看是否调整，再比较现金、费用和风险；基金资料与详细依据可展开查看。</p></div>
+    <div className="rounded-xl border bg-card p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">当前结论</h3><Badge variant="outline">{riskBudgetSourceLabel(support.policySource || 'system-default')}</Badge></div><p className="mt-2 text-sm leading-7">{!support.alternatives ? '组合方案待生成。' : support.alternatives.status === 'research-selected' && selectedHasTrades ? '已选出主动调整方案；费用、到账和交易状态只对该方案进行执行校验。' : support.alternatives.status === 'constraint-review-required' ? '当前现金或仓位不满足账户设置，请先处理下方待确认条件。' : '本轮选中维持当前组合，不需要费用或交易时段校验；备选调整方案仅供比较。'}</p><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[['当前现金比例', pct(support.cashWeightPct)], ['最低现金要求', pct(support.cashTargetFloorPct)], ['单次调整上限', pct((support.policy?.maxSingleAdjustmentRatio ?? .05) * 100)], ['当前领域仓位', pct(support.currentIndustryWeightPct)]].map(([label, value]) => <div key={label} className="rounded-lg bg-muted/40 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 text-lg font-semibold tabular-nums">{value}</p></div>)}</div><p className="mt-3 text-xs leading-6 text-muted-foreground">余额、持仓、份额和参考净值均按最新账户同步结果直接作为账户事实使用，不因缺少逐笔交易流水或单独业务日期降级；外部产品资料只影响研究穿透和主动交易校验。资料覆盖详见下方基金资料，不代表收益概率或投资胜率。</p></div>
+    {support.alternatives ? <PortfolioAlternativesPanel data={support.alternatives} actions={support.actions} executionReady={executionReady}/> : <p className="rounded-xl border p-4 text-sm text-muted-foreground">本轮未保存组合备选方案，暂不展示逐基金操作金额。请待方案研究与校验完成后复核。</p>}
+    <PortfolioProductResearchPanel value={support.productResearch}/>
+    {analysis != null && (typeof analysis !== 'string' || analysis.trim()) && <details className="rounded-xl border"><summary className="min-h-11 cursor-pointer p-4 text-sm font-medium focus-visible:outline-2 focus-visible:outline-primary">组合研判详情</summary><div className="border-t p-4 text-sm leading-7">{typeof analysis === 'string' ? <ReactMarkdown remarkPlugins={[remarkGfm]}>{portfolioDisplayText(analysis)}</ReactMarkdown> : <AnalysisResultView value={portfolioDisplayData(analysis)}/>}</div></details>}
+    <a href="/portfolio/overview" className="inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4">前往持仓总览核验产品、费用与交易安排</a>
+    <p className="text-xs leading-6 text-muted-foreground">方案基于本轮冻结证据；系统不会自动执行交易。场外基金按申赎窗口、适用净值和资金到账规则校验。</p>
+  </section>
   const ready = executionReady && ['advice-ready','trade-ready'].includes(String(support.readiness))
   const unresolved=support.actions.some(action=>!action.mapping.verified)
   const gates=support.gates.filter(gate=>gate.key!=='validation')
@@ -29,7 +43,7 @@ export function PortfolioDecisionPanel({ support, executionReady = true, analysi
   ]
   return <section id="portfolio-decision" className="scroll-mt-20">
     <div className="mb-4 flex items-start gap-3"><span className="rounded-xl border bg-card p-2 text-primary shadow-sm"><WalletCards className="size-5"/></span><div><h2 className="text-xl font-semibold tracking-tight">个人组合投资建议</h2><p className="mt-1 text-sm text-muted-foreground">组合计算依据：实际暴露、风险预算、基金信号及赎回成本；资料不足时仅展示领域预算</p></div></div>
-    {analysis != null && (typeof analysis !== 'string' || analysis.trim()) && <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/[0.035] p-5"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">结合持仓的组合研判</h3><Badge variant="outline">综合 AI 结论驱动 · 规则数字不被覆盖</Badge></div>{typeof analysis==='string'?<div className="text-sm leading-7 text-muted-foreground [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_p+p]:mt-2"><ReactMarkdown remarkPlugins={[remarkGfm]}>{analysis}</ReactMarkdown></div>:<AnalysisResultView value={analysis}/>}</div>}
+    {analysis != null && (typeof analysis !== 'string' || analysis.trim()) && <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/[0.035] p-5"><div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">结合持仓的组合研判</h3><Badge variant="outline">综合 AI 结论驱动 · 规则数字不被覆盖</Badge></div>{typeof analysis==='string'?<div className="text-sm leading-7 text-muted-foreground [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_p+p]:mt-2"><ReactMarkdown remarkPlugins={[remarkGfm]}>{portfolioDisplayText(analysis)}</ReactMarkdown></div>:<AnalysisResultView value={portfolioDisplayData(analysis)}/>}</div>}
     {support.researchConclusion && <div className="mb-4 grid gap-3 rounded-2xl border bg-card p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"><div><div className="flex items-center gap-2"><h3 className="text-sm font-semibold">研究评级与仓位约束</h3><Badge variant="outline">{support.researchConclusion.rating}</Badge></div><p className="mt-2 text-sm leading-6 text-muted-foreground">{support.researchConclusion.allocationStance || support.researchConclusion.conclusion}</p></div><div className="rounded-xl bg-muted/35 p-3 text-sm leading-6">{support.researchConclusion.appliedToAllocation}</div></div>}
     <div className={cn('rounded-2xl border p-5 shadow-sm', ready ? 'border-emerald-500/25 bg-emerald-500/[0.04]' : 'border-amber-500/25 bg-amber-500/[0.04]')}>
       <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{ready ? '投资建议可执行' : !executionReady ? '组合调整仅供参考' : support.readiness === 'blocked' ? '低置信度观望建议' : '投资建议已生成'}</h3><Badge variant="outline">置信度 {pct(support.confidencePct)}</Badge></div><p className="mt-2 text-sm leading-6 text-muted-foreground">{!executionReady?'当前报告不具备交易时段实时数据，目标仓位和金额仅用于下一轮研究复核。':summary}</p></div><Badge className={ready ? 'bg-emerald-600' : 'bg-amber-600'}>{support.signal === 'risk-off' ? '风险收缩' : support.signal === 'eligible' ? '满足建仓条件' : support.signal === 'blocked' ? '数据受限' : '持续观察'}</Badge></div>

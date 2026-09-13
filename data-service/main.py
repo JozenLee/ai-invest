@@ -39,6 +39,7 @@ os.environ['NO_PROXY'] = '*'
 
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact, company_context
 from routers import stocks, industry_analysis, fund, local_data
+from routers import portfolio_product_research
 
 # 配置日志
 logging.basicConfig(level=logging.DEBUG)
@@ -334,6 +335,7 @@ app.include_router(impact.router)
 app.include_router(stocks.router)
 app.include_router(industry_analysis.router, prefix="/api")
 app.include_router(local_data.router)
+app.include_router(portfolio_product_research.router)
 
 @app.get("/health")
 async def health_check():

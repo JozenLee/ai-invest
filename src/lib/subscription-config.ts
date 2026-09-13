@@ -1,6 +1,6 @@
 import defaults from '../../config/subscription-defaults.json'
 
-export type SubscriptionScope = 'market_index' | 'etf_index' | 'company_quote'
+export type SubscriptionScope = 'market_index' | 'etf_index' | 'company_quote' | 'portfolio_fund'
 export type SubscriptionPolicy = { scope: string; label: string; enabled: boolean; mode: string; tradingIntervalSeconds: number; closedIntervalSeconds: number; dailyTimes: string[]; weekdaysOnly: boolean }
 export type SubscriptionConfig = { historyPoints: number; pollSeconds: number; requestConcurrency: number; scopeEnabled: Record<SubscriptionScope, boolean>; policies: Record<string, SubscriptionPolicy> }
 export const DEFAULT_SUBSCRIPTION_CONFIG: SubscriptionConfig = defaults
@@ -8,7 +8,14 @@ export const MARKET_INDEXES = [
   { code: 'sh000001', name: '上证指数' }, { code: 'sz399001', name: '深证成指' },
   { code: 'sz399006', name: '创业板指' }, { code: 'sh000688', name: '科创50' }, { code: 'sh000300', name: '沪深300' },
 ]
-export const SCOPE_LABELS: Record<SubscriptionScope, string> = { market_index: '市场数据', etf_index: 'ETF指数', company_quote: '企业行情' }
+export const SCOPE_LABELS: Record<SubscriptionScope, string> = { market_index: '市场数据', etf_index: 'ETF指数', company_quote: '企业行情', portfolio_fund: '持仓基金' }
+export const SUBSCRIPTION_ANALYSIS_USAGE: Record<string, string> = {
+  research_calendar: '分析时点', index_realtime: '市场分析', index_daily: '市场分析',
+  sector_capital_flow: '市场分析', northbound_flow: '市场分析', market_volume: '市场分析', market_main_flow: '市场分析', margin_balance: '市场分析', dragon_tiger: '市场分析',
+  etf_realtime: 'ETF研判', etf_daily: 'ETF研判', etf_holdings: '持仓穿透', etf_research: 'ETF研判',
+  constituent_stock_realtime: '企业分析', constituent_stock_daily: '企业分析', stock_financial: '企业分析', stock_announcement: '事件与企业分析',
+  fund_research: '组合建议',
+}
 
 export function validateSubscriptionConfig(value: unknown): SubscriptionConfig {
   if (!value || typeof value !== 'object') throw new Error('无效的订阅配置')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_SUBSCRIPTION_CONFIG, validateSubscriptionConfig } from '@/lib/subscription-config'
+import { DEFAULT_SUBSCRIPTION_CONFIG, SUBSCRIPTION_ANALYSIS_USAGE, validateSubscriptionConfig } from '@/lib/subscription-config'
 
 describe('subscription configuration', () => {
   it('uses one 120-point rule and independent efficient policies', () => {
@@ -10,6 +10,9 @@ describe('subscription configuration', () => {
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.stock_announcement.dailyTimes).toHaveLength(1)
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.research_calendar.enabled).toBe(true)
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.etf_research.enabled).toBe(true)
+    expect(DEFAULT_SUBSCRIPTION_CONFIG.scopeEnabled.portfolio_fund).toBe(true)
+    expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.fund_research.scope).toBe('portfolio_fund')
+    expect(Object.keys(DEFAULT_SUBSCRIPTION_CONFIG.policies).every(key => Boolean(SUBSCRIPTION_ANALYSIS_USAGE[key]))).toBe(true)
   })
   it('validates bounds and daily schedules', () => {
     expect(validateSubscriptionConfig(DEFAULT_SUBSCRIPTION_CONFIG)).toEqual(DEFAULT_SUBSCRIPTION_CONFIG)

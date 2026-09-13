@@ -43,7 +43,7 @@ const labels: Record<string, string> = {
   key:'条件标识',label:'条件名称',operator:'比较方式',threshold:'规则阈值',passed:'是否通过',issues:'校验问题',warnings:'提示信息',errors:'错误信息',message:'状态说明',referenceIssues:'引用异常',
   indexCode:'指数代码',indexName:'指数名称',etfCode:'基金代码',etfName:'基金名称',stockCode:'企业代码',stockName:'企业名称',
   capturedAt:'归档时间',startedAt:'开始时间',completedAt:'完成时间',publishedAt:'发布时间',sourceDate:'来源日期',previousOpportunity:'此前机会',currentEvidence:'本轮证据',implication:'操作含义',actionImplication:'操作含义',
-  attempt:'请求序号',durationMs:'耗时（毫秒）',timeoutMs:'超时上限（毫秒）',maxTokens:'输出上限',max_tokens:'输出上限',model:'模型名称',stopReason:'结束原因',stop_reason:'结束原因',usage:'用量',input_tokens:'输入用量',output_tokens:'输出用量',
+  corrections:'已完成的校正',referenceCorrections:'引用校正',dateBasis:'日期口径',inputEvidenceIds:'底层证据编号',citationRegistry:'可引用证据',outputValidations:'输出校验',attempt:'请求序号',durationMs:'耗时（毫秒）',timeoutMs:'超时上限（毫秒）',maxTokens:'输出上限',max_tokens:'输出上限',model:'模型名称',stopReason:'结束原因',stop_reason:'结束原因',usage:'用量',input_tokens:'输入用量',output_tokens:'输出用量',
   temperature:'采样温度',effort:'推理强度',characters:'输入字符数',numericValues:'数值数量',unexpandedPlaceholders:'未展开占位符',
   factorDiagnostics:'多因子诊断',factorScore:'多因子评分',factorRegime:'多因子状态',distanceToMA20Pct:'距20日均线（%）',rsi12:'12日相对强弱指标',annualizedVolatilityPct:'年化波动率（%）',maxDrawdownPct:'最大回撤（%）',maxDrawdown120Pct:'120日最大回撤（%）',downsideVolatilityPct:'下行波动率（%）',
   dailyChangePct:'当日涨跌幅（%）',return20Pct:'20日收益（%）',return60Pct:'60日收益（%）',return120Pct:'120日收益（%）',relative20Pct:'20日相对收益（%）',relative60Pct:'60日相对收益（%）',technicalStatus:'技术数据状态',periodStart:'区间开始',periodEnd:'区间结束',
@@ -64,7 +64,7 @@ export function fieldLabel(key: string): string {
 }
 
 const enumLabels: Record<string, string> = {
-  end_turn:'正常完成',max_tokens:'输出达到上限',stop_sequence:'命中停止条件',tool_use:'请求工具调用',fallback:'已使用降级结果',skipped:'已跳过',
+  corrected:'已校正',end_turn:'正常完成',max_tokens:'输出达到上限',stop_sequence:'命中停止条件',tool_use:'请求工具调用',fallback:'已使用降级结果',skipped:'已跳过',
   system:'系统',user:'用户',assistant:'模型',text:'文本',COMPLETED:'已完成',RUNNING:'进行中',FAILED:'失败',PENDING:'等待中',SKIPPED:'已跳过',
   '>':'大于','>=':'大于等于','<':'小于','<=':'小于等于','==':'等于','===':'等于','!=':'不等于',
 }

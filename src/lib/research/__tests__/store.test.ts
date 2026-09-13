@@ -4,6 +4,7 @@ const state=vi.hoisted(()=>({raw:[] as any[],daily:[] as any[],index:[] as any[]
 vi.mock('@/lib/db',()=>{
   const match=(r:any,w:any)=>!w||( (!w.id||r.id===w.id)&&(!w.datasetKey||typeof w.datasetKey==='object'||r.datasetKey===w.datasetKey)&&(!w.targetCode||typeof w.targetCode==='object'||r.targetCode===w.targetCode))
   const db:any={
+    portfolio:{findFirst:vi.fn(async()=>null)},
     rawPayload:{findFirst:vi.fn(async({where}:any)=>state.raw.filter(r=>match(r,where)).sort((a,b)=>b.fetchedAt-a.fetchedAt)[0]||null),findMany:vi.fn(async()=>state.raw.filter(r=>!r.datasetKey.startsWith('research_evaluation')&&!r.datasetKey.startsWith('research_snapshot'))),findUnique:vi.fn(async({where}:any)=>state.raw.find(r=>r.id===where.id)||null),upsert:vi.fn(async({where,create}:any)=>{const existing=state.raw.find(r=>r.id===where.id);if(existing)return existing;const r={...create,fetchedAt:new Date()};state.raw.push(r);return r})},
     dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},eTFDaily:{findMany:vi.fn(async()=>state.daily)},indexDaily:{findMany:vi.fn(async()=>state.index)},eTFHolding:{findMany:vi.fn(async()=>state.holdings)},stockFinancialReport:{findMany:vi.fn(async()=>state.reports)},stockAnnouncement:{findMany:vi.fn(async()=>state.announcements)},stockDaily:{findMany:vi.fn(async()=>[])},newsArticle:{findMany:vi.fn(async()=>[])},aIAnalysisReport:{findMany:vi.fn(async()=>state.historicalReports)},
     $transaction:vi.fn(async(arg:any)=>typeof arg==='function'?arg(db):Promise.all(arg)),

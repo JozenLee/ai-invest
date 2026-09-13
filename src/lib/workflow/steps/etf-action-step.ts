@@ -16,6 +16,6 @@ export const etfActionStep: StepDefinition = {
     await context.saveArtifact('strategy-validation',await historicalStrategyValidation(frozen,evaluation),'DATA')
     const reportConfidence=reportAdviceConfidence(evaluation,context.artifacts.get('data-quality'))
     await context.saveArtifact('etf-actions',evaluation.decisions.map(decision=>({...decision,confidencePct:Math.min(decisionConfidence(decision),reportConfidence)})),'DATA')
-    await context.updateProgress(1,1,'已逐只生成带置信度的投资建议；缺失数据会降低置信度或转为观望')
+    await context.updateProgress(1,1,'已保存逐产品技术规则对照与证据覆盖，账户操作由后续研究方案比较形成')
   }
 }

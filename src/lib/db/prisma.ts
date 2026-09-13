@@ -14,6 +14,7 @@ function createPrismaClient() {
   }
   const adapter = new PrismaBetterSqlite3({
     url: (process.env.VITEST ? process.env.TEST_DATABASE_URL : process.env.DATABASE_URL) || 'file:./prisma/dev.db',
+    timeout: 5000,
   })
 
   return new PrismaClient({

@@ -9,5 +9,5 @@ export function readableResearchData(value: unknown): unknown {
   }
   if (Array.isArray(value)) return value.map(readableResearchData)
   if (!value || typeof value !== 'object') return value
-  return Object.fromEntries(Object.entries(value).filter(([key])=>!['evidenceId','evidenceIds'].includes(key)).map(([key,item])=>[key,key==='claim'&&typeof item==='string'?cleanClaim(item):readableResearchData(item)]))
+  return Object.fromEntries(Object.entries(value).filter(([key])=>!['evidenceId','evidenceIds','pricingEvidenceIds','factChecks','hypothesisId'].includes(key)).map(([key,item])=>[key,key==='claim'&&typeof item==='string'?cleanClaim(item):readableResearchData(item)]))
 }

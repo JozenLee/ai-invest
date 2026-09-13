@@ -14,23 +14,13 @@ function prose(value:unknown):string{
   return ''
 }
 function first(value:unknown,fallback:string){return prose(value).split(/(?<=[。！？；])/u).find(Boolean)||fallback}
-function cited(value:Record<string,any>,fallback:string){
-  const evidence=Array.isArray(value.evidence)?value.evidence:[]
+function cited(value:Record<string,any>){
+  const evidence=(Array.isArray(value.evidence)?value.evidence:[]).filter((item:any)=>Array.isArray(item.evidenceIds)&&item.evidenceIds.length>0&&!item.referenceIssues?.length)
   const item=evidence.find((candidate:any)=>/收入|利润|现金流|订单|出货|毛利率|产能/u.test(String(candidate?.claim||'')))||evidence[0]
-  return item?.claim?`${item.date||'日期待核验'}｜${item.source||'来源待核验'}：${item.claim}`:first(value.analysis,fallback)
+  return item?.claim?`${item.date||'日期待核验'}｜${item.source||'来源待核验'}：${item.claim}`:'本节引用尚未通过证据校验，暂不摘录结论。'
 }
 function scenario(value:unknown){return prose(value).replace(/[。；;]+$/u,'')||'待核验'}
-function companyHighlight(company:Record<string,any>){
-  const item=Array.isArray(company.key_companies)?company.key_companies[0]:null
-  if(!item?.fact)return cited(company,'企业盈利质量证据不足。')
-  const name=String(item.company||item.name||'代表企业'),code=String(item.code||'')
-  const evidence=(Array.isArray(company.evidence)?company.evidence:[]).find((candidate:any)=>{
-    const claim=String(candidate?.claim||'')
-    return claim.includes(name)||(code&&claim.includes(code))
-  })
-  const citation=item.evidence?String(item.evidence):evidence?`${evidence.date||'日期待核验'}｜${evidence.source||'来源待核验'}`:'来源待核验'
-  return `${citation}：${name}：${item.fact}`
-}
+function companyHighlight(company:Record<string,any>){return cited(company)}
 
 function buildSocialReport(context:StepContext):SocialReport{
   const industry=parsed(context.artifacts.get('industry-info')),market=parsed(context.artifacts.get('market-analysis')),company=parsed(context.artifacts.get('company-analysis'))
@@ -43,9 +33,9 @@ function buildSocialReport(context:StepContext):SocialReport{
     `战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`,
     `估值：${valuationCount?`${valuationCount}个指数有可核验当期值`:'暂无可核验当期估值'}。`,
   ],sections:[
-    {title:REPORT_SECTIONS[0],body:cited(news,first(overview.drivers||overview.analysis,'产业驱动证据不足。'))},
+    {title:REPORT_SECTIONS[0],body:cited(news)},
     {title:REPORT_SECTIONS[1],body:companyHighlight(company)},
-    {title:REPORT_SECTIONS[2],body:cited(market,'市场与估值证据不足。')},
+    {title:REPORT_SECTIONS[2],body:cited(market)},
     {title:REPORT_SECTIONS[3],body:`覆盖${decisions.length}只A股ETF、${evaluation?.indexBreadth?.mappedIndices||0}个跟踪指数；同指数产品按费率、流动性、净值时点和跟踪误差比较，异常值不参与选优。`},
     {title:REPORT_SECTIONS[4],body:`基准：${scenario(scenarios.base?.conditions||scenarios.base)}；上行：${scenario(scenarios.bull?.conditions||scenarios.bull)}；下行：${scenario(scenarios.bear?.conditions||scenarios.bear)}。`},
     {title:REPORT_SECTIONS[5],body:prose(investment.executiveSummary?.watchPoints||news.watchlist)||'跟踪订单、盈利、现金流、资金和趋势条件。'},
@@ -59,12 +49,14 @@ export const socialReportStep: StepDefinition = {
   async execute(context){
     await context.updateProgress(0,1,'正在根据已验证分析生成一页版')
     const report=buildSocialReport(context)
+    const upstreamIssues=['market-analysis','company-analysis','news-analysis','industry-overview','investment-advice'].flatMap(key=>(context.artifacts.get(`${key}-validation`)?.issues||[]).map((issue:string)=>`${key}：${issue}`))
+    if(upstreamIssues.length)report.risks=['上游输出存在未解决的证据或结构校验问题，本页仅供有限参考。',...report.risks].slice(0,3)
     const etfs:Array<{changePct:number;dataDate:string;name?:string;ticker:string;source?:string}>=context.artifacts.get('etf-market-data')||[]
     const representativeTickers=representativeProducts(context.artifacts.get('research-evaluation')).map(item=>item.ticker)
     const representatives=representativeTickers.map(ticker=>etfs.find(row=>row.ticker===ticker)).filter((row):row is typeof etfs[number]=>!!row)
     report.metrics=(representatives.length?representatives:etfs).filter(row=>Number.isFinite(row.changePct)&&row.dataDate).slice(0,3).map(row=>({label:row.name||row.ticker,value:(row.changePct>0?'+':'')+row.changePct.toFixed(2)+'%',date:String(row.dataDate).slice(0,10),source:row.source||'订阅数据库（来源未标注）'}))
     await context.saveArtifact('social-report',report,'DATA')
-    await context.saveArtifact('social-report-status',{status:'ready',attempts:0,compacted:true,errors:[],message:'由已验证的分层分析确定性编辑，未重复调用模型'},'DATA')
+    await context.saveArtifact('social-report-status',{status:upstreamIssues.length?'limited':'ready',issues:upstreamIssues,reason:upstreamIssues.length?'上游输出校验未通过，已排除无有效引用的摘录':undefined,attempts:0,compacted:true,errors:[],message:'由已验证的分层分析确定性编辑，未重复调用模型'},'DATA')
     await context.updateProgress(1,1,'一页报告已完成确定性编辑与容量校验')
   },
 }

@@ -33,7 +33,7 @@ model UserSetting {
   investHorizon            String  @default("medium") // short/medium/long
   totalAssets              Float   @default(0)
   cashRatio                Float   @default(0.2)
-  minCashRatio             Float   @default(0.1)
+  minCashRatio             Float   @default(0.01)
   maxIndustryRatio         Float   @default(0.2)
   maxFundRatio             Float   @default(0.15)
   maxSingleAdjustmentRatio Float   @default(0.05)

@@ -210,3 +210,35 @@ async def test_etf_scale_uses_tushare_fund_share():
     assert result["shares"] == 1200
     provider.request_dataframe.assert_awaited_once()
     assert provider.request_dataframe.await_args.args[0] == "fund_share"
+
+
+@pytest.mark.asyncio
+async def test_index_subscription_fetches_only_requested_benchmark():
+    provider = TushareProvider(token='test')
+    provider._api_url = 'http://tushare.test'
+    provider._api_key = 'test'
+    provider._call_api = AsyncMock(return_value=pd.DataFrame([{'last': 4000, 'pre_close': 3990}]))
+    with patch('providers.tushare_provider.is_trading_hours', return_value=True):
+        result = await provider.get_index_realtime(['sh000300'])
+    provider._call_api.assert_awaited_once_with('rt_k', ts_code='000300.SH')
+    assert result['代码'].tolist() == ['sh000300']
+
+
+@pytest.mark.asyncio
+async def test_missing_benchmark_reaches_backup_provider():
+    from providers.registry import ProviderRegistry, CategoryConfig
+    provider = TushareProvider(token='test')
+    provider._api_url = 'http://tushare.test'
+    provider._api_key = 'test'
+    provider._call_api = AsyncMock(return_value=pd.DataFrame())
+    backup = Mock()
+    backup.name = 'backup'
+    backup.get_index_realtime = AsyncMock(return_value=pd.DataFrame([{'代码': 'sh000300', '最新价': 4001.23}]))
+    registry = ProviderRegistry(custom_config={'index_realtime': CategoryConfig(sources=['tushare', 'backup'], fallback_to_file=False)})
+    registry.register(provider)
+    registry.register(backup)
+    with patch('providers.tushare_provider.is_trading_hours', return_value=True):
+        result = await registry.fetch('index_realtime', 'get_index_realtime', symbols=['sh000300'])
+    assert result['代码'].tolist() == ['sh000300']
+    backup.get_index_realtime.assert_awaited_once_with(symbols=['sh000300'])
+    provider._call_api.assert_awaited_once_with('rt_k', ts_code='000300.SH')

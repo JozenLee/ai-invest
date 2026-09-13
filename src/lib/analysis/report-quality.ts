@@ -3,7 +3,7 @@ import type { Condition, Evaluation } from '@/lib/research/contracts'
 import type { DecisionTimingAssessment } from './decision-timing'
 
 export type QualityDimension = {
-  key: 'market' | 'fundamentals' | 'valuation' | 'product' | 'evidence'
+  key: 'market' | 'fundamentals' | 'valuation' | 'product' | 'evidence' | 'portfolio'
   label: string
   score: number
   weight: number
@@ -70,7 +70,9 @@ export function buildReportQuality(input: {
   dataQuality?: DataQualityLike
   preflight?: PreflightLike
   decisionTiming?: DecisionTimingAssessment | null
+  outputValidations?: Record<string,{status?:string;issues?:string[]}|null|undefined>
   analysisStatuses?: Record<string,{status?:string}|null|undefined>
+  portfolioDecisionSupport?: { verifiedMappingCoveragePct?:number; alternatives?: { selectedId:string; alternatives:Array<{id:string;trades:unknown[];risk:{coveragePct:number}}> }; gates?:Array<{key:string;met:boolean}> } | null
 }): ReportQualityAssessment {
   const { evaluation, dataQuality, preflight, decisionTiming, analysisStatuses } = input
   const market = conditionCoverage(evaluation, ['calendar', 'session', 'history', 'continuity', 'adjustment', 'index'])
@@ -102,21 +104,31 @@ export function buildReportQuality(input: {
   const narrativeFactor=fallbackModules.includes('event')?.75:1
   const eventTraceability=decisionEvents.length?ratio(linkedEvents,decisionEvents.length):1
   const eventIndependence=decisionEvents.length?ratio(independent,decisionEvents.length):1
-  const evidenceScore = round((ratio(datedEvidence, evidence.length) * .25 + ratio(uniqueEvidence,evidence.length) * .2 + eventTraceability * .15 + gradeScore * .25 + eventIndependence * .15) * 100 * narrativeFactor)
+  const outputIssues=Object.entries(input.outputValidations||{}).flatMap(([key,value])=>(value?.issues||[]).map(issue=>`${key}：${issue}`))
+  const evidenceScore = Math.min(outputIssues.length?69:100,round((ratio(datedEvidence, evidence.length) * .25 + ratio(uniqueEvidence,evidence.length) * .2 + eventTraceability * .15 + gradeScore * .25 + eventIndependence * .15) * 100 * narrativeFactor))
   const syncIntentionallySkipped=preflight?.status==='warning'&&(preflight.queued||0)===0&&preflight.warnings?.some(message=>message.includes('未触发外部同步'))
   const dimensions: QualityDimension[] = [
-    { key: 'market', label: '行情完整性', score: market.score, weight: 28, detail: `${technicalUsable}/${technicalTotal}只技术链完整；${market.known}/${market.total}项字段可核验（${fieldScore}分），最终取较低覆盖率` },
-    { key: 'fundamentals', label: '基本面覆盖', score: fundamentals.score, weight: 22, detail: `${fundamentals.known}/${fundamentals.total}项持仓与财务条件可核验` },
-    { key: 'valuation', label: '当期估值有效性', score: valuationScore, weight: 16, detail: `${currentValuation}/${indexCodes.length}个跟踪指数有可核验当期估值` },
-    { key: 'product', label: '产品可交易数据', score: product.score, weight: 17, detail: `${product.known}/${product.total}项当期产品交易条件可核验` },
-    { key: 'evidence', label: '证据质量与可追溯性', score: evidenceScore, weight: 17, detail: `${datedEvidence}/${evidence.length}条有业务日期，${uniqueEvidence}/${evidence.length}条内容唯一，${independent}/${decisionEvents.length}个决策事件为一手或多源` },
+    { key: 'market', label: '行情完整性', score: market.score, weight: 25, detail: `${technicalUsable}/${technicalTotal}只技术链完整；${market.known}/${market.total}项字段可核验（${fieldScore}分），最终取较低覆盖率` },
+    { key: 'fundamentals', label: '基本面覆盖', score: fundamentals.score, weight: 19, detail: `${fundamentals.known}/${fundamentals.total}项持仓与财务条件可核验` },
+    { key: 'valuation', label: '当期估值有效性', score: valuationScore, weight: 14, detail: `${currentValuation}/${indexCodes.length}个跟踪指数有可核验当期估值` },
+    { key: 'product', label: '产品可交易数据', score: product.score, weight: 14, detail: `${product.known}/${product.total}项当期产品交易条件可核验` },
+    { key: 'evidence', label: '证据质量与可追溯性', score: evidenceScore, weight: 13, detail: `${datedEvidence}/${evidence.length}条底层证据有业务日期，${uniqueEvidence}/${evidence.length}条内容唯一，${independent}/${decisionEvents.length}个决策事件为一手或多源；${outputIssues.length}条输出校验问题（非事实正确率）` },
   ]
-  const weightedScore = round(dimensions.reduce((sum, item) => sum + item.score * item.weight, 0) / 100)
+  const portfolioSupport=input.portfolioDecisionSupport,selected=portfolioSupport?.alternatives?.alternatives.find(item=>item.id===portfolioSupport.alternatives?.selectedId)
+  if(portfolioSupport&&selected){
+    const mapping=Math.min(100,Math.max(0,portfolioSupport.verifiedMappingCoveragePct||0)),risk=Math.min(100,Math.max(0,selected.risk.coveragePct||0)),requiresExecution=selected.trades.length>0
+    const executionGates=(portfolioSupport.gates||[]).filter(gate=>['product-execution','cost'].includes(gate.key))
+    const execution=requiresExecution?(executionGates.length?ratio(executionGates.filter(gate=>gate.met).length,executionGates.length)*100:0):100
+    dimensions.push({key:'portfolio',label:'持仓决策数据',score:round(mapping*.35+risk*.35+execution*.2+10),weight:15,detail:`账户快照已接受；产品研究覆盖${mapping.toFixed(0)}%，历史风险覆盖${risk.toFixed(0)}%；${requiresExecution?'选定交易方案单独校验费用与执行条件':'选定方案无交易，不要求费用或交易时段数据'}`})
+  }
+  const totalWeight=dimensions.reduce((sum,item)=>sum+item.weight,0)
+  const weightedScore = round(dimensions.reduce((sum, item) => sum + item.score * item.weight, 0) / totalWeight)
   const timingFailed = decisionTiming?.phase === 'trading' && !decisionTiming.executionReady
-  const qualityCap = timingFailed || fallbackModules.length ? 69 : dataQuality?.status !== 'available' || (preflight?.failed || 0) > 0 ? 84 : 100
+  const qualityCap = timingFailed || fallbackModules.length || outputIssues.length || ['blocked','unavailable'].includes(dataQuality?.status||'') ? 69 : (preflight?.failed || 0) > 0 ? 84 : 100
   const overallScore = Math.min(weightedScore, qualityCap, input.consistencyIssues?.length ? 49 : 100)
   const blockers = [
     ...(input.consistencyIssues || []),
+    ...outputIssues,
     !evaluation && '缺少冻结研究评估',
     timingFailed && '交易时段时效未通过，综合质量评分上限为69分',
     ...(evaluation?.omittedConditions || []).map(item => `${item.label}：底层数据缺失，仍计入质量覆盖率`),
@@ -124,11 +136,11 @@ export function buildReportQuality(input: {
     technicalUsable<technicalTotal&&`当期技术链仅${technicalUsable}/${technicalTotal}只完整，不得外推全领域趋势`,
     preflight?.status && preflight.status !== 'fresh' && !syncIntentionallySkipped && `分析前同步未完全成功${preflight.failed ? `（失败${preflight.failed}项）` : ''}`,
     product.score < 80 && 'ETF产品交易数据覆盖不足',
-    ...fallbackModules.map(module=>`${({market:'市场',event:'事件',company:'企业',investment:'综合建议'} as Record<string,string>)[module]||module}智能分析已降级，未形成新增模型研判；综合质量最高69分`),
+    ...fallbackModules.map(module=>`${({market:'市场',event:'事件',company:'企业',investment:'综合建议',portfolio:'持仓'} as Record<string,string>)[module]||module}智能分析已降级，未形成新增模型研判；综合质量最高69分`),
     decisionTiming && !decisionTiming.executionReady && `报告仅供参考：${decisionTiming.reasons[0] || '当前为非交易时间'}`,
   ].filter(Boolean) as string[]
-  const usability = input.consistencyIssues?.length || !evaluation || market.score < 50 ? 'insufficient' : !fallbackModules.length && dataQuality?.status === 'available' && product.score >= 70 && !(preflight?.failed || 0) && preflight?.status !== 'blocked' && decisionTiming?.executionReady !== false ? 'advice-grade' : 'limited-advice'
-  const confidenceScore = round(Math.min(overallScore, dataQuality?.status === 'available' ? 95 : dataQuality?.status === 'limited' ? 79 : 45))
+  const usability = input.consistencyIssues?.length || !evaluation || market.score < 50 ? 'insufficient' : !outputIssues.length && !fallbackModules.length && dataQuality?.status === 'available' && product.score >= 70 && !(preflight?.failed || 0) && preflight?.status !== 'blocked' && decisionTiming?.executionReady !== false ? 'advice-grade' : 'limited-advice'
+  const confidenceScore = round(Math.min(overallScore, dataQuality?.status === 'available' ? 95 : dataQuality?.status === 'limited' ? 89 : 45))
   const grade = overallScore >= 85 ? 'A' : overallScore >= 70 ? 'B' : overallScore >= 55 ? 'C' : 'D'
   return { version: 1, technicalCoverage:{usable:technicalUsable,total:technicalTotal,fieldScore}, overallScore, confidenceScore, grade, usability, dimensions, blockers, consistencyIssues:input.consistencyIssues||[], scoreMeaning:'评分反映证据覆盖与内部一致性，不是投资胜率、收益预测或策略有效性证明', generatedAt: new Date().toISOString() }
 }

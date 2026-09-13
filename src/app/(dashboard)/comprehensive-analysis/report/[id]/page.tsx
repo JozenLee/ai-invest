@@ -29,6 +29,7 @@ import {
   parseAnalysis,
 } from "@/components/analysis/MarketResearchView";
 import { ReportEvidenceView } from "@/components/analysis/ReportEvidenceView";
+import { ForwardEvaluationPanel } from "@/components/analysis/ForwardEvaluationPanel";
 import { PortfolioDecisionPanel } from "@/components/analysis/PortfolioDecisionPanel";
 import { SocialReportView } from "@/components/analysis/SocialReportView";
 import { ComprehensiveConclusionView } from "@/components/analysis/ComprehensiveConclusionView";
@@ -102,10 +103,11 @@ type Structured = {
   companyAnalysis?: unknown;
   sentimentAnalysis?: unknown;
   investmentAdvice?: unknown;
+  outputValidations?: Record<string,{status?:string;issues?:string[]}|null>;
   analysisStatuses?: Record<string, { status?: string; reason?: string } | null>;
   privatePortfolioAnalysis?: unknown;
   portfolioDecisionSupport?: PortfolioDecisionSupport;
-  metadata?: { runId?: string; kind?: string };
+  metadata?: { runId?: string; kind?: string; generatedAt?: string };
 };
 const stateLabels: Record<string, string> = {
   blocked: "证据受限",
@@ -256,7 +258,9 @@ export default function ComprehensiveReportPage() {
         dataQuality: structured.dataQuality,
         preflight: structured.researchPreflight,
         decisionTiming: timing,
+        portfolioDecisionSupport: structured.portfolioDecisionSupport,
         analysisStatuses: structured.analysisStatuses,
+        outputValidations: structured.outputValidations,
       })
     : structured.reportQuality;
   const decisions = evaluation?.decisions || [],
@@ -336,7 +340,7 @@ export default function ComprehensiveReportPage() {
           {chineseNarrative(report.title)}
         </h1>
         <p className="text-xs leading-6 text-muted-foreground">
-          生成 {date(report.createdAt)} · 证据冻结 {date(evaluation?.asOf)} ·
+          内容更新 {date(structured.metadata?.generatedAt || report.createdAt)} · 证据冻结 {date(evaluation?.asOf)} ·
           {timing.phase === "trading" ? "盘中数据日" : "收盘基准"} {evaluation?.expectedSession || "未核验"} ·{" "}
           {decisions.length}只产品 / {coverage.indexCount}个指数
         </p>
@@ -463,9 +467,9 @@ export default function ComprehensiveReportPage() {
           )}
           {activePage === "decisions" && (
             <section id="decisions" className="scroll-mt-20 space-y-4">
-              {title("指数基金规则与行动建议")}
+              {title("指数基金技术规则对照")}
               <p className="text-sm text-muted-foreground">
-                以下动作来自逐产品规则；模型研究观点另列。相同状态可以对应相同动作，每只产品的触发依据与数据覆盖独立展示。
+                以下为技术策略在冻结数据上的原始意图，用于与独立研究比较。均线信号不自动决定账户交易；实际资金方案见个人组合。
               </p>
               <div className="grid gap-3 lg:grid-cols-2">
                 {decisions.map((decision) => {
@@ -486,7 +490,7 @@ export default function ComprehensiveReportPage() {
                           {decision.ticker} · {stateLabels[decision.state]}
                         </span>
                         <span className="mt-2 block text-sm">
-                          未持有：{action.unheld} · 已持有：{action.held}
+                          规则意图：未持有 {action.unheld} · 已持有 {action.held}
                         </span>
                         <span className="mt-1 block text-xs text-muted-foreground">
                           产品证据覆盖度 {decisionConfidence(decision)}/100 ·
@@ -515,7 +519,7 @@ export default function ComprehensiveReportPage() {
                             >
                               <dt>{condition.label}</dt>
                               <dd>
-                                {condition.value ?? "未知"} ·{" "}
+                                {condition.key === "market" && typeof condition.value === "number" ? `${(condition.value * 100).toFixed(2)}%` : condition.value ?? "未知"} ·{" "}
                                 {statusLabels[condition.status]}
                               </dd>
                               {condition.detail && (
@@ -536,7 +540,7 @@ export default function ComprehensiveReportPage() {
                   模型研究观点与逐产品说明
                 </summary>
                 <p className="mt-3 text-xs text-muted-foreground">
-                  模型观点用于解释产业机会、风险和情景；规则动作及组合预算单独计算。旧报告中建议方向可能曾被程序覆盖。
+                  独立投资假设与技术信号交叉评估，保留冲突、反证和期限。账户方案根据真实基金暴露、费用及硬约束另行比较；旧版报告保留原始结论。
                 </p>
                 <div className="mt-4">
                   <ReportAnalysisView
@@ -680,6 +684,7 @@ export default function ComprehensiveReportPage() {
               }
             />
           )}
+          {activePage === "portfolio" && portfolio && (portfolio.allocationVersion ?? 0) >= 3 && <ForwardEvaluationPanel reportId={report.id}/>}
           {activePage === "readiness" && (
             <section id="readiness" className="scroll-mt-20 space-y-4">
               <TechnicalReadinessPanel data={structured.dataQuality?.technicalReadiness}/>

@@ -2,6 +2,7 @@
 import { prisma } from '@/lib/db'
 import type { StepDefinition, StepContext } from './types'
 import {executionWaves} from './execution-waves'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 
 export class ExecutionOrchestrator {
   constructor(
@@ -449,7 +450,7 @@ export class ExecutionOrchestrator {
     const serialized = JSON.stringify(data)
     const size = Buffer.byteLength(serialized, 'utf8')
 
-    await prisma.stepArtifact.upsert({
+    await withDatabaseBusyRetry(() => prisma.stepArtifact.upsert({
       where: { stepId_artifactKey: { stepId, artifactKey: key } },
       create: {
         stepId,
@@ -463,7 +464,7 @@ export class ExecutionOrchestrator {
         data: serialized,
         size
       }
-    })
+    }))
   }
 
   private async updateRunStatus(

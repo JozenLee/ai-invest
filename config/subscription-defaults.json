@@ -2,10 +2,11 @@
   "historyPoints": 120,
   "pollSeconds": 5,
   "requestConcurrency": 6,
-  "scopeEnabled": {"market_index": true, "etf_index": true, "company_quote": true},
+  "scopeEnabled": {"market_index": true, "etf_index": true, "company_quote": true, "portfolio_fund": true},
   "policies": {
     "research_calendar": {"scope":"market_index","label":"投研交易日历","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["07:00"],"weekdaysOnly":false},
     "etf_research": {"scope":"etf_index","label":"ETF复权、指数映射与产品研究","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00","19:00"],"weekdaysOnly":true},
+    "fund_research": {"scope":"portfolio_fund","label":"持仓基金净值、复权、披露与产品资料","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["08:40","20:00"],"weekdaysOnly":true},
     "market_main_flow": {"scope":"market_index","label":"大盘主力资金原始明细","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["18:00"],"weekdaysOnly":true},
     "margin_balance": {"scope":"market_index","label":"交易所融资融券余额","enabled":true,"mode":"daily","tradingIntervalSeconds":86400,"closedIntervalSeconds":86400,"dailyTimes":["09:00"],"weekdaysOnly":true},
     "sector_capital_flow": {"scope":"market_index","label":"板块资金原始行情（AKShare）","enabled":true,"mode":"interval","tradingIntervalSeconds":30,"closedIntervalSeconds":21600,"dailyTimes":[],"weekdaysOnly":false},

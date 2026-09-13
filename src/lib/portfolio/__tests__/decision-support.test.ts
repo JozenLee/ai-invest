@@ -51,6 +51,14 @@ describe('portfolio decision support', () => {
     expect(support.adjustmentPlan.completed).toBe(true)
   })
 
+  it('uses the current holding snapshot without a date freshness gate', () => {
+    const support = buildPortfolioDecisionSupport({ evaluation: evaluation(), totalAssets: 100000, cashWeightPct: 10, policy, dataQualityAvailable: true, portfolioAsOf: null, holdings: [
+      { ticker: '017470', name: '嘉实芯片ETF联接C', targetEtfCode: '159995', targetIndexCode: '980017.SZ', mappingConfidence: 1, redemptionFeePct: 0, costNav: 1, unitNav: 2, weightPct: 19, marketValue: 19000 },
+    ] })
+    expect(support.gates.some(item => item.key === 'portfolio-freshness')).toBe(false)
+    expect(support.readiness).toBe('advice-ready')
+  })
+
   it('uses the final comprehensive conclusion as a one-way gate on new exposure', () => {
     const support = buildPortfolioDecisionSupport({ evaluation: evaluation('eligible'), totalAssets: 100000, cashWeightPct: 20, policy, dataQualityAvailable: true, portfolioAsOf: new Date().toISOString(), investmentAdvice: { rating: '谨慎', executiveSummary: { conclusion: '产业逻辑仍需验证', allocationStance: '暂不扩大风险暴露' } }, holdings: [
       { ticker: '017470', name: '嘉实芯片ETF联接C', targetEtfCode: '159995', targetIndexCode: '980017.SZ', mappingConfidence: 1, redemptionFeePct: 0, costNav: 1, unitNav: 2, weightPct: 5, marketValue: 5000 },

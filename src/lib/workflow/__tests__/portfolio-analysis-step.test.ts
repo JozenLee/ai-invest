@@ -21,7 +21,7 @@ describe('portfolio analysis privacy fallback',()=>{
 })
 
  it('accepts a complete model object followed by repeated Markdown fences',async()=>{
-  const result={analysis:'按已冻结比例解释组合风险',priorities:[],risks:[],watchlist:[]}
+  const result={analysis:'按已冻结比例解释组合风险',conclusionApplication:'综合结论限制新增风险',priorities:[],risks:[],watchlist:[]}
   const response='```json\n'+JSON.stringify(result)+'```\n```'
   vi.mocked(runAnalysisPrompt).mockImplementationOnce(async(_context,params)=>{
     params.validateOutput?.(response)

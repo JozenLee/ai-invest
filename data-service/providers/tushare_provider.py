@@ -169,7 +169,7 @@ class TushareProvider(DataProvider):
 
     # ==================== 指数数据 ====================
 
-    async def get_index_spot(self) -> pd.DataFrame:
+    async def get_index_spot(self, symbols: Optional[List[str]] = None) -> pd.DataFrame:
         """获取指数实时行情快照
 
         交易时段使用 Promax 的 rt_k 实时接口；非交易时段使用 index_daily
@@ -188,6 +188,9 @@ class TushareProvider(DataProvider):
             "000688.SH",  # 科创50
             "000300.SH",  # 沪深300
         ]
+
+        if symbols is not None:
+            index_codes = list(dict.fromkeys(self._to_ts_code(code) for code in symbols))
 
         # 市场概览是页面首屏接口，不能串行等待 5 个 Tushare 请求。
         # 单个指数失败或超时时跳过该指数，其他指数仍可正常返回。
@@ -321,11 +324,9 @@ class TushareProvider(DataProvider):
 
     async def get_index_realtime(self, symbols: List[str]) -> pd.DataFrame:
         """获取指定指数实时行情"""
-        # 复用 get_index_spot 后筛选
-        df = await self.get_index_spot()
-        if not df.empty:
-            df = df[df["代码"].isin(symbols)]
-        return df
+        # Only fetch requested indices. A missing target must reach registry
+        # fallback rather than be hidden by another index's successful quote.
+        return await self.get_index_spot(symbols=symbols)
 
     # ==================== 个股数据 ====================
 

@@ -1,3 +1,4 @@
+import { researchCitationSources } from '../research-output'
 import { buildOpportunityLedger, type ResearchOpportunity } from '@/lib/analysis/opportunity-ledger'
 import { auditResearchConsistency } from '@/lib/analysis/research-consistency'
 import { enrichCatalysts } from '@/lib/analysis/disclosed-exposure'
@@ -12,6 +13,8 @@ import { auditEvidenceTree } from '@/lib/analysis/evidence-references'
 import type { FrozenGraphContext } from '@/lib/graph/research-context'
 import type { StepDefinition } from '../types'
 import { refreshEventPaths } from '../event-paths'
+import { auditReportFacts, buildResearchFactRegistry } from '@/lib/analysis/fact-audit'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 
 type ArchivedReportData = {
   opportunityLedger?: ResearchOpportunity[]
@@ -80,7 +83,7 @@ export const generateReportStep: StepDefinition = {
     const lineage = context.input.rulesOnly ? await reviewLineage(context.input.parentRunId) : { parent: null, narrative: null }
     const parentData = parseArchivedData(lineage.parent?.dataJson || null)
     const inheritedData = parseArchivedData(lineage.narrative?.dataJson || null)
-    const evidenceSources=(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]) as Evaluation['evidence']
+    const evidenceSources=researchCitationSources(context)
     const industryAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.industryAnalysis : context.artifacts.get('industry-overview'),evidenceSources)
     const companyAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.companyAnalysis : context.artifacts.get('company-analysis'),evidenceSources)
     const inheritedSentiment = context.input.rulesOnly ? inheritedData.sentimentAnalysis : context.artifacts.get('news-analysis')
@@ -90,7 +93,8 @@ export const generateReportStep: StepDefinition = {
     const executiveConclusion = String(executiveSummary.conclusion || investmentRecord.thesis || '').replace(/\s+/g, ' ').trim()
     const marketAnalysis = auditEvidenceTree(context.input.rulesOnly ? inheritedData.marketAnalysis : context.artifacts.get('market-analysis'),evidenceSources)
     const etfBindings = (context.artifacts.get('etf-bindings') as Array<Record<string, unknown>> | undefined) || []
-    const evaluation = context.artifacts.get('research-evaluation') as Evaluation | undefined
+    const frozenEvaluation = context.artifacts.get('research-evaluation') as Evaluation | undefined
+    const evaluation = frozenEvaluation?{...frozenEvaluation,evidence:evidenceSources}:undefined
     const dataQuality = context.artifacts.get('data-quality')
     const researchPreflight = context.artifacts.get('research-preflight')
     const graphContext = (context.artifacts.get('graph-context') || context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext | undefined
@@ -132,12 +136,27 @@ export const generateReportStep: StepDefinition = {
       company: context.artifacts.get('company-analysis-ai-status') || null,
       industry: context.artifacts.get('industry-overview-ai-status') || null,
       investment: context.artifacts.get('investment-advice-ai-status') || null,
+      portfolio: context.artifacts.get('portfolio-analysis-ai-status') || null,
     }
     const consistencyIssues=[...new Set([
       ...['market-analysis','news-analysis','company-analysis','industry-overview','investment-advice'].flatMap(key=>(context.artifacts.get(`${key}-consistency`)||[]).filter((issue:{severity:string})=>issue.severity==='error').map((issue:{detail:string})=>issue.detail)),
       ...[marketAnalysis,companyAnalysis,sentimentAnalysis,industryAnalysis,investmentAdvice].flatMap(value=>auditResearchConsistency(value,context.artifacts.get('company-market-data')).map(issue=>issue.detail)),
+      ...[marketAnalysis,companyAnalysis,sentimentAnalysis,industryAnalysis,investmentAdvice].flatMap(value=>auditReportFacts(value,{ evaluation, snapshot:context.artifacts.get('research-snapshot'),companyData:context.artifacts.get('company-market-data') }).issues.filter(issue=>issue.severity==='error').map(issue=>issue.detail)),
     ])] as string[]
-    const reportQuality = buildReportQuality({ consistencyIssues, evaluation, dataQuality, preflight: researchPreflight, decisionTiming, analysisStatuses })
+    const finalSections:Record<string,unknown>={'market-analysis':marketAnalysis,'news-analysis':sentimentAnalysis,'company-analysis':companyAnalysis,'industry-overview':industryAnalysis,'investment-advice':investmentAdvice}
+    const collectReferenceIssues=(value:unknown):string[]=>{
+      if(typeof value==='string'){try{return collectReferenceIssues(JSON.parse(value))}catch{return []}}
+      if(Array.isArray(value))return value.flatMap(collectReferenceIssues)
+      if(!value||typeof value!=='object')return []
+      const row=value as Record<string,unknown>
+      return [...(Array.isArray(row.referenceIssues)?row.referenceIssues.filter((item):item is string=>typeof item==='string'):[]),...Object.values(row).flatMap(collectReferenceIssues)]
+    }
+    const outputValidations=Object.fromEntries(Object.entries(finalSections).map(([key,value])=>{
+      const previous=context.artifacts.get(`${key}-validation`)
+      const issues=[...new Set([...(previous?.issues||[]),...collectReferenceIssues(value)])]
+      return [key,{...previous,status:issues.length?'limited':previous?.status||'passed',issues}]
+    }))
+    const reportQuality = buildReportQuality({ outputValidations, consistencyIssues, evaluation, dataQuality, preflight: researchPreflight, decisionTiming, analysisStatuses, portfolioDecisionSupport })
     const reviewDelta = context.input.rulesOnly ? buildReportReviewDelta({
       current: evaluation,
       previous: parentData.researchEvaluation,
@@ -159,15 +178,17 @@ export const generateReportStep: StepDefinition = {
     if(context.input.rulesOnly)await context.saveArtifact('opportunity-ledger',buildOpportunityLedger({asOf:evaluation?.asOf||generatedAt,news:sentimentAnalysis,events:context.artifacts.get('news-events'),holdings:context.artifacts.get('etf-holdings'),decisions:evaluation?.decisions,graph:graphContext,history:[{opportunityLedger:parentData.opportunityLedger||inheritedData.opportunityLedger||[]}],snapshot:context.artifacts.get('research-snapshot')}),'DATA')
     const finalInvestment={...record(investmentAdvice),opportunityLedger:context.artifacts.get('opportunity-ledger')||[]}
     investmentAdvice=typeof investmentAdvice==='string'?JSON.stringify(finalInvestment):finalInvestment
+    const narrativeInvestment = Object.fromEntries(Object.entries(finalInvestment).filter(([key]) => !['opportunityLedger','executiveSummary','ruleAssessment','productSelection'].includes(key)))
+    const narrativeOpportunities = (context.artifacts.get('opportunity-ledger') || []).map((item: Record<string, unknown>) => ({title:item.title,state:item.state,firstSeenAt:item.firstSeenAt,informationStatus:item.informationStatus,hypothesis:item.hypothesis,verification:item.verification,invalidation:item.invalidation,pricingAssessment:item.pricingAssessment,nextReview:item.nextReview,outcome:item.outcome,exposure:item.exposure}))
     const reportContent = fullResearchMarkdown({ title, onePageAvailable: !!social, actions, decisionTiming, sections: [
       { title: '核心判断与行动条件', value: executiveSummary },
-      { title: '机会跟踪与验证', value: context.artifacts.get('opportunity-ledger') || [] },
+      { title: '机会跟踪与验证', value: narrativeOpportunities },
       { title: '市场分析', value: marketAnalysis },
       { title: '产业资讯分析', value: sentimentAnalysis },
       { title: '产业链企业分析', value: companyAnalysis },
       { title: '产业认知基线与传导', value: graphReportSection },
       { title: '行业总览', value: industryAnalysis },
-      { title: '投资建议与反证', value: investmentAdvice },
+      { title: '投资假设、建议与反证', value: narrativeInvestment },
     ] })
 
     await context.updateProgress(1, 2, '正在保存报告...')
@@ -198,6 +219,10 @@ export const generateReportStep: StepDefinition = {
             investment: context.artifacts.get('investment-advice-graph-usage-validation'),
           },
           analysisStatuses,
+          outputValidations,
+          factAudit: auditReportFacts(finalSections, { evaluation, snapshot: context.artifacts.get('research-snapshot'), companyData: context.artifacts.get('company-market-data') }),
+          researchFacts: buildResearchFactRegistry({ evaluation, snapshot: context.artifacts.get('research-snapshot'), companyData: context.artifacts.get('company-market-data') }),
+          investmentTheses: context.artifacts.get('investment-theses') || [],
           aiServiceStatus: context.artifacts.get('ai-service-status') || null,
           researchPreflight,
           dataQuality,
@@ -210,6 +235,7 @@ export const generateReportStep: StepDefinition = {
           inheritedFromReportId: context.input.rulesOnly ? lineage.narrative?.id || null : null,
           privatePortfolioAnalysis: context.artifacts.get('portfolio-analysis'),
           portfolioDecisionSupport,
+          privateForwardCohort: context.artifacts.get('portfolio-forward-cohort') || null,
           marketSnapshot: context.artifacts.get('market-snapshot'),
           marketAnalysis,
           industryAnalysis,
@@ -231,14 +257,18 @@ export const generateReportStep: StepDefinition = {
       }
     // Recover from a save succeeding before the worker could persist report-id.
     const existing = await prisma.aIAnalysisReport.findFirst({ where: { type: reportType, dataJson: { contains: JSON.stringify({ runId: context.runId }).slice(1, -1) } } })
-    const report = existing
-      ? await prisma.aIAnalysisReport.update({ where: { id: existing.id }, data })
-      : await prisma.aIAnalysisReport.create({ data })
+    const report = await withDatabaseBusyRetry(() => existing
+      ? prisma.aIAnalysisReport.update({ where: { id: existing.id }, data })
+      : prisma.aIAnalysisReport.create({ data }))
 
     await context.updateProgress(2, 2, '报告生成完成')
 
     // 保存报告ID
     await context.saveArtifact('report-id', report.id, 'REFERENCE')
     await context.saveArtifact('report-content', reportContent, 'DATA')
+    if (context.artifacts.has('portfolio-forward-cohort')) {
+      const { linkPortfolioForwardCohortReport } = await import('@/lib/portfolio/forward-cohort-store')
+      await linkPortfolioForwardCohortReport({ runId: context.runId, reportId: report.id })
+    }
   }
 }

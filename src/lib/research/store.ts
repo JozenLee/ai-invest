@@ -18,6 +18,7 @@ import { selectHistoricalReports } from './history-reports'
 import { assessDecisionTiming } from '@/lib/analysis/decision-timing'
 import { buildFrozenGraphContext, graphCompanyCandidates, type RawGraphGroup } from '@/lib/graph/research-context'
 import {compactReplaySnapshot,replayResearch} from './replay'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 
 export const encode = (value: unknown) => JSON.stringify(value, (_key,v)=>typeof v==='bigint'?Number(v):v)
 export const digest = (value: unknown) => createHash('sha256').update(encode(value)).digest('hex')
@@ -78,7 +79,7 @@ export async function saveResearchProfile(value: unknown, industryId: string) {
 
 /** A transaction freezes mutable tables NOW. Historical runs must replay a saved snapshot,
  * never query today's revised fundamentals under an arbitrary past asOf. */
-export async function captureResearchSnapshot(industryId: string): Promise<ResearchSnapshot> {
+export async function captureResearchSnapshot(industryId: string, options: { additionalEtfs?: Array<{ code: string; name: string }> } = {}): Promise<ResearchSnapshot> {
   return prisma.$transaction(async tx=>{
     const asOf=new Date().toISOString(), id=randomUUID()
     const subscriptions=await tx.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},include:{instrument:true,datasets:true}})
@@ -92,7 +93,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     if(!selected.length) throw new Error('该领域没有已订阅ETF，请先同步领域映射')
     const configRow=await tx.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}})
     const profile=configRow?validateProfile(parse(configRow.payload),industryId):defaultProfile(industryId,group?.name||parse<SubscriptionProfile>(selected[0].profile)?.industryName||industryId)
-    const tickers=selected.map(s=>s.instrument.code)
+    const instruments = [...new Map([...(options.additionalEtfs || []).filter(item => /^\d{6}$/.test(item.code)), ...selected.map(s => ({ code: s.instrument.code, name: s.instrument.name }))].map(item => [item.code, item])).values()]
+    const tickers=instruments.map(s=>s.code)
     const earliest=new Date(Date.parse(asOf)-800*86400000)
     const rawDb=await tx.rawPayload.findMany({where:{fetchedAt:{lte:new Date(asOf),gte:earliest},OR:[{targetCode:{in:tickers},datasetKey:{in:['etf_daily','etf_holdings','etf_research','etf_realtime']}},{datasetKey:{in:['research_calendar','sector_capital_flow','market_main_flow','margin_balance','market_volume','news_taxonomy','index_daily']}}]},orderBy:{fetchedAt:'desc'}})
     const raw:SourceRecord[]=rawDb.map(r=>({...r,fetchedAt:r.fetchedAt.toISOString()}))
@@ -123,8 +125,8 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     if(latest('research_calendar')) sourceEvidence(latest('research_calendar')!)
     const daily=await tx.eTFDaily.findMany({where:{ticker:{in:tickers},date:{gte:earliest,lte:new Date(closeCutoff+'T23:59:59Z')}},orderBy:{date:'asc'}})
     const holdings=await tx.eTFHolding.findMany({where:{etfCode:{in:tickers}},orderBy:{weight:'desc'}})
-    const etfs:ETFInput[]=selected.map(s=>{
-      const ticker=s.instrument.code
+    const etfs:ETFInput[]=instruments.map(s=>{
+      const ticker=s.code
       const researchRaws=raw.filter(r=>r.datasetKey==='etf_research'&&symbol(r.targetCode)===symbol(ticker))
       const researchEntries=researchRaws.map(raw=>({raw,bundle:parse<Bundle>(raw.payload)?.data||{}}))
       researchEntries.push(...raw.filter(r=>r.datasetKey==='etf_realtime'&&symbol(r.targetCode)===ticker).map(raw=>({raw,bundle:{orderbook:rowsOf(raw).filter(row=>row.bookPublishedAt).map(row=>({code:ticker,bid:row.bid,ask:row.ask,publishedAt:row.bookPublishedAt,date:row.bookDate,source:row.bookSource}))}})))
@@ -203,7 +205,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
         const fallbackId=`${id}:holding:${ticker}:${code}:${index}`
         return {code,name:String(row.stock_name||row.name||persistedNames.get(code)||code),weight:row.weight_available===false?null:number(row.weight??row.stk_mkv_ratio),period,publishedAt:dateKey(row.ann_date||row.publish_date),observedAt:holdingRaw?.fetchedAt||null,source:String(row.source||'legacy-holdings-period-unknown'),evidenceId:holdingRaw?.id||add({id:fallbackId,source:'legacy-holdings-period-unknown',dataDate:period,publishedAt:null,fetchedAt:holdingRaw?.fetchedAt||asOf,hash:digest(row)})}
       }):persistedHoldings.slice(0,10).map(row=>({code:symbol(row.stockCode),name:String(row.stockName),weight:number(row.weight),period:null,publishedAt:null,source:'legacy-holdings-period-unknown',evidenceId:holdingRaw?.id||add({id:`${id}:holding:${row.id}`,source:'legacy-holdings-period-unknown',dataDate:null,publishedAt:null,fetchedAt:row.updateDate.toISOString(),hash:digest(row)})}))
-      return {ticker,name:s.instrument.name||ticker,bars:mergeIntradayBar([...new Map([...bars(localBars),...researchBars].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date)),liveQuote).slice(-profile.rules.minHistory-40),evidenceIds:etfEvidence,
+      return {ticker,name:String(info.name||info.fund_name||s.name||ticker),bars:mergeIntradayBar([...new Map([...bars(localBars),...researchBars].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date)),liveQuote).slice(-profile.rules.minHistory-40),evidenceIds:etfEvidence,
         fieldStatus:latestAudit,factors:factorRows,adjustmentSource:research.factors?.length?'Tushare/fund_adj':undefined,
         indexCode:/^[A-Z0-9]{6}\.(SH|SZ|CSI)$/.test(mapped)?mapped:null,indexName:typeof info.index_name==='string'?info.index_name:undefined,indexBars:bars(research.indexDaily||[],1000),
         navHistory:(research.nav||[]).filter(r=>dateKey(r.nav_date)&&dateKey(r.nav_date)!<=cutoff&&dateKey(r.ann_date)&&dateKey(r.ann_date)!<=chinaDate(asOf)).flatMap(r=>{const nav=number(r.adj_nav??r.accum_nav);return nav!==null&&nav>0?[{date:dateKey(r.nav_date)!,nav}]:[]}),
@@ -321,7 +323,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const changePct=quote?.changePct??(aligned&&last&&previous&&previous.close>0?(last.close/previous.close-1)*100:null)
       return {...index,price:aligned?last?.close||null:null,previousClose:previous?.close||null,open:aligned?last?.open||null:null,high:aligned?last?.high||null:null,low:aligned?last?.low||null:null,volume:aligned?last?.volume||null:null,change,changePct,dataDate:last?.date||null,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,source:quote?.source||'local-index-daily',intraday:Boolean(quote),aligned,sampleCount:series.length,indicators:metrics.indicators,history:series.slice(-120)}
     })
-    const reference=(key:string)=>{const r=latest(key);if(!r)return null;sourceEvidence(r);const data=rowsOf(r).filter(row=>dateKey(row.trade_date)&&dateKey(row.trade_date)!<=cutoff);return {data,source:parse<Bundle>(r.payload)?.source||r.provider,dataDate:dateKey(data[0]?.trade_date),fetchedAt:r.fetchedAt,stale:!data.length||Date.parse(asOf)-Date.parse(dateKey(data[0]?.trade_date)!)>7*86400000}}
+    const reference=(key:string)=>{const r=latest(key);if(!r)return null;sourceEvidence(r);const data=rowsOf(r).filter(row=>dateKey(row.trade_date)&&dateKey(row.trade_date)!<=cutoff);return {data,evidenceIds:[r.id],source:parse<Bundle>(r.payload)?.source||r.provider,dataDate:dateKey(data[0]?.trade_date),fetchedAt:r.fetchedAt,stale:!data.length||Date.parse(asOf)-Date.parse(dateKey(data[0]?.trade_date)!)>7*86400000}}
     const references={mainFlow:reference('market_main_flow'),margin:reference('margin_balance')}
     const latestSectorFlowDate=sectorFlows.map(row=>row.date).sort().at(-1)||null
     const latestSectorFlows=latestSectorFlowDate?sectorFlows.filter(row=>row.date===latestSectorFlowDate):[]
@@ -364,10 +366,10 @@ export async function persistEvaluation(snapshot: ResearchSnapshot, previous?: E
   const existing=await prisma.rawPayload.findUnique({where:{id:snapshot.id+':evaluation'}})
   if(existing){const stored=JSON.parse(existing.payload) as Evaluation;const original=await readSnapshot(snapshot.id);if(digest(original)!==digest(snapshot))throw new Error('禁止覆盖已冻结的研究快照');return stored}
   const result=evaluateResearch(snapshot,previous&&previous.asOf<snapshot.asOf&&previous.profile.industryId===snapshot.profile.industryId?previous:null)
-  await prisma.$transaction([
+  await withDatabaseBusyRetry(() => prisma.$transaction([
     prisma.rawPayload.upsert({where:{id:snapshot.id},create:{id:snapshot.id,datasetKey:'research_snapshot',targetCode:snapshot.profile.industryId,provider:'frozen-local-v1',payload:encode(snapshot),contentHash:digest(snapshot)},update:{}}),
     prisma.rawPayload.upsert({where:{id:snapshot.id+':evaluation'},create:{id:snapshot.id+':evaluation',datasetKey:'research_evaluation',targetCode:snapshot.profile.industryId,provider:'rules-v1',payload:encode(result),contentHash:digest(result)},update:{}}),
-  ])
+  ]))
   return result
 }
 
@@ -380,7 +382,8 @@ export async function persistResearchSnapshot(snapshot:ResearchSnapshot){
     if(existing.datasetKey!=='research_snapshot'||existing.contentHash!==digest(snapshot))throw new Error('禁止覆盖已冻结的研究快照')
     return existing
   }
-  return prisma.rawPayload.upsert({where:{id:snapshot.id},create:{id:snapshot.id,datasetKey:'research_snapshot',targetCode:snapshot.profile.industryId,provider:'frozen-local-v1',payload:encode(snapshot),contentHash:digest(snapshot)},update:{}})
+  const payload = encode(snapshot), contentHash = digest(snapshot)
+  return withDatabaseBusyRetry(() => prisma.rawPayload.upsert({where:{id:snapshot.id},create:{id:snapshot.id,datasetKey:'research_snapshot',targetCode:snapshot.profile.industryId,provider:'frozen-local-v1',payload,contentHash},update:{}}))
 }
 export async function latestEvaluation(industryId: string): Promise<Evaluation|null> {
   const row=await prisma.rawPayload.findFirst({where:{datasetKey:'research_evaluation',targetCode:industryId},orderBy:{fetchedAt:'desc'}})

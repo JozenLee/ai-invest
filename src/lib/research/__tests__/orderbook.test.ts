@@ -19,5 +19,8 @@ describe('frozen product observations',()=>{
     expect(holdingPeriod('2026年2季度')).toBeNull()
     expect(securityCode('00700.HK')).toBe(securityCode('0700.HK'))
     expect(securityCode('00700.HK')).toBe('700.hk')
+    expect(securityCode('科华数据(002335)')).toBe('002335')
+    expect(securityCode('301018申菱环境')).toBe('301018')
+    expect(securityCode('比较002335与301018')).toBe('比较002335与301018')
   })
 })

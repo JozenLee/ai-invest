@@ -1,5 +1,5 @@
 import { enrichCatalysts } from '@/lib/analysis/disclosed-exposure'
-import { auditResearchConsistency } from '@/lib/analysis/research-consistency'
+import { auditReportFacts, type FactAuditInput } from '@/lib/analysis/fact-audit'
 import { auditClaim, type EvidenceClaim } from '@/lib/analysis/evidence-references'
 import type { Evidence } from '@/lib/research/contracts'
 import type { StepContext } from './types'
@@ -18,9 +18,28 @@ export function parseResearchObject(raw:string){
   const clean=raw.trim().replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,'')
   let value:unknown
   try{value=JSON.parse(clean)}catch(original){
-    const start=clean.indexOf('{'),end=clean.lastIndexOf('}')
-    if(start<0||end<=start)throw original
-    value=JSON.parse(clean.slice(start,end+1).replace(/,\s*([}\]])/g,'$1'))
+    // Some gateways return one valid report object and a second fenced object
+    // containing an appended assessment. Merge valid fenced objects instead of
+    // paying for a full regeneration because of presentation-only prose.
+    const fenced=[...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].flatMap(match=>{
+      try{const parsed=JSON.parse(match[1].trim().replace(/,\s*([}\]])/g,'$1'));return parsed&&typeof parsed==='object'&&!Array.isArray(parsed)?[parsed as Record<string,unknown>]:[]}
+      catch{return []}
+    })
+    if(fenced.length)value=Object.assign({},...fenced)
+    else{
+      const start=clean.indexOf('{')
+      if(start<0)throw original
+      let depth=0,inString=false,escaped=false,end=-1
+      for(let index=start;index<clean.length;index++){
+        const char=clean[index]
+        if(inString){if(escaped)escaped=false;else if(char==='\\')escaped=true;else if(char==='"')inString=false;continue}
+        if(char==='"'){inString=true;continue}
+        if(char==='{')depth++
+        else if(char==='}'&&--depth===0){end=index;break}
+      }
+      if(end<=start)throw original
+      value=JSON.parse(clean.slice(start,end+1).replace(/,\s*([}\]])/g,'$1'))
+    }
   }
   if(!value||typeof value!=='object'||Array.isArray(value))throw new Error('智能分析输出必须是JSON对象')
   return value as Record<string,unknown>
@@ -30,6 +49,7 @@ function sanitize(value:unknown,issues:string[]):unknown{
   if(Array.isArray(value))return value.map(item=>sanitize(item,issues))
   if(!value||typeof value!=='object')return value
   const row=Object.fromEntries(Object.entries(value).map(([key,item])=>[key,sanitize(item,issues)]))
+  if('matchedProducts' in row&&typeof row.matchedProducts==='string')row.matchedProducts=row.matchedProducts.split(/[；;,，]/).map(item=>item.trim()).filter(Boolean)
   if(typeof row.claim==='string'&&financialClaim.test(row.claim)&&typeof row.source==='string'&&/fund_adj|复权因子/i.test(row.source)){
     row.source=row.source.split(/[；;,，]/).filter(part=>!/fund_adj|复权因子/i.test(part)).join('；').trim()||'公司财报证据（请按证据编号复核）'
     issues.push('已移除不能支持公司财务结论的ETF复权因子来源')
@@ -42,8 +62,10 @@ function missingFields(row:Record<string,unknown>,fields:string[]){return fields
 function validateNestedOutput(value:Record<string,unknown>,key:string,issues:string[]){
   if(key==='company-analysis'){
     for(const [index,row] of objectRows(value.key_companies).entries()){
-      const missing=missingFields(row,['code','name','graphPath','selectionReason','mappingConfidence','matchedProducts','operatingEvidence','counterEvidence'])
+      const missing=[...missingFields(row,['code','name','graphPath','selectionReason','operatingEvidence','counterEvidence']),...['mappingConfidence','matchedProducts'].filter(field=>!(field in row))]
       if(missing.length)issues.push(`重点企业${index+1}缺少结构化字段：${missing.join('、')}`)
+      if('mappingConfidence' in row&&row.mappingConfidence!==null&&typeof row.mappingConfidence!=='number')issues.push(`重点企业${index+1}的mappingConfidence必须为数值或null`)
+      if('matchedProducts' in row&&!Array.isArray(row.matchedProducts))issues.push(`重点企业${index+1}的matchedProducts必须为数组`)
     }
   }
   if(key==='news-analysis'){
@@ -72,9 +94,40 @@ export function validateResearchOutput(raw:string,key:string){
   const value=parseResearchObject(raw),issues:string[]=[]
   const missing=(required[key]||[]).filter(field=>!(field in value))
   if(missing.length)throw new Error(`${key}输出缺少字段：${missing.join('、')}`)
+  const arrays=['evidence','counterEvidence','watchlist','key_companies','catalysts','risks','drivers','etfImplications']
+  for(const field of required[key]||[]){
+    if(arrays.includes(field)&&!Array.isArray(value[field]))throw new Error(`${key}输出字段类型错误：${field} 必须是数组`)
+    if(['analysis','trend','risk_level','sentiment','stage','rating','thesis'].includes(field)&&(typeof value[field]!=='string'||!String(value[field]).trim()))throw new Error(`${key}输出字段类型错误：${field} 必须是非空字符串`)
+  }
   const sanitized=sanitize(value,issues)
   validateNestedOutput(sanitized as Record<string,unknown>,key,issues)
   return {text:JSON.stringify(sanitized),issues}
+}
+
+export function researchCitationSources(context:StepContext):Evidence[]{
+  return [...(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]),...[...context.artifacts.entries()].filter(([key])=>key.startsWith('research-citations-')).flatMap(([,value])=>Array.isArray(value)?value:[])]
+}
+
+function factAuditInput(context:StepContext):FactAuditInput {
+  return {snapshot:context.artifacts.get('research-snapshot'),evaluation:context.artifacts.get('research-evaluation'),companyData:context.artifacts.get('company-market-data'),facts:context.artifacts.get('research-facts')}
+}
+
+/** Run unresolved reference checks inside the retry boundary; date corrections are informational. */
+export function validateResearchResponse(raw:string,key:string,context:StepContext){
+  const result=validateResearchOutput(raw,key)
+  const sources=researchCitationSources(context)
+  const visit=(value:unknown)=>{
+    if(Array.isArray(value)){value.forEach(visit);return}
+    if(!value||typeof value!=='object')return
+    const row=value as Record<string,unknown>
+    if(typeof row.claim==='string')result.issues.push(...(auditClaim(row as EvidenceClaim,sources).referenceIssues||[]))
+    else Object.values(row).forEach(visit)
+  }
+  visit(JSON.parse(result.text))
+  const factAudit=auditReportFacts(result.text,factAuditInput(context))
+  result.issues.push(...factAudit.issues.filter(issue=>issue.severity==='error').map(issue=>`${issue.path}：${issue.detail}`))
+  if(result.issues.length)throw new Error('智能分析输出校验失败：'+[...new Set(result.issues)].slice(0,8).join('；'))
+  return {...result,factAudit}
 }
 
 export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:number|null;pb?:number|null;valuationDate?:string|null;valuationSource?:string|null;pePercentileHistory?:number|null;pbPercentileHistory?:number|null;valuationHistoryStart?:string|null;valuationSampleCount?:number}>){
@@ -89,21 +142,25 @@ export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:nu
 
 export async function saveValidatedResearchOutput(context:StepContext,key:string,raw:string){
   const result=validateResearchOutput(raw,key)
+  const corrections:string[]=[]
   if(key==='news-analysis')result.text=JSON.stringify(enrichCatalysts(JSON.parse(result.text),context.artifacts.get('etf-holdings'),context.artifacts.get('research-snapshot')?.companies))
-  const sources=(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]) as Evidence[]
+  const sources=researchCitationSources(context)
   const audit=(value:unknown):unknown=>{
     if(Array.isArray(value))return value.map(audit)
     if(!value||typeof value!=='object')return value
     const row=value as Record<string,unknown>
-    if(typeof row.claim==='string'){const checked=auditClaim(row as EvidenceClaim,sources);result.issues.push(...(checked.referenceIssues||[]));return checked}
+    if(typeof row.claim==='string'){const checked=auditClaim(row as EvidenceClaim,sources);result.issues.push(...(checked.referenceIssues||[]));corrections.push(...(checked.referenceCorrections||[]));return checked}
     return Object.fromEntries(Object.entries(row).map(([field,item])=>[field,audit(item)]))
   }
   result.text=JSON.stringify(audit(JSON.parse(result.text)))
-  const consistency=auditResearchConsistency(result.text,context.artifacts.get('company-market-data'))
-  result.issues.push(...consistency.map(issue=>issue.detail))
+  const factAudit=auditReportFacts(result.text,factAuditInput(context))
+  const consistency=factAudit.issues
+  result.issues.push(...consistency.filter(issue=>issue.severity==='error').map(issue=>issue.detail))
+  const warnings=[...new Set(consistency.filter(issue=>issue.severity==='warning').map(issue=>issue.detail))]
   await context.saveArtifact(`${key}-consistency`,consistency,'DATA')
+  await context.saveArtifact(`${key}-fact-audit`,factAudit,'DATA')
   await context.saveArtifact(key,result.text,'DATA')
-  await context.saveArtifact(`${key}-validation`,{status:result.issues.length?'limited':'passed',issues:result.issues},'DATA')
+  await context.saveArtifact(`${key}-validation`,{status:result.issues.length?'limited':corrections.length?'corrected':'passed',issues:[...new Set(result.issues)],warnings,corrections:[...new Set(corrections)],reason:result.issues.length?'输出证据或结构校验未通过：'+[...new Set(result.issues)].slice(0,3).join('；'):corrections.length?'证据日期或来源显示已校正；不计为数据缺失':undefined},'DATA')
   const graph=(context.artifacts.get('graph-context')||context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext|undefined
   const usageIssues:string[]=[]
   const parsed=JSON.parse(result.text) as Record<string,unknown>

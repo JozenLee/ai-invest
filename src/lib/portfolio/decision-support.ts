@@ -1,6 +1,8 @@
 import { indexRuleSummary, productGroups } from '@/lib/analysis/report-insights'
 import type { Evaluation } from '@/lib/research/contracts'
 import type { DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
+import type { PortfolioAlternatives } from './alternatives'
+import type { RiskBudgetSource } from './risk-budget'
 
 export type RiskBudget = {
   riskProfile: 'conservative' | 'moderate' | 'aggressive'
@@ -95,6 +97,9 @@ export type PortfolioDecisionSupport = {
   productMappingCoveragePct?: number
   costCoveragePct: number
   confidencePct: number
+  confidenceMeaning?: string
+  alternatives?: PortfolioAlternatives
+  productResearch?: unknown
   riskDiagnostics?: {
     concentrationHhi: number
     effectiveFundCount: number
@@ -112,27 +117,35 @@ export type PortfolioDecisionSupport = {
   actions: PortfolioAction[]
   gates: Array<{ key: string; label: string; met: boolean; detail: string }>
   policy: RiskBudget
+  policySource?: RiskBudgetSource
   disclaimer: string
 }
 
 export function applyDecisionTimingGate(support: PortfolioDecisionSupport | null | undefined, timing: DecisionTimingAssessment) {
   if (!support) return support
-  if(support.allocationVersion!==2){
+  if((support.allocationVersion || 0)<2){
     const actions=support.actions.map(action=>!action.mapping.verified||(action.changeWeightPct||0)<0&&action.estimatedFee===null?{...action,action:'补充数据' as const,targetWeightPct:null,changeWeightPct:null,amount:null,estimatedUnits:null,estimatedFee:null,executable:false,reason:'历史方案缺少已核验底层映射或赎回成本，仅保留领域预算，不展示逐基金金额'}:action)
     const delta=actions.reduce((sum,action)=>sum+(action.changeWeightPct||0),0)
     support={...support,actions,proposedIndustryWeightPct:support.currentIndustryWeightPct+delta,proposedCashWeightPct:support.cashWeightPct-delta,allocationBasis:'归档兼容：未核验映射或成本的历史逐基金金额已隐藏，待新分析重新计算。',adjustmentPlan:{completed:false,remainingCashGapPct:Math.max(0,support.cashTargetFloorPct-support.cashWeightPct+delta),remainingIndustryReductionPct:Math.max(0,support.currentIndustryWeightPct+delta-support.targetIndustryRangePct[1]),steps:[{stage:1,label:'补齐映射与费用',detail:'领域预算保留，未核验基金不分配金额；完成核验后重新计算。',executable:false}]}}
   }
-  const timingGate = { key: 'decision-timing', label: '报告时效', met: timing.executionReady, detail: timing.executionReady ? `快照冻结于交易时段（${timing.asOf}）` : timing.reasons.join('；') || '快照冻结于非交易时间' }
-  const gates = [...support.gates.filter(gate => gate.key !== timingGate.key), timingGate]
-  if (timing.executionReady) return { ...support, gates }
+  const selected = support.alternatives?.alternatives.find(item => item.id === support.alternatives?.selectedId)
+  const requiresExecution = selected ? selected.trades.length > 0 : support.actions.some(action => Math.abs(action.changeWeightPct || 0) > .000001)
+  const timingGate = { key: 'decision-timing', label: '报告时效', met: !requiresExecution || timing.executionReady, detail: !requiresExecution ? '当前选定方案不包含交易，无需交易时段执行校验' : timing.executionReady ? `快照冻结于交易时段（${timing.asOf}）` : timing.reasons.join('；') || '快照冻结于非交易时间' }
+  const normalizedGates = support.gates.map(gate => !requiresExecution && gate.key === 'product-execution'
+    ? { ...gate, met: true, detail: '当前方案无交易，不需要产品执行资料' }
+    : !requiresExecution && gate.key === 'cost'
+      ? { ...gate, met: true, detail: '当前方案无交易，交易费用为零' }
+      : gate)
+  const gates = [...normalizedGates.filter(gate => gate.key !== timingGate.key), timingGate]
+  if (!requiresExecution || timing.executionReady) return { ...support, gates }
   return {
     ...support,
     readiness: support.readiness === 'blocked' ? 'blocked' as const : 'limited-advice' as const,
-    summary: `当前报告仅供投资参考，不应直接下单。${support.summary}`,
+    summary: `当前报告仅供投资参考，不应直接下单。${support.summary.replace(/^(?:当前报告仅供投资参考，不应直接下单。)+/, '')}`,
     actions: support.actions.map(action => ({ ...action, executable: false, gaps: [...new Set([...action.gaps, '报告当前不具备交易时段实时数据'])] })),
     adjustmentPlan: { ...support.adjustmentPlan, steps: support.adjustmentPlan.steps.map(step => ({ ...step, executable: false })) },
     gates,
-    disclaimer: `${support.disclaimer} 当前报告仅供投资参考。`,
+    disclaimer: `${support.disclaimer.replace(/(?:\s*当前报告仅供投资参考。)+$/, '')} 当前报告仅供投资参考。`,
   }
 }
 
@@ -191,6 +204,7 @@ export function buildPortfolioDecisionSupport(input: {
   policy: RiskBudget
   dataQualityAvailable: boolean
   portfolioAsOf?: string | null
+  policySource?: RiskBudgetSource
   investmentAdvice?: unknown
 }): PortfolioDecisionSupport {
   const { evaluation, holdings, policy } = input
@@ -275,7 +289,6 @@ export function buildPortfolioDecisionSupport(input: {
   const productMappingCoveragePct = currentIndustryWeightPct > 0 ? round(verifiedWeight / currentIndustryWeightPct * 100) : 100
   const mappingCoveragePct=domainMappingCoveragePct,verifiedMappingCoveragePct=productMappingCoveragePct
   const costCoveragePct = currentIndustryWeightPct > 0 ? round(feeKnownWeight / currentIndustryWeightPct * 100) : 100
-  const portfolioFresh = !!input.portfolioAsOf && Date.now() - Date.parse(input.portfolioAsOf) <= 36 * 3600_000
   const projectedFundCapMet = relevant.every(row => {
     const current = row.holding.weightPct || 0
     return current + (deltas.get(row.holding.ticker)||0) <= maxFundPct + .01
@@ -285,7 +298,6 @@ export function buildPortfolioDecisionSupport(input: {
     { key: 'domain-mapping', label: '产业领域归属', met: domainMappingCoveragePct >= 95, detail: `高置信度领域映射覆盖 ${domainMappingCoveragePct.toFixed(1)}%；可用于领域仓位汇总` },
     { key: 'mapping', label: '逐基金产品穿透', met: productMappingCoveragePct >= 95, detail: `正式底层ETF/指数映射覆盖 ${productMappingCoveragePct.toFixed(1)}%；仅该层用于逐基金金额` },
     { key: 'cost', label: '调整成本覆盖', met: desiredDelta >= 0 || costCoveragePct >= 95, detail: desiredDelta >= 0 ? '本轮不涉及赎回费' : `赎回费覆盖 ${costCoveragePct.toFixed(1)}%` },
-    { key: 'portfolio-freshness', label: '持仓时效', met: portfolioFresh, detail: input.portfolioAsOf ? `持仓同步 ${input.portfolioAsOf}` : '缺少持仓同步时间' },
     { key: 'cash-floor', label: '现金底仓', met: proposedCashWeightPct >= minCashPct, detail: `调整后 ${proposedCashWeightPct.toFixed(1)}%，底线 ${minCashPct.toFixed(1)}%` },
     { key: 'fund-cap', label: '单基金仓位上限', met: projectedFundCapMet, detail: `单只基金不高于 ${maxFundPct.toFixed(1)}%` },
     { key: 'research-conclusion', label: '综合投资结论', met: ruleRequestedDelta <= 0 || researchAllowsIncrease, detail: ruleRequestedDelta <= 0 ? `本轮不新增风险，模型评级${rating}不阻止风控调整` : researchAllowsIncrease ? `模型评级${rating}，允许在规则与产品门禁内评估加仓` : `模型评级${rating}，本轮不新增风险暴露` },
@@ -311,7 +323,7 @@ export function buildPortfolioDecisionSupport(input: {
       invalidation: evaluation.decisions.find(item => item.ticker === row.mapping.decisionTicker)?.invalidation || '持仓映射、费用或市场数据失效时重新计算建议', mapping: row.mapping, gaps,
     }
   })
-  const confidencePct = round(Math.min(95, domainMappingCoveragePct*.2+productMappingCoveragePct*.25+costCoveragePct*.15+(input.dataQualityAvailable?25:10)+(portfolioFresh?15:5)))
+  const confidencePct = round(Math.min(95, domainMappingCoveragePct*.2+productMappingCoveragePct*.25+costCoveragePct*.15+(input.dataQualityAvailable?25:10)+15))
   const remainingCashGapPct = round(Math.max(0, minCashPct - proposedCashWeightPct))
   const remainingIndustryReductionPct = round(Math.max(0, proposedIndustryWeightPct - upper))
   const adjustmentPlan = {
@@ -345,6 +357,6 @@ export function buildPortfolioDecisionSupport(input: {
     summary: readiness === 'advice-ready' ? `已生成可执行的分批投资建议，置信度 ${confidencePct.toFixed(1)}%。` : readiness === 'blocked' ? '核心持仓或市场数据不足，建议观望并补齐数据。' : `已生成投资建议，置信度 ${confidencePct.toFixed(1)}%；待补资料：${gates.filter(gate => !gate.met&&!['cash-floor','fund-cap','research-conclusion'].includes(gate.key)).map(gate => gate.label).join('、')||'无'}；未满足约束：${gates.filter(gate=>!gate.met&&['cash-floor','fund-cap','research-conclusion'].includes(gate.key)).map(gate=>gate.label).join('、')||'无'}。`,
     totalAssets: round(input.totalAssets), cashWeightPct: round(input.cashWeightPct), cashTargetFloorPct: round(minCashPct), currentIndustryWeightPct: round(currentIndustryWeightPct),
     targetIndustryRangePct: [lower, upper], proposedIndustryWeightPct, proposedCashWeightPct, mappingCoveragePct, verifiedMappingCoveragePct,domainMappingCoveragePct,productMappingCoveragePct,costCoveragePct,confidencePct,riskDiagnostics, adjustmentPlan,
-    actions, gates, policy, disclaimer: `这是基于本轮冻结证据、当前持仓和风险预算生成的投资建议，并附数据置信度；系统不会自动执行交易。`,
+    actions, gates, policy, policySource: input.policySource, disclaimer: `这是基于本轮冻结证据、当前持仓和风险预算生成的投资建议，并附数据置信度；系统不会自动执行交易。`,
   }
 }

@@ -53,7 +53,7 @@ describe('comprehensive report repairs',()=>{
     const row=auditClaim({claim:'指数低于均线；证据：'+id,source:'Tushare/fund_adj',date:'2026-09-07'},[{id,source:'frozen-local-daily',dataDate:'2026-09-04',publishedAt:null,fetchedAt:'2026-09-07',hash:'h'}])
     expect(row.claim).not.toContain(id)
     expect(row.evidenceIds).toEqual([id])
-    expect(row.referenceIssues?.join('')).toContain('2026-09-04')
+    expect(row.referenceCorrections?.join('')).toContain('2026-09-04')
     expect(row.date).toBe('2026-09-04')
     const html=renderToStaticMarkup(createElement(ReportAnalysisView,{value:{evidence:[row]}}))
     expect(html).not.toContain('<h5')
@@ -97,7 +97,7 @@ it('re-audits inherited evidence trees with one consolidated date range',()=>{
     {id:'a',source:'财报',dataDate:'2025-12-31',publishedAt:'2026-03-01',fetchedAt:'2026-03-01',hash:'a'},
     {id:'b',source:'财报',dataDate:'2026-06-30',publishedAt:'2026-08-20',fetchedAt:'2026-08-20',hash:'b'},
   ]) as {evidence:Array<Record<string,unknown>>}
-  expect(result.evidence[0]).toMatchObject({date:'2025-12-31—2026-06-30',referenceIssues:['多期判断日期已按冻结证据标注为2025-12-31—2026-06-30']})
+  expect(result.evidence[0]).toMatchObject({date:'2025-12-31—2026-06-30',referenceIssues:[],referenceCorrections:['多期判断日期已按冻结证据标注为2025-12-31—2026-06-30']})
 })
 it('merges near-duplicate watch items while preserving different thresholds',async()=>{
   const {consolidateWatchlist}=await import('../report-insights')

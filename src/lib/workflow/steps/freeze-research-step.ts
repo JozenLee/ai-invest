@@ -1,7 +1,12 @@
-import { captureResearchSnapshot, persistResearchSnapshot } from '@/lib/research/store'
+import { captureResearchSnapshot, persistResearchSnapshot, getResearchProfile } from '@/lib/research/store'
 import type { StepDefinition } from '../types'
 import { ensureResearchInputsFresh } from '@/lib/research/preflight'
 import { graphContextIssues, graphMappingIssues } from '@/lib/graph/research-context'
+import { capturePortfolioEvidence } from './fetch-portfolio-step'
+import { readPortfolioProductResearch } from '@/lib/services/portfolio-product-research.service'
+import { buildPortfolioPlanningHoldings } from '@/lib/portfolio/product-research'
+import type { PlanningHolding } from '@/lib/portfolio/alternatives'
+import { requiredPortfolioEtfs } from '@/lib/portfolio/research-scope'
 export const freezeResearchStep: StepDefinition = {
   name:'freeze-research',description:'冻结领域配置、交易日历与全部研究证据',dependencies:[],estimatedDuration:1000,
   async execute(context) {
@@ -12,7 +17,30 @@ export const freezeResearchStep: StepDefinition = {
     const preflight=await ensureResearchInputsFresh(context.input.industryId,{refresh:false})
     await context.saveArtifact('research-preflight',preflight,'DATA')
     await context.updateProgress(1,2,'正在冻结已入库证据并校验数据时效')
-    const snapshot=await captureResearchSnapshot(context.input.industryId)
+    // Private account data is kept in a separate artifact, never in the public research snapshot.
+    if (!context.artifacts.has('frozen-portfolio-evidence')) {
+      await context.saveArtifact('frozen-portfolio-evidence', context.input.publicOnly
+        ? { excluded: true, reason: '本轮仅公开研究' }
+        : await capturePortfolioEvidence(), 'DATA')
+    }
+    const privateAccount = context.artifacts.get('frozen-portfolio-evidence')
+    if (!privateAccount.excluded && !context.artifacts.has('frozen-portfolio-product-research')) {
+      const asOf = new Date().toISOString()
+      const holdings = privateAccount.holdings as PlanningHolding[]
+      const universe = await readPortfolioProductResearch(holdings, asOf, undefined, privateAccount.portfolioId)
+      const planning = buildPortfolioPlanningHoldings({ holdings, universe })
+      await context.saveArtifact('frozen-portfolio-product-research', universe, 'DATA')
+      await context.saveArtifact('portfolio-product-packet', planning.evidencePackets, 'DATA')
+      const evidence = new Map(planning.evidencePackets.flatMap(product => [...product.identityEvidence, ...product.navSeries.map(row => row.evidence), ...product.disclosedHoldings.map(row => row.evidence), ...product.assetAllocation.map(row => row.evidence), ...product.exposure.lookThrough.flatMap(row => row.evidence)]).map(item => [item.id, { id: item.id, source: item.source, dataDate: item.dataDate, publishedAt: item.publishedAt, fetchedAt: item.observedAt, hash: item.contentHash || item.id }]))
+      await context.saveArtifact('portfolio-product-evidence', [...evidence.values()], 'DATA')
+      await context.saveArtifact('frozen-portfolio-evidence', { ...privateAccount, holdings: planning.planningHoldings }, 'DATA')
+    }
+    const universe = context.artifacts.get('frozen-portfolio-product-research')
+    const profile = universe ? await getResearchProfile(context.input.industryId) : null
+    const additionalEtfs = profile && universe ? requiredPortfolioEtfs(context.artifacts.get('frozen-portfolio-evidence')?.holdings || [], universe.requests, { id: context.input.industryId, name: profile.name }) : []
+    const snapshot=await captureResearchSnapshot(context.input.industryId, { additionalEtfs })
+    const frozenAccount = context.artifacts.get('frozen-portfolio-evidence')
+    if (!frozenAccount.excluded) await context.saveArtifact('frozen-portfolio-evidence', { ...frozenAccount, industryWeightPct: frozenAccount.holdings.filter((holding: PlanningHolding) => holding.industry === snapshot.profile.name).reduce((sum: number, holding: PlanningHolding) => sum + (holding.weightPct || 0), 0) }, 'DATA')
     await context.saveArtifact('research-preflight',{...preflight,publicationNotes:[...new Set(snapshot.etfs.flatMap(etf=>etf.product.publicationNotes||[]))]},'DATA')
     if(snapshot.decisionTiming?.phase==='trading'&&context.input.verificationMode!=='graph-e2e'){
       const coverage=snapshot.decisionTiming.quoteCoverage

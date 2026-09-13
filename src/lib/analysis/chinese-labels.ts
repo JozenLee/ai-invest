@@ -79,6 +79,11 @@ export function chineseSource(value:string){return chineseNarrative(value)
   .replace(/stock_financial/gi,'企业财务报表').replace(/stock_announcement/gi,'公司公告')}
 
 export const analysisFieldLabels:Record<string,string>={
+  investmentTheses:'独立投资假设与交叉研判',statements:'事实、推断与情景',kind:'性质',text:'内容',productTickers:'对应基金',
+  firstDisclosedAt:'首次披露时间',informationStatus:'信息增量状态',informationDelta:'本轮信息变化',pricingStatus:'预期与定价核验',horizonDays:'观察期限（交易日）',
+  verificationDate:'核验日期',metric:'核验指标',invalidation:'失效条件',expectedReturnPct:'预期收益（未验证则为空）',pressureAssumptions:'条件压力假设',notForecast:'仅为压力假设',valuePct:'压力幅度（%）',
+  stance:'本轮研究立场',rationale:'研究依据',technicalConflict:'与技术信号的冲突',actionConditions:'操作成立条件',alternativeToTrading:'不交易的替代选择',
+  firstSeenAt:'首次记录时间',nextReview:'下次复核',outcome:'跟踪结果',pricingAssessment:'定价判断',hypothesis:'投资假设',
   analysis:'分析结论',score:'参考评分',rating:'研究评级',trend:'趋势判断',risk_level:'风险等级',drivers:'驱动因素',outlook:'后续观察',
   key_companies:'重点企业证据',chain_structure:'产业链结构',catalysts:'催化因素',risks:'风险提示',sentiment:'资讯倾向',stage:'产业阶段',
   facts:'证据事实',inference:'分析推断',boundary:'证据边界',data_scope:'数据范围',evidence_boundary:'适用边界',conclusion:'结论',source:'来源',

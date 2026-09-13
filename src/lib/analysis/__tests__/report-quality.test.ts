@@ -94,3 +94,17 @@ it('does not label a complete dataset as a complete AI report when a model modul
  expect(quality.overallScore).toBeLessThanOrEqual(69)
  expect(quality.blockers.join('')).toContain('市场智能分析已降级')
 })
+
+it('caps report quality for unresolved output citations but not completed corrections',()=>{
+ const evaluation=evaluateResearch(fixture())
+ const input={evaluation,dataQuality:{status:'available'},preflight:{status:'fresh',failed:0}}
+ const corrected=buildReportQuality({...input,outputValidations:{market:{status:'corrected',issues:[]}}})
+ expect(corrected.usability).toBe('advice-grade')
+ const invalid=buildReportQuality({...input,outputValidations:{market:{status:'limited',issues:['引用来源不匹配']}}})
+ expect(invalid.overallScore).toBeLessThanOrEqual(69)
+ expect(invalid.dimensions.find(row=>row.key==='evidence')?.score).toBeLessThanOrEqual(69)
+ expect(invalid.blockers).toContain('market：引用来源不匹配')
+ expect(invalid.usability).toBe('limited-advice')
+ const portfolio=buildReportQuality({...input,analysisStatuses:{portfolio:{status:'fallback'}}})
+ expect(portfolio.blockers.join('')).toContain('持仓智能分析已降级')
+})

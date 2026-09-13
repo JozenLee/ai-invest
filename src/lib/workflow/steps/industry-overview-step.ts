@@ -2,7 +2,7 @@
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
-import { saveValidatedResearchOutput, validateResearchOutput } from '../research-output'
+import { saveValidatedResearchOutput, validateResearchResponse } from '../research-output'
 
 type Row=Record<string,any>
 const parsed=(value:unknown):Row=>{if(value&&typeof value==='object'&&!Array.isArray(value))return value as Row;try{const result=JSON.parse(String(value||'{}'));return result&&typeof result==='object'&&!Array.isArray(result)?result:{}}catch{return {}}}
@@ -75,8 +75,8 @@ export const industryOverviewStep: StepDefinition = {
         model:process.env.CLAUDE_FAST_MODEL,
         max_tokens:4096,
         timeoutMs:180000,
-        maxAttempts:2,
-        validateOutput:(text)=>validateResearchOutput(text,'industry-overview'),
+        maxAttempts:3,
+        validateOutput:(text)=>validateResearchResponse(text,'industry-overview',context),
       system: RESEARCH_SYSTEM,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3

@@ -1,7 +1,7 @@
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
-import { saveValidatedResearchOutput, validateResearchOutput } from '../research-output'
+import { saveValidatedResearchOutput, validateResearchResponse } from '../research-output'
 import { upstreamAnalysisGatewayError } from '../retry-policy'
 
 type Row=Record<string,unknown>
@@ -38,7 +38,7 @@ export const newsAnalysisStep: StepDefinition = {
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'news-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:3,validateOutput:(text)=>validateResearchResponse(text,'news-analysis',context),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('news-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

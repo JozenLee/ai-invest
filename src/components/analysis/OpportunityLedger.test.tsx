@@ -12,3 +12,12 @@ it('shows verification and disclosure boundaries without presenting a trading in
   expect(screen.getByText(/不代表实时权重/)).toBeTruthy()
   expect(screen.queryByText('建仓')).toBeNull()
 })
+
+it('keeps the current review concise and collapses older opportunities', () => {
+  const current=buildOpportunityLedger({asOf:'2026-09-10T05:00:00Z',news:{catalysts:[{event:'存储订单',affectedCompanies:['688008'],conditions:'验证订单回款'}]},events:[],holdings:[],decisions:[],graph:{}})[0]
+  const previous={...current,id:'previous',title:'历史液冷机会',reviewedAt:'2026-09-09T05:00:00Z'}
+  const {container}=render(<OpportunityLedger items={[previous,current]}/>)
+  expect(screen.getByText('本轮复核 1 项。来源新增不等于超预期，持仓关联不等于收益兑现。展开查看验证条件与证据变化。')).toBeTruthy()
+  expect(screen.getByText('历史机会 1 项（展开复核）')).toBeTruthy()
+  expect(container.querySelector('details:not([open]) summary')?.textContent).toContain('存储订单')
+})

@@ -29,6 +29,21 @@ describe('研究明细可视化', () => {
     fireEvent.change(screen.getByLabelText('请求轮次'),{target:{value:'1'}})
     expect(screen.getByText('旧回复')).toBeInTheDocument()
   })
+  it('识别并切换同一步骤内带命名空间的模型阶段', () => {
+    render(<AIExecutionTrace stepName="investment-advice" artifacts={[
+      {artifactKey:'investment-advice-hypotheses-ai-request-attempt-1',data:{model:'claude-opus-5',messages:[{role:'user',content:'假设输入'}]}},
+      {artifactKey:'investment-advice-hypotheses-ai-response-attempt-1',data:{model:'claude-opus-5',content:[{type:'text',text:'假设回复'}]}},
+      {artifactKey:'investment-advice-synthesis-ai-request-attempt-1',data:{model:'claude-opus-5',messages:[{role:'user',content:'综合输入'}]}},
+      {artifactKey:'investment-advice-synthesis-ai-response-attempt-1',data:{model:'claude-opus-5',content:[{type:'text',text:'综合回复'}]}},
+      {artifactKey:'investment-advice-ai-status',data:{status:'completed'}},
+    ]}/>)
+    expect(screen.getByLabelText('模型阶段')).toHaveValue('investment-advice-synthesis-')
+    expect(screen.getByText('综合输入')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('模型阶段'),{target:{value:'investment-advice-hypotheses-'}})
+    expect(screen.getByText('假设输入')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('tab',{name:'模型回复'}))
+    expect(screen.getByText('假设回复')).toBeInTheDocument()
+  })
   it('空项被过滤但未知状态仍保留', () => {
     render(<StructuredDataView value={{count:0,passed:false,status:'unknown',score:null}}/>)
     expect(screen.getByText('0')).toBeInTheDocument()

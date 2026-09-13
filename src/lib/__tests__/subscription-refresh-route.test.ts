@@ -1,16 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
-  findMany: vi.fn(), create: vi.fn(), datasetUpdate: vi.fn(), runUpdate: vi.fn(), transaction: vi.fn(), notify: vi.fn(), overview: vi.fn(), syncGraph: vi.fn(),
+  findMany: vi.fn(), portfolioFindMany: vi.fn(), create: vi.fn(), datasetUpdate: vi.fn(), runUpdate: vi.fn(), transaction: vi.fn(), notify: vi.fn(), overview: vi.fn(), syncGraph: vi.fn(), ensureMarket: vi.fn(), ensureFunds: vi.fn(),
 }))
 vi.mock('@/lib/db', () => ({ prisma: {
   dataSubscription: { findMany: mocks.findMany },
+  portfolio: { findMany: mocks.portfolioFindMany },
   dataFetchRun: { findMany: vi.fn().mockResolvedValue([]), create: mocks.create, updateMany: mocks.runUpdate },
   subscriptionDataset: { updateMany: mocks.datasetUpdate },
   $transaction: mocks.transaction,
 } }))
 vi.mock('@/lib/subscription-dispatch', () => ({ notifySubscriptionWorker: mocks.notify }))
 vi.mock('@/lib/data-subscription-overview', () => ({ getSubscriptionOverview: mocks.overview, syncGraphEtfSubscriptions: mocks.syncGraph }))
+vi.mock('@/lib/market-index-subscriptions', () => ({ ensureMarketIndexSubscriptions: mocks.ensureMarket }))
+vi.mock('@/lib/portfolio-fund-subscriptions', () => ({ ensurePortfolioFundSubscriptions: mocks.ensureFunds }))
+vi.mock('@/lib/subscription-config-store', () => ({ getSubscriptionConfig: vi.fn().mockResolvedValue({ policies: {
+  constituent_stock_daily: { scope: 'company_quote' }, etf_daily: { scope: 'etf_index' }, stock_financial: { scope: 'company_quote' },
+} }) }))
 import { POST } from '@/app/api/data-subscriptions/refresh/route'
 
 beforeEach(() => {
@@ -29,6 +35,10 @@ beforeEach(() => {
   }) : Promise.all(operations))
   mocks.notify.mockResolvedValue(undefined)
   mocks.overview.mockResolvedValue({ companies: [] })
+  mocks.syncGraph.mockResolvedValue({ groups: [], etfCount: 0, indexCount: 0 })
+  mocks.ensureMarket.mockResolvedValue(5)
+  mocks.portfolioFindMany.mockResolvedValue([{ holdings: [{ ticker: '017470', name: '持仓基金' }] }])
+  mocks.ensureFunds.mockResolvedValue(1)
 })
 
 describe('company refresh route', () => {
@@ -48,5 +58,13 @@ describe('company refresh route', () => {
     expect(mocks.runUpdate.mock.calls[0][0].where).toEqual({ id: { in: ['run'] }, status: 'queued' })
     const rollback = mocks.datasetUpdate.mock.calls.find(([argument]) => argument.where.status === 'queued')
     expect(rollback?.[0].where).toEqual({ id: { in: ['daily'] }, status: 'queued' })
+  })
+  it('reconciles market, graph and portfolio targets before one-click refresh', async () => {
+    const response = await POST(new Request('http://localhost/api/data-subscriptions/refresh', { method: 'POST', body: '{}' }))
+    expect(response.status).toBe(202)
+    expect(mocks.syncGraph).toHaveBeenCalledOnce()
+    expect(mocks.ensureMarket).toHaveBeenCalledOnce()
+    expect(mocks.ensureFunds).toHaveBeenCalledWith([{ ticker: '017470', name: '持仓基金' }])
+    expect(mocks.notify).toHaveBeenCalledOnce()
   })
 })

@@ -24,14 +24,14 @@ describe('workflow AI retry',()=>{
     await expect(runAnalysisPrompt(ctx,{messages:[{role:'user',content:'研究证据'.repeat(30)}]})).rejects.toThrow('aborted')
     expect(create).toHaveBeenCalledTimes(1);expect(artifacts.has('ai-error-attempt-1')).toBe(true);expect(artifacts.get('ai-request-status')).toMatchObject({attempt:1,status:'failed'})
   })
-  it('retains event evidence and labels degradation if upstream errors exhaust both attempts',async()=>{
+  it('retains event evidence and labels degradation if upstream errors exhaust bounded attempts',async()=>{
     create.mockRejectedValue(new Error('{"error":{"type":"upstream_error","message":"Upstream access forbidden"}}'))
     const {context:ctx,artifacts}=context()
     artifacts.set('industry-info',{name:'算力硬件'})
     artifacts.set('news-events',[{id:'event-1',title:'订单进展',category:'demand',status:'evidence',priority:5,companies:['688008'],sources:['公司公告'],publishedAt:'2026-09-10',evidenceIds:['source-1']}])
     await newsAnalysisStep.execute(ctx)
-    expect(create).toHaveBeenCalledTimes(2)
-    expect(artifacts.get('ai-request-status')).toMatchObject({status:'failed',attempt:2})
+    expect(create).toHaveBeenCalledTimes(3)
+    expect(artifacts.get('ai-request-status')).toMatchObject({status:'failed',attempt:3})
     expect(artifacts.get('news-analysis-ai-status')).toMatchObject({status:'fallback'})
     expect(JSON.parse(String(artifacts.get('news-analysis')))).toMatchObject({sentiment:'未知',catalysts:[{sourceEventIds:['event-1'],affectedCompanies:['688008']} ]})
   })
@@ -60,6 +60,13 @@ it('marks exhausted empty responses as failed rather than completed',async()=>{
   const {context:ctx,artifacts}=context()
   await expect(runAnalysisPrompt(ctx,{maxAttempts:2,messages:[{role:'user',content:'研究证据'.repeat(30)}]})).rejects.toThrow('空内容')
   expect(artifacts.get('ai-request-status')).toMatchObject({status:'failed',attempt:2})
+})
+it('rejects an oversized evidence packet before issuing a paid model request',async()=>{
+  create.mockReset()
+  const {context:ctx,artifacts}=context()
+  await expect(runAnalysisPrompt(ctx,{messages:[{role:'user',content:'证据'.repeat(61000)}]})).rejects.toThrow('超过120000字符')
+  expect(create).not.toHaveBeenCalled()
+  expect(artifacts.get('ai-input-audit')).toMatchObject({passed:false,budgetExceeded:true})
 })
 it('rejects nonempty truncated output before callers attempt to parse JSON',async()=>{
   create.mockReset();create.mockResolvedValueOnce({content:[{type:'text',text:'{"analysis":'}],stop_reason:'max_tokens'}).mockResolvedValueOnce({content:[{type:'text',text:'{}'}],stop_reason:'end_turn'})
@@ -164,4 +171,14 @@ it('recognizes a recorded billing error when resuming a legacy run',async()=>{
  artifacts.set('ai-error-attempt-2',{message:'403 Insufficient account balance'})
  await expect(runAnalysisPrompt(ctx,{messages:[{role:'user',content:'研究证据'.repeat(30)}]})).rejects.toThrow('balance')
  expect(create).not.toHaveBeenCalled()
+})
+
+it('feeds the concrete validation failure into the next request and archives that repair prompt',async()=>{
+ create.mockReset()
+ create.mockResolvedValueOnce({model:'claude-opus-5',content:[{type:'text',text:'{"analysis":{}}'}],stop_reason:'end_turn'})
+ create.mockResolvedValueOnce({model:'claude-opus-5',content:[{type:'text',text:'{"analysis":"完整解释"}'}],stop_reason:'end_turn'})
+ const {context:ctx,artifacts}=context()
+ await runAnalysisPrompt(ctx,{messages:[{role:'user',content:'研究证据'.repeat(30)}],validateOutput:(text)=>{if(typeof JSON.parse(text).analysis!=='string')throw new Error('输出字段类型错误：analysis 必须是非空字符串')}})
+ expect(create.mock.calls[1][0].messages.at(-1).content).toContain('analysis 必须是非空字符串')
+ expect((artifacts.get('ai-request-attempt-2') as {messages:Array<{content:string}>}).messages.at(-1)?.content).toContain('analysis 必须是非空字符串')
 })

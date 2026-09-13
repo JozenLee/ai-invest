@@ -9,7 +9,8 @@ export function evidenceText(value: unknown): string {
 export function auditPrompt(messages: Array<{ content: string }>) {
   const text = messages.map(row => row.content).join('\n')
   const placeholders = text.match(/\[object Object\]|\[Array\]|\[Object\]|Array\(\d+\)|\bundefined\b/g) || []
-  return { passed: text.trim().length >= 100 && placeholders.length === 0, characters: text.length, numericValues: (text.match(/:\s*-?\d+(?:\.\d+)?/g) || []).length, unexpandedPlaceholders: placeholders, capturedAt: new Date().toISOString() }
+  const maxCharacters = 120000
+  return { passed: text.trim().length >= 100 && text.length <= maxCharacters && placeholders.length === 0, characters: text.length, maxCharacters, budgetExceeded: text.length > maxCharacters, numericValues: (text.match(/:\s*-?\d+(?:\.\d+)?/g) || []).length, unexpandedPlaceholders: placeholders, capturedAt: new Date().toISOString() }
 }
 
 export function companyEvidence(rows: any[]) {

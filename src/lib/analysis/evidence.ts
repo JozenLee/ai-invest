@@ -15,7 +15,7 @@ export function financialRatios(metrics: Array<{ label: string; value: unknown }
   return { netMarginPct: ratio('净利润', '营业收入'), debtToAssetsPct: ratio('总负债', '总资产'), operatingCashToProfitPct: ratio('经营现金流', '净利润'), basis: '同一报表同币种指标比值；缺失或非正分母不计算' }
 }
 
-export function summarizeMarketReference(snapshot: { data: unknown; stale: boolean; source: string | null; dataDate: string | null; fetchedAt: string } | null) {
+export function summarizeMarketReference(snapshot: { evidenceIds?:string[]; data: unknown; stale: boolean; source: string | null; dataDate: string | null; fetchedAt: string } | null) {
   if (!snapshot || snapshot.stale) return { available: false, reason: '缺失或过期的市场参考数据已剔除' }
   const rows = (Array.isArray(snapshot.data) ? snapshot.data : [snapshot.data]) as Record<string, unknown>[]
   const groups = new Map<string, Record<string, unknown>[]>()
@@ -37,5 +37,5 @@ export function summarizeMarketReference(snapshot: { data: unknown; stale: boole
     })
     return { id, exchangeName: ({ BSE: '北京证券交易所（不是深交所）', SSE: '上海证券交易所', SZSE: '深圳证券交易所' } as Record<string,string>)[id] || id, date: latest.date, sampleCount: unique.length, metrics }
   }).filter(row => row.metrics.length)
-  return { available: data.length > 0, source: snapshot.source, dataDate: snapshot.dataDate, units: '保留源字段单位；delta为相邻有效记录差值，不跨交易所求和', data }
+  return { available: data.length > 0, evidenceIds:snapshot.evidenceIds||[], source: snapshot.source, dataDate: snapshot.dataDate, units: '保留源字段单位；delta为相邻有效记录差值，不跨交易所求和', data }
 }

@@ -16,6 +16,11 @@ export function auditResearchConsistency(value: unknown, companyData: unknown): 
       Object.entries(row).forEach(([key,child])=>visit(child,`${path}.${key}`,matched));return
     }
     if (typeof item !== 'string') return
+    // Archived sections can themselves be JSON strings. Resolve their own company rows
+    // instead of attributing the entire serialized section to the first company named in it.
+    if (/^\s*[\[{]/.test(item)) {
+      try { const parsed = JSON.parse(item); if (parsed && typeof parsed === 'object') { visit(parsed, path, company); return } } catch { /* Plain narrative remains auditable. */ }
+    }
     const matched=company || companies.find(candidate => {
       const name=String(candidate.name || candidate.stockName || '')
       return name.length>1 && item.includes(name)

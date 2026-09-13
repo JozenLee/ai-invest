@@ -4,7 +4,7 @@ import { chinaDate, dateKey, sessionBoundary } from '@/lib/research/time'
 
 // Only session-critical datasets block a new analysis. Financials and announcements
 // are low-frequency evidence and continue on their subscription schedules.
-const RESEARCH_KEYS=new Set(['research_calendar','index_daily','sector_capital_flow','etf_daily','etf_holdings','etf_research'])
+const RESEARCH_KEYS=new Set(['research_calendar','index_daily','sector_capital_flow','etf_daily','etf_holdings','etf_research','fund_research'])
 const TRADING_SESSION_KEYS=new Set(['index_realtime','etf_realtime','sector_capital_flow','stock_announcement'])
 const terminal=new Set(['success','failed','partial'])
 const pause=(ms:number)=>new Promise<void>(resolve=>setTimeout(resolve,ms))
@@ -28,7 +28,7 @@ export function shouldRefreshResearchDataset(dataset:{datasetKey:string;enabled:
 
 const maxAgeFor=(datasetKey:string,tradingSession:boolean)=>tradingSession
   ? datasetKey.endsWith('_realtime')||datasetKey==='sector_capital_flow' ? 5*60*1000 : datasetKey==='stock_announcement' ? 20*60*1000 : 90*60*1000
-  : 90*60*1000
+  : datasetKey==='fund_research' ? 24*60*60*1000 : 90*60*1000
 
 export function hasCurrentResearchSeries(payloads: string[], expectedSession: string) {
   const fields = new Set<string>()
@@ -52,7 +52,7 @@ export async function ensureResearchInputsFresh(industryId:string, options: { re
   const normalize=(value:unknown)=>String(value||'').toLowerCase().replace(/^(sh|sz)/,'').replace(/\.(sh|sz)$/,'')
   let graphCodes=new Set<string>()
   try{const groups=JSON.parse(graphRow?.payload||'[]');const group=groups.find((item:{id?:string})=>item.id===industryId);graphCodes=new Set((group?.analysisEtfs||group?.etfs||[]).map((item:{code?:string;ticker?:string})=>normalize(item.code||item.ticker)).filter(Boolean))}catch{/* Fall back to subscription profiles below. */}
-  const selected=subscriptions.filter(subscription=>subscription.instrument.type==='INDEX'||subscription.instrument.type==='ETF'&&(graphCodes.size?graphCodes.has(normalize(subscription.instrument.code)):String(subscription.profile||'').includes(industryId)))
+  const selected=subscriptions.filter(subscription=>subscription.instrument.type==='FUND'||subscription.instrument.type==='INDEX'||subscription.instrument.type==='ETF'&&(graphCodes.size?graphCodes.has(normalize(subscription.instrument.code)):String(subscription.profile||'').includes(industryId)))
   if (options.refresh === false) {
     const warnings = researchDatasetWarnings(selected.flatMap(subscription => subscription.datasets))
     return { status: 'warning', queued: 0, completed: 0, partial: 0, failed: 0, warnings: [...new Set(['本轮未触发外部同步，使用当前本地订阅快照', ...warnings])].slice(0, 8) }

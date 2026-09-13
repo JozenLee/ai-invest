@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -96,19 +97,19 @@ class SubscriptionSyncService:
         self.etf_provider = ETFProvider()
         self.stock_provider = StockProvider()
         self._locks: Dict[str, asyncio.Lock] = {}
-        self._run_due_lock = asyncio.Lock()
-        self._fetch_semaphore = asyncio.Semaphore(4)
+        self._run_due_lock = None
+        self._fetch_semaphore = None
         self.max_retries = 3
-        self._company_semaphore = asyncio.Semaphore(8)
+        self._company_semaphore = None
         self._company_requests: Dict[tuple, asyncio.Task] = {}
         self.config = json.loads(json.dumps(DEFAULTS))
         self._tasks: Dict[str, asyncio.Task] = {}
         self._task_lanes: Dict[str, str] = {}
         self._last_ensure_at = 0.0
         self._request_times: Dict[tuple, float] = {}
-        self._realtime_fetch_semaphore = asyncio.Semaphore(4)
-        self._company_realtime_semaphore = asyncio.Semaphore(2)
-        self._quote_semaphore = asyncio.Semaphore(2)
+        self._realtime_fetch_semaphore = None
+        self._company_realtime_semaphore = None
+        self._quote_semaphore = None
         self._request_loop = None
 
     def _ensure_request_loop(self):
@@ -118,6 +119,7 @@ class SubscriptionSyncService:
         if self._request_loop is loop:
             return
         self._request_loop = loop
+        self._run_due_lock = asyncio.Lock()
         self._fetch_semaphore = asyncio.Semaphore(4)
         self._realtime_fetch_semaphore = asyncio.Semaphore(4)
         self._company_realtime_semaphore = asyncio.Semaphore(2)
@@ -179,6 +181,8 @@ class SubscriptionSyncService:
         return due
 
     async def run_due(self) -> int:
+        self._ensure_request_loop()
+        assert self._run_due_lock is not None
         if self._run_due_lock.locked():
             return 0
         async with self._run_due_lock:
@@ -271,6 +275,18 @@ class SubscriptionSyncService:
                    VALUES (?, ?, ?, 1, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 values,
             )
+        fund_policy = self.config['policies'].get('fund_research')
+        if fund_policy:
+            holdings = db.execute('SELECT DISTINCT ticker, name FROM Holding WHERE quantity > 0')
+            for holding in holdings:
+                code = str(holding.get('ticker') or '')
+                if not re.fullmatch(r'\d{6}', code):
+                    continue
+                db.execute_many("INSERT OR IGNORE INTO instruments (id,type,code,name,market,status,createdAt,updatedAt) VALUES (?, 'FUND', ?, ?, 'CN', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, code, holding.get('name') or code)])
+                instrument = db.execute("SELECT id FROM instruments WHERE type='FUND' AND code=?", (code,))[0]
+                db.execute_many("INSERT OR IGNORE INTO data_subscriptions (id,instrumentId,enabled,timezone,profile,createdAt,updatedAt) VALUES (?, ?, 1, 'Asia/Shanghai', 'portfolio_fund', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, instrument['id'])])
+                subscription = db.execute('SELECT id FROM data_subscriptions WHERE instrumentId=?', (instrument['id'],))[0]
+                db.execute_many("INSERT OR IGNORE INTO subscription_datasets (id,subscriptionId,datasetKey,enabled,tradingIntervalSeconds,closedIntervalSeconds,status,nextRunAt,createdAt,updatedAt) VALUES (?, ?, 'fund_research', 1, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, subscription['id'], fund_policy['tradingIntervalSeconds'], fund_policy['closedIntervalSeconds'])])
 
     async def sync_global_assets(self) -> Dict[str, int]:
         """Legacy scheduler entry: all collection now uses tracked datasets."""
@@ -365,7 +381,7 @@ class SubscriptionSyncService:
                 partial = (isinstance(result, CompanyBatch) and bool(result.failures)) or (isinstance(result, dict) and bool(result.get('failures')))
                 status = 'partial' if partial else 'success'
                 error = (result.error_json() if isinstance(result, CompanyBatch) else json.dumps(result.get('failures'), ensure_ascii=False)) if partial else None
-                if partial and key != 'northbound_flow':
+                if partial and key not in ('northbound_flow', 'fund_research'):
                     scheduled_next = completed + timedelta(minutes=5 if key.endswith('_realtime') else 30)
                 if key == 'etf_research':
                     scheduled_next = publication_retry(result, scheduled_next, completed)
@@ -374,7 +390,7 @@ class SubscriptionSyncService:
                 # optional gaps. Record its freshness so every analysis does not refetch
                 # the same successful price/factor data merely because valuation or book
                 # depth was unavailable.
-                freshness_recorded = status == 'success' or (status == 'partial' and key == 'etf_research')
+                freshness_recorded = status == 'success' or (status == 'partial' and key in ('etf_research', 'fund_research'))
                 db.update("UPDATE subscription_datasets SET status=?, lastSuccessAt=CASE WHEN ? = 1 THEN ? ELSE lastSuccessAt END, lastError=?, nextRunAt=?, updatedAt=? WHERE id=?", (status, 1 if freshness_recorded else 0, completed.isoformat(), error, scheduled_next.isoformat(), completed.isoformat(), dataset_id))
                 return not partial
             except Exception as error:
@@ -386,6 +402,10 @@ class SubscriptionSyncService:
                 return False
 
     async def _fetch(self, key: str, code: str) -> Any:
+        self._ensure_request_loop()
+        if key == 'fund_research':
+            from services.portfolio_product_research import collect_portfolio_product
+            return await asyncio.to_thread(collect_portfolio_product, code)
         if key in ('research_calendar', 'etf_research'):
             from services.research_collection import collect_research
             return await collect_research(TushareProvider(), key, code, self.config['historyPoints'],
@@ -456,12 +476,9 @@ class SubscriptionSyncService:
                 result['failures'] = {'semantics': '净流口径/网关单位未核验，仅留原始记录，不进入投资决策'}
             return result
         if key == 'index_realtime':
-            request_key = ('index_spot',)
-            task = self._company_requests.get(request_key)
-            if task is None or (task.done() and time.monotonic() - self._request_times.get(request_key, 0) >= 30):
-                self._company_requests[request_key] = asyncio.create_task(data_service.get_index_spot(force_refresh=True))
-                self._request_times[request_key] = time.monotonic()
-            frame = await self._company_requests[request_key]
+            # Resolve fallback for this subscription, not a partially successful
+            # all-index snapshot which can omit the requested benchmark.
+            frame = await data_service.get_index_realtime([code])
             return [row for row in frame.to_dict('records') if _code(_value(row, '代码', 'code')) == _code(code)]
         if key == 'index_daily':
             start, end = self._history_range('IndexDaily', 'code', code)

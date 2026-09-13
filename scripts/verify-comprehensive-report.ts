@@ -26,12 +26,17 @@ async function main(){
       validateResearchOutput(text,stepName)
       const parsed=JSON.parse(text)
       const meaningful=typeof (parsed.analysis||parsed.thesis)==='string'&&(parsed.analysis||parsed.thesis).trim().length>0&&(stepName!=='company-analysis'||parsed.key_companies?.length>0)
-      const status=artifacts.get(stepName+':ai-request-status') as {status?:string;attempt?:number;usage?:{output_tokens?:number}}|undefined
+      const statuses=(stepName==='investment-advice'
+        ? ['investment-advice-hypotheses-ai-request-status','investment-advice-synthesis-ai-request-status']
+        : ['ai-request-status']).map(key=>artifacts.get(stepName+':'+key) as {status?:string;attempt?:number;usage?:{output_tokens?:number}}|undefined).filter(Boolean)
+      const status=statuses.at(-1)
       const moduleStatus=artifacts.get(stepName+':'+stepName+'-ai-status') as {status?:string;reason?:string}|undefined
       // Industry overview is deliberately assembled from upstream modules unless
       // intermediate synthesis is enabled. A fallback is never a successful AI check.
       const deterministic=stepName==='industry-overview'&&moduleStatus?.status==='deterministic'
-      check(stepName,meaningful&&(deterministic||moduleStatus?.status==='completed'&&status?.status==='completed'&&(status.usage?.output_tokens||0)>0),deterministic?`确定性汇编：${moduleStatus.reason}`:status?.usage?.output_tokens===undefined?`模型状态 ${status?.status||'未记录'}，模块状态 ${moduleStatus?.status||'未记录'}`:`真实模型输出 ${status.usage.output_tokens} tokens，第${status?.attempt}次请求`)
+      const modelCompleted=statuses.length>0&&statuses.every(item=>item?.status==='completed'&&(item.usage?.output_tokens||0)>0)
+      const outputTokens=statuses.reduce((sum,item)=>sum+(item?.usage?.output_tokens||0),0)
+      check(stepName,meaningful&&(deterministic||moduleStatus?.status==='completed'&&modelCompleted),deterministic?`确定性汇编：${moduleStatus.reason}`:!statuses.length?`模型状态未记录，模块状态 ${moduleStatus?.status||'未记录'}`:`${statuses.length}阶段真实模型输出 ${outputTokens} tokens，请求轮次 ${statuses.map(item=>item?.attempt).join('/')}`)
       if(['market-analysis','news-analysis','company-analysis'].includes(stepName)){
         const model=(status as {model?:string}|undefined)?.model
         check(stepName+' 模型',model===(process.env.CLAUDE_MODEL||'claude-opus-5'),model||'未记录')
@@ -39,7 +44,7 @@ async function main(){
     }
     const portfolioAI=artifacts.get('portfolio-decision:portfolio-analysis-ai-status') as {status?:string}|undefined
     check('组合分析未降级',['completed','local-synthesis'].includes(portfolioAI?.status||''),portfolioAI?.status||'未记录')
-    check('报告章节完整',!!data.socialReport&&!!data.privatePortfolioAnalysis&&report.content.includes('ETF投资建议'),'完整正文、社媒版与私有组合结果已落库')
+    check('报告章节完整',!!data.socialReport&&!!data.privatePortfolioAnalysis&&report.content.includes('投资假设、建议与反证')&&report.content.includes('ETF技术规则对照'),'完整正文、社媒版与私有组合结果已落库')
     const news=typeof data.sentimentAnalysis==='string'?JSON.parse(data.sentimentAnalysis):data.sentimentAnalysis
     const frozenEvents=artifacts.get('fetch-news:news-events') as Array<{id:string}>|undefined
     const frozenEventIds=new Set((frozenEvents||[]).map(event=>event.id))

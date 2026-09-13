@@ -2,6 +2,7 @@ import prisma from '@/lib/db/prisma'
 import { readPortfolioEmails } from '@/lib/services/portfolio-email.service'
 import { fetchFundCategory } from '@/lib/services/fund-category.service'
 import { matchHoldingsToGraphIndustries } from '@/lib/services/portfolio-industry-matcher.service'
+import { ensurePortfolioFundSubscriptions } from '@/lib/portfolio-fund-subscriptions'
 
 export async function syncPortfolioFromEmail(portfolioId: string) {
   const parsed = await readPortfolioEmails()
@@ -53,6 +54,10 @@ export async function syncPortfolioFromEmail(portfolioId: string) {
     })
     await tx.rawPayload.create({ data: { datasetKey: 'portfolio_email', targetCode: portfolioId, payload: JSON.stringify({ holdingsDate: parsed.holdingsDate, balanceDate: parsed.balanceDate, holdingCount: holdings.length }), contentHash: 'email-snapshot' } })
   })
+
+  // Account facts are already accepted above. Subscription setup is a separate
+  // public-data concern and never changes or invalidates the synchronized account.
+  await ensurePortfolioFundSubscriptions(holdings)
 
   return {
     ...parsed,

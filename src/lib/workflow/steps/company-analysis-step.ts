@@ -1,7 +1,7 @@
 import { recoverableAnalysisError, runAnalysisPrompt } from '../analysis-prompt'
 import { researchEvidence, researchPrompt, RESEARCH_SYSTEM } from '../research-input'
 import type { StepDefinition } from '../types'
-import { saveValidatedResearchOutput, validateResearchOutput } from '../research-output'
+import { saveValidatedResearchOutput, validateResearchResponse } from '../research-output'
 
 type Row=Record<string,unknown>
 const row=(value:unknown):Row=>value&&typeof value==='object'&&!Array.isArray(value)?value as Row:{}
@@ -37,7 +37,7 @@ export const companyAnalysisStep: StepDefinition = {
 
     let result:string
     try{
-      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:2,validateOutput:(text)=>validateResearchOutput(text,'company-analysis'),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
+      const response = await runAnalysisPrompt(context, {model:process.env.CLAUDE_MODEL||'claude-opus-5',max_tokens:6144,effort:'low',timeoutMs:300000,maxAttempts:3,validateOutput:(text)=>validateResearchResponse(text,'company-analysis',context),system: RESEARCH_SYSTEM,messages: [{ role: 'user', content: prompt }],temperature: 0.2})
       result = response.content[0].type === 'text' ? response.content[0].text : '{}'
       await context.saveArtifact('company-analysis-ai-status',{status:'completed'},'DATA')
     }catch(error){

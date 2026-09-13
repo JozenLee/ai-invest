@@ -1,5 +1,3 @@
-import { prisma } from '@/lib/db'
-
 export const DEFAULT_DATASETS = [
   { datasetKey: 'etf_realtime', tradingIntervalSeconds: 180, closedIntervalSeconds: 3600 },
   { datasetKey: 'etf_daily', tradingIntervalSeconds: 86400, closedIntervalSeconds: 86400 },
@@ -18,6 +16,7 @@ export function normalizeInstrumentCode(value: unknown) {
 }
 
 export async function getSubscription(id: string) {
+  const { prisma } = await import('@/lib/db')
   return prisma.dataSubscription.findUnique({
     where: { id },
     include: { instrument: true, datasets: { include: { runs: { orderBy: { startedAt: 'desc' }, take: 3 } } } },

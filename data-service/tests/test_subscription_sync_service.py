@@ -446,3 +446,16 @@ async def test_scheduler_bounds_background_work_and_reserves_manual_capacity(ser
     finally:
         release.set()
         await asyncio.gather(*service._tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_index_subscription_uses_target_specific_fallback(service, monkeypatch):
+    import pandas as pd
+    target = AsyncMock(return_value=pd.DataFrame([{'代码': 'sh000300', '最新价': 4000}]))
+    overview = AsyncMock(return_value=pd.DataFrame([{'代码': 'sh000001', '最新价': 3000}]))
+    monkeypatch.setattr(module.data_service, 'get_index_realtime', target)
+    monkeypatch.setattr(module.data_service, 'get_index_spot', overview)
+    rows = await service._fetch('index_realtime', 'sh000300')
+    assert rows == [{'代码': 'sh000300', '最新价': 4000}]
+    target.assert_awaited_once_with(['sh000300'])
+    overview.assert_not_awaited()

@@ -40,6 +40,7 @@ import {
   ArrowUpDown,
   ShieldCheck,
 } from 'lucide-react'
+import { DEFAULT_RISK_BUDGET, riskBudgetSourceLabel, type RiskBudgetSource } from '@/lib/portfolio/risk-budget'
 
 interface Holding {
   id: string
@@ -85,7 +86,7 @@ interface SyncSchedule {
 }
 
 interface RiskBudget { riskProfile: string; investHorizon: string; minCashRatio: number; maxIndustryRatio: number; maxFundRatio: number; maxSingleAdjustmentRatio: number; stagedAdjustment: boolean }
-const defaultRiskBudget: RiskBudget = { riskProfile: 'moderate', investHorizon: 'medium', minCashRatio: .1, maxIndustryRatio: .2, maxFundRatio: .15, maxSingleAdjustmentRatio: .05, stagedAdjustment: true }
+const defaultRiskBudget: RiskBudget = { ...DEFAULT_RISK_BUDGET }
 
 export default function PortfolioOverviewPage() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
@@ -98,6 +99,7 @@ export default function PortfolioOverviewPage() {
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [riskOpen, setRiskOpen] = useState(false)
   const [riskBudget, setRiskBudget] = useState<RiskBudget>(defaultRiskBudget)
+  const [riskBudgetSource, setRiskBudgetSource] = useState<RiskBudgetSource>('system-default')
   const [isSavingRisk, setIsSavingRisk] = useState(false)
   const [scheduleEnabled, setScheduleEnabled] = useState(true)
   const [scheduleTimes, setScheduleTimes] = useState(['00:00', '12:00'])
@@ -143,7 +145,10 @@ export default function PortfolioOverviewPage() {
         }
         const riskRes = await fetch(`/api/portfolio/${defaultPortfolio.id}/risk-budget`)
         const riskData = await riskRes.json()
-        if (riskData.success) setRiskBudget(riskData.data)
+        if (riskData.success) {
+          setRiskBudget(riskData.data)
+          setRiskBudgetSource(riskData.source === 'user-saved' ? 'user-saved' : 'system-default')
+        }
       } else {
         setPortfolio(null)
         setHoldings([])
@@ -185,7 +190,7 @@ export default function PortfolioOverviewPage() {
       const res = await fetch(`/api/portfolio/${portfolio.id}/risk-budget`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(riskBudget) })
       const data = await res.json()
       if (!res.ok || !data.success) throw new Error(data.error ?? '保存风险预算失败')
-      setRiskBudget(data.data); setRiskOpen(false); setSyncMessage('风险预算已保存，将用于下一次私有综合分析')
+      setRiskBudget(data.data); setRiskBudgetSource('user-saved'); setRiskOpen(false); setSyncMessage('风险预算已保存，将用于下一次私有综合分析')
     } catch (err) { setError(err instanceof Error ? err.message : '保存风险预算失败') } finally { setIsSavingRisk(false) }
   }
 
@@ -401,11 +406,11 @@ export default function PortfolioOverviewPage() {
             <DialogTrigger render={<Button variant="outline" size="sm" />}><ShieldCheck className="mr-2 h-4 w-4"/>风险预算</DialogTrigger>
             <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
               <DialogHeader><DialogTitle>个人组合风险预算</DialogTitle></DialogHeader>
-              <p className="text-sm leading-6 text-muted-foreground">目标仓位由这些硬约束计算。修改只影响下一次私有综合分析，不会自动交易。</p>
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm leading-6"><div className="flex flex-wrap items-center gap-2"><span className="font-medium">配置来源</span><Badge variant="outline">{riskBudgetSourceLabel(riskBudgetSource)}</Badge></div><p className="mt-1 text-muted-foreground">最低现金比例和单次最大调整是显式账户约束。当前默认分别为 1% 和 5%；保存后以账户配置为准。修改只影响下一次私有综合分析，不会自动交易。</p></div>
               <div className="grid gap-4 py-2 sm:grid-cols-2">
                 <div className="grid gap-2"><Label>风险偏好</Label><Select value={riskBudget.riskProfile} onValueChange={(value) => setRiskBudget(current => ({ ...current, riskProfile: value ?? 'moderate' }))}><SelectTrigger><span>{riskBudget.riskProfile === 'conservative' ? '保守' : riskBudget.riskProfile === 'aggressive' ? '积极' : '稳健'}</span></SelectTrigger><SelectContent><SelectItem value="conservative">保守</SelectItem><SelectItem value="moderate">稳健</SelectItem><SelectItem value="aggressive">积极</SelectItem></SelectContent></Select></div>
                 <div className="grid gap-2"><Label>投资期限</Label><Select value={riskBudget.investHorizon} onValueChange={(value) => setRiskBudget(current => ({ ...current, investHorizon: value ?? 'medium' }))}><SelectTrigger><span>{riskBudget.investHorizon === 'short' ? '短期' : riskBudget.investHorizon === 'long' ? '长期' : '中期'}</span></SelectTrigger><SelectContent><SelectItem value="short">短期</SelectItem><SelectItem value="medium">中期</SelectItem><SelectItem value="long">长期</SelectItem></SelectContent></Select></div>
-                {[['minCashRatio','最低现金比例'],['maxIndustryRatio','单领域仓位上限'],['maxFundRatio','单基金仓位上限'],['maxSingleAdjustmentRatio','单次最大调整']].map(([key,label])=><div key={key} className="grid gap-2"><Label htmlFor={`risk-${key}`}>{label}</Label><div className="relative"><Input id={`risk-${key}`} type="number" min="0" max="100" step="1" className="pr-8" value={Number((riskBudget[key as keyof RiskBudget] as number) * 100).toFixed(0)} onChange={(event) => setRiskBudget(current => ({ ...current, [key]: Math.max(0, Math.min(100, Number(event.target.value))) / 100 }))}/><span className="absolute right-3 top-2.5 text-sm text-muted-foreground">%</span></div></div>)}
+                {[['minCashRatio','最低现金比例','保留在账户中的最低现金占比。'],['maxIndustryRatio','单领域仓位上限','同一产业领域允许的最高仓位。'],['maxFundRatio','单基金仓位上限','单只基金允许的最高仓位。'],['maxSingleAdjustmentRatio','单次最大调整','单轮分析允许调整的最大资产占比。']].map(([key,label,help])=><div key={key} className="grid gap-2"><Label htmlFor={`risk-${key}`}>{label}</Label><div className="relative"><Input id={`risk-${key}`} type="number" min="0" max="100" step="1" className="pr-8" value={Number((riskBudget[key as keyof RiskBudget] as number) * 100).toFixed(0)} onChange={(event) => setRiskBudget(current => ({ ...current, [key]: Math.max(0, Math.min(100, Number(event.target.value))) / 100 }))} aria-describedby={`risk-${key}-help`}/><span className="absolute right-3 top-2.5 text-sm text-muted-foreground">%</span></div><p id={`risk-${key}-help`} className="text-xs leading-5 text-muted-foreground">{help}</p></div>)}
               </div>
               <label className="flex min-h-14 items-center justify-between gap-4 rounded-xl border p-4"><span><span className="block text-sm font-medium">分批调整</span><span className="mt-1 block text-xs text-muted-foreground">单次变化超过2个百分点时拆分为2—3批</span></span><input type="checkbox" checked={riskBudget.stagedAdjustment} onChange={(event) => setRiskBudget(current => ({ ...current, stagedAdjustment: event.target.checked }))} className="size-5 accent-primary"/></label>
               <DialogFooter><DialogClose render={<Button variant="outline" size="sm" />}>取消</DialogClose><Button size="sm" onClick={saveRiskBudget} disabled={isSavingRisk}>{isSavingRisk ? '保存中...' : '保存预算'}</Button></DialogFooter>
