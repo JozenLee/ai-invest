@@ -27,7 +27,10 @@ async function main(){
       const parsed=JSON.parse(text)
       const meaningful=typeof (parsed.analysis||parsed.thesis)==='string'&&(parsed.analysis||parsed.thesis).trim().length>0&&(stepName!=='company-analysis'||parsed.key_companies?.length>0)
       const status=artifacts.get(stepName+':ai-request-status') as {status?:string;attempt?:number;usage?:{output_tokens?:number}}|undefined
-      check(stepName,meaningful&&status?.status==='completed'&&(status.usage?.output_tokens||0)>0,status?.usage?.output_tokens===undefined?'旧步骤未保存用量；正文已通过结构校验':`真实模型输出 ${status.usage.output_tokens} tokens，第${status?.attempt}次请求`)
+      const executionStatus=artifacts.get(`${stepName}:${stepName}-ai-status`) as {status?:string;reason?:string}|undefined
+      const modelCompleted=status?.status==='completed'&&(status.usage?.output_tokens||0)>0
+      const deterministic=executionStatus?.status==='deterministic'
+      check(stepName,meaningful&&(modelCompleted||deterministic),modelCompleted?`真实模型输出 ${status.usage!.output_tokens} tokens，第${status.attempt}次请求`:deterministic?`确定性模块：${executionStatus?.reason||'按工作流定义执行'}`:`执行状态 ${executionStatus?.status||status?.status||'缺失'}；正文结构 ${meaningful?'有效':'无效'}`)
     }
     check('同日折溢价',evaluation.decisions.every((decision)=>{const product=evaluation.products?.find((item)=>item.ticker===decision.ticker);return decision.metrics.premiumPct==null||product?.navDate===decision.metrics.date}),`${evaluation.decisions.filter((item)=>item.metrics.premiumPct!=null).length}/${evaluation.decisions.length}可计算；禁止跨日配对`)
     const unknown=evaluation.decisions.flatMap((item)=>item.conditions).filter((item)=>item.status==='unknown')
