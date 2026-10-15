@@ -87,10 +87,10 @@ function record(value:unknown):Record<string,unknown>{
 export function normalizeSocialReport(report:SocialReport,evaluation?:Evaluation,companyValue?:unknown):SocialReport{
   const products=evaluation?.products||[]
   const decisions=evaluation?.decisions||[],riskOff=decisions.filter(item=>item.state==='risk-off').length,eligible=decisions.filter(item=>item.state==='eligible').length
-  const valuedIndices=new Set(products.filter(item=>(typeof item.pe==='number'&&Number.isFinite(item.pe))||(typeof item.pb==='number'&&Number.isFinite(item.pb))).map(item=>item.indexCode).filter(Boolean))
+  const valuedIndices=new Set(products.filter(item=>item.valuationDate===evaluation?.expectedSession&&((typeof item.pe==='number'&&Number.isFinite(item.pe))||(typeof item.pb==='number'&&Number.isFinite(item.pb)))).map(item=>item.indexCode).filter(Boolean))
   const takeaways=report.takeaways.map(row=>{
     const normalized=/^估值：/.test(row)&&evaluation?`估值：${valuedIndices.size?`${valuedIndices.size}个指数有可核验当期值`:'暂无可核验当期估值'}。`:row
-    const current=/^战术：/.test(normalized)&&evaluation?`战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`:normalized
+    const current=/^战术：/.test(normalized)&&!/^战术：AI/.test(normalized)&&evaluation?`战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`:normalized
     return current.replace(/0只风险收缩/g,'暂无产品触发风险收缩').replace(/0只满足实验条件/g,'暂无产品满足实验条件')
   })
   const company=record(companyValue),evidence:Array<unknown>=Array.isArray(company.evidence)?company.evidence:[]

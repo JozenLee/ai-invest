@@ -29,13 +29,13 @@ const labels: Record<string, string> = {
   'etf-holdings':'指数基金持仓','holdings-summary':'持仓摘要','news-articles':'资讯样本','news-events':'归并事件','news-evidence-gaps':'资讯证据缺口',
   'news-trends':'资讯趋势','news-sentiment':'资讯倾向','market-reference-data':'市场参考数据','market-reference-indicators':'市场参考指标',
   'social-report':'一页研究摘要','social-report-status':'一页摘要状态','public-report-validation':'公开报告校验','portfolio-decision-support':'组合投资建议','portfolio-analysis':'私有持仓分析','historical-report-context':'纳入分析的历史报告','historical-report-policy':'历史报告回溯规则',
-  'research-preflight':'同步与时效检查','decision-timing':'报告时效','graph-context':'产业图谱快照','graph-context-validation':'图谱结构校验','graph-mapping-validation':'图谱映射校验','strategy-validation':'规则样本外回放','ai-request-status':'模型请求状态','market-analysis-validation':'市场输出校验','news-analysis-validation':'事件输出校验','company-analysis-validation':'企业输出校验','industry-overview-validation':'行业汇编校验','investment-advice-validation':'综合结论校验',
+  'research-preflight':'订阅数据检查','decision-timing':'行情数据口径','graph-context':'产业图谱快照','graph-context-validation':'图谱结构校验','graph-mapping-validation':'图谱映射校验','strategy-validation':'规则样本外回放','ai-request-status':'模型请求状态','market-analysis-validation':'市场输出校验','news-analysis-validation':'事件输出校验','company-analysis-validation':'企业输出校验','industry-overview-validation':'行业汇编校验','investment-advice-validation':'综合结论校验',
   code: '代码', ticker: '代码', name: '名称', description: '描述', weight: '权重',
   bind_type: '绑定类型', bindType: '绑定类型', etf_code: '指数基金代码', etf_name: '指数基金名称',
   change_pct: '涨跌幅', change: '涨跌幅', price: '价格', date: '日期', time: '时间',
   status: '状态', source: '数据来源', total: '总数', count: '数量', success: '成功',
   reasoning: '匹配理由', relevance: '相关度', nodeName: '节点名称', nodeId: '节点编号',
-  queued:'排队任务',completed:'完整返回',partial:'部分返回',failed:'失败任务',warnings:'同步提示',publicationNotes:'发布时点说明',issues:'校验问题',revisionId:'图谱结构版本',mappingRevisionId:'映射版本',mappingContentHash:'映射内容哈希',mappingSource:'映射来源',phase:'所处时段',timeZone:'时区',timezone:'时区',asOf:'冻结时间',expectedSession:'研究基准日',closeDataSession:'最近完整收盘日',eventCutoff:'事件截止时间',basis:'口径说明',version:'版本',stages:'产业阶段',segments:'细分环节',relations:'传导关系',evidencedRelations:'有来源关系',relationEvidencePct:'关系证据覆盖率',segmentEtfCoveragePct:'环节ETF覆盖率',segmentIndexCoveragePct:'环节指数覆盖率',companySegmentCoveragePct:'企业环节归属率',companyEtfCoveragePct:'企业ETF映射率',holdingVerifiedCoveragePct:'持仓验证覆盖率',reportId:'报告编号',sessionDate:'交易日',createdAt:'生成时间',role:'历史资料用途',sourceSummary:'来源分布',evidenceCount:'证据数量',graphRevision:'图谱版本',enabled:'是否启用',lookbackTradingDays:'回溯交易日',mode:'选择方式',industryId:'产业编号',industryName:'产业名称',comprehensiveConclusion:'历史综合结论',matchedEtfs:'关联ETF',matchedIndices:'关联指数',title:'报告标题',executionReady:'可执行',label:'时效结论',tradingDate:'当前交易日',quoteAsOf:'行情时点',eventCheckAsOf:'公告检查时点',validUntil:'有效期',reasons:'限制原因',attempt:'请求次数',timeoutMs:'超时上限（毫秒）',durationMs:'模型耗时（毫秒）',maxTokens:'输出上限',model:'模型',stopReason:'结束原因',
+  queued:'排队任务',completed:'完整返回',partial:'部分返回',failed:'失败任务',warnings:'同步提示',publicationNotes:'发布时点说明',issues:'校验问题',revisionId:'图谱结构版本',mappingRevisionId:'映射版本',mappingContentHash:'映射内容哈希',mappingSource:'映射来源',phase:'所处时段',timeZone:'时区',timezone:'时区',asOf:'冻结时间',expectedSession:'研究基准日',closeDataSession:'最近完整收盘日',eventCutoff:'事件截止时间',basis:'口径说明',version:'版本',stages:'产业阶段',segments:'细分环节',relations:'传导关系',evidencedRelations:'有来源关系',relationEvidencePct:'关系证据覆盖率',segmentEtfCoveragePct:'环节ETF覆盖率',segmentIndexCoveragePct:'环节指数覆盖率',companySegmentCoveragePct:'企业环节归属率',companyEtfCoveragePct:'企业ETF映射率',holdingVerifiedCoveragePct:'持仓验证覆盖率',reportId:'报告编号',sessionDate:'交易日',createdAt:'生成时间',role:'历史资料用途',sourceSummary:'来源分布',evidenceCount:'证据数量',graphRevision:'图谱版本',enabled:'是否启用',lookbackTradingDays:'回溯交易日',mode:'选择方式',industryId:'产业编号',industryName:'产业名称',comprehensiveConclusion:'历史综合结论',matchedEtfs:'关联ETF',matchedIndices:'关联指数',title:'报告标题',executionReady:'建议流程可用',label:'数据口径标签',tradingDate:'当前交易日',quoteAsOf:'行情时点',eventCheckAsOf:'公告检查时点',validUntil:'有效期',reasons:'专项限制',attempt:'请求次数',timeoutMs:'超时上限（毫秒）',durationMs:'模型耗时（毫秒）',maxTokens:'输出上限',model:'模型',stopReason:'结束原因',
 }
 
 const artifactTypes: Record<string, string> = { DATA: '数据', TEXT: '文本', JSON: '结构化数据' }
@@ -48,6 +48,7 @@ function pretty(value: unknown) {
 
 function labelFor(key: string) {
   if(key.endsWith('-ai-status'))return '模型执行状态'
+  if(key.endsWith('-input-coverage'))return '模型输入覆盖审计'
   if(/^ai-request-attempt-/.test(key))return '模型请求快照'
   if(/^ai-response/.test(key))return '模型原始响应'
   if(/^ai-error/.test(key))return '模型错误诊断'
@@ -79,9 +80,9 @@ function compactAnalysisDiagnostics(value:unknown):unknown{
 }
 
 const diagnosticArtifact=(key:string)=>/^ai-(?:prompt|response|error|input-audit|request-attempt)|-graph-usage-validation$/.test(key)||key==='public-report-validation'
-const qualityArtifact=(key:string)=>key==='ai-request-status'||key==='research-preflight'||key==='decision-timing'||key==='data-quality'||key==='strategy-validation'||/validation$|-ai-status$/.test(key)
+const qualityArtifact=(key:string)=>key==='ai-request-status'||key==='research-preflight'||key==='decision-timing'||key==='data-quality'||key==='strategy-validation'||/validation$|-ai-status$|-input-coverage$/.test(key)
 const artifactDescriptions:Record<string,string>={
-  'research-snapshot':'本轮所有研究模块共享的冻结输入摘要。','research-manifest':'证据数量、主要来源和图谱版本。','research-evaluation':'逐产品规则状态、条件和多因子诊断。','etf-actions':'由确定性规则生成的逐产品动作边界。','etf-bindings':'本领域纳入研究的ETF及其正式跟踪指数。','etf-market-data':'复权行情、趋势、波动率和流动性指标。','etf-holdings':'最新披露前十大持仓及披露期。','companies':'图谱、持仓与研究配置合并后的企业池。','company-market-data':'企业行情、财务覆盖与产业环节聚合输入。','news-events':'已归并并分级的产业事件。','market-snapshot':'市场基准、板块资金与时效快照。','data-quality':'数据可用、有限或缺失的原因。','portfolio-evidence':'本地组合比例、领域映射和风险预算。','portfolio-decision-support':'领域预算与逐基金执行门禁。','strategy-validation':'历史冻结决策的纸面回放结果。','investment-advice':'最终综合论点、反证、情景和配置立场。','report-content':'归档的完整研究正文。'
+  'research-snapshot':'本轮所有研究模块共享的冻结输入摘要。','research-manifest':'证据数量、主要来源和图谱版本。','research-evaluation':'逐产品规则状态、条件和多因子诊断。','etf-actions':'由确定性规则生成的逐产品动作边界。','etf-bindings':'本领域纳入研究的ETF及其正式跟踪指数。','etf-market-data':'复权行情、趋势、波动率和流动性指标。','etf-holdings':'最新披露前十大持仓及披露期。','companies':'图谱、持仓与研究配置合并后的企业池。','company-market-data':'企业行情、财务覆盖与产业环节聚合输入。','news-events':'已归并并分级的产业事件。','market-snapshot':'市场基准、板块资金与行情数据口径快照。','data-quality':'数据可用、有限或缺失的原因。','portfolio-evidence':'本地组合比例、领域映射和风险预算。','portfolio-decision-support':'领域预算与逐基金执行门禁。','strategy-validation':'历史冻结决策的纸面回放结果。','investment-advice':'最终综合论点、反证、情景和配置立场。','report-content':'归档的完整研究正文。'
 }
 
 function SummaryCard({ label, value, tone = 'text-foreground' }: { label: string; value: unknown; tone?: string }) {

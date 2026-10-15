@@ -2,6 +2,8 @@
 export interface StepContext {
   runId: string
   stepId: string
+  /** Persisted workflow execution attempt; request retries are scoped beneath it. */
+  attemptNumber?: number
   input: Record<string, any> // 来自上一步或初始参数
   /** 由工作流端口绑定得到的直接输入；新模块应优先使用此字段。 */
   inputs?: ReadonlyMap<string, any>

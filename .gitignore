@@ -21,6 +21,8 @@ data-service/.ruff_cache/
 
 # next.js
 /.next/
+/.next-verification/
+/.next-domain-verification/
 /out/
 
 # production
@@ -67,6 +69,7 @@ backups/
 
 # python data service
 data-service/.next/
+/.next-verification/
 data-service/.cache/
 data-service/__pycache__/
 *.pid

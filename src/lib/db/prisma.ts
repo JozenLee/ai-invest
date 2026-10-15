@@ -14,6 +14,9 @@ function createPrismaClient() {
   }
   const adapter = new PrismaBetterSqlite3({
     url: (process.env.VITEST ? process.env.TEST_DATABASE_URL : process.env.DATABASE_URL) || 'file:./prisma/dev.db',
+    // Workflow waves and the Python collector can write concurrently. Let short
+    // SQLite transactions wait for the active writer instead of failing a run.
+    timeout: 30_000,
   })
 
   return new PrismaClient({

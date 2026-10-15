@@ -1,3 +1,6 @@
+import { INVESTMENT_OUTPUT_CHARACTERS } from './research-budgets'
+import { financialFacts, validateFinancialFacts } from '@/lib/analysis/financial-facts'
+import { validateDecisionFacts, auditDecisionEvidence } from '@/lib/analysis/decision-audit'
 import { auditClaim, type EvidenceClaim } from '@/lib/analysis/evidence-references'
 import type { Evidence } from '@/lib/research/contracts'
 import type { StepContext } from './types'
@@ -8,7 +11,7 @@ const required:Record<string,string[]>={
   'news-analysis':['analysis','sentiment','catalysts','risks','evidence','watchlist'],
   'company-analysis':['analysis','key_companies','chain_structure','evidence','counterEvidence','watchlist'],
   'industry-overview':['analysis','stage','drivers','outlook','evidence','counterEvidence','watchlist'],
-  'investment-advice':['rating','executiveSummary','tacticalView','strategicView','thesis','etfImplications','scenarios','counterEvidence','risks','watchlist'],
+  'investment-advice':['rating','executiveSummary','recommendation','productDecisions','tacticalView','strategicView','thesis','etfImplications','scenarios','counterEvidence','risks','watchlist'],
 }
 const financialClaim=/营业收入|营收|净利润|现金流|毛利率|净利率|ROE|资产负债率|应收|存货/u
 
@@ -63,6 +66,16 @@ function validateNestedOutput(value:Record<string,unknown>,key:string,issues:str
       const missing=missingFields(row,['ticker','exposureRationale','segments','companies','evidenceBoundary'])
       if(missing.length)issues.push(`ETF影响${index+1}缺少字段：${missing.join('、')}`)
     }
+    if(!Array.isArray(value.productDecisions))issues.push('AI投资决策必须是逐产品结构化数组')
+    for(const [index,row] of objectRows(value.productDecisions).entries()){
+      const missing=missingFields(row,['ticker','unheldAction','heldAction','suggestedAdjustmentPct','confidencePct','reason','trigger','invalidation','evidenceIds'])
+      if(!('quantitativeOverride' in row))missing.push('quantitativeOverride')
+      if(missing.length)issues.push(`AI投资决策${index+1}缺少字段：${missing.join('、')}`)
+    }
+    const {etfImplications,scenarios,thesis,counterEvidence,risks,watchlist,productSelection,ruleAssessment,...authored}=value
+    void [etfImplications,scenarios,thesis,counterEvidence,risks,watchlist,productSelection,ruleAssessment]
+    const length=JSON.stringify(authored).replace(/[\x00-\xff]/g,'').length
+    if(length>INVESTMENT_OUTPUT_CHARACTERS)issues.push(`综合投资决策正文过长（${length}个中文字符），目标不超过${INVESTMENT_OUTPUT_CHARACTERS}字`)
   }
 }
 
@@ -87,17 +100,28 @@ export function valuationNarrative(products:Array<{indexCode?:string|null;pe?:nu
 
 export async function saveValidatedResearchOutput(context:StepContext,key:string,raw:string){
   const result=validateResearchOutput(raw,key)
+  const evaluation=context.artifacts.get('research-evaluation')
+  validateDecisionFacts(JSON.parse(result.text),evaluation)
+  validateFinancialFacts(JSON.parse(result.text),financialFacts(context.artifacts.get('company-market-data')))
+  const decisionIssues=auditDecisionEvidence(JSON.parse(result.text),evaluation)
+  result.issues.push(...decisionIssues.map(item=>`${item.ticker}：${item.reason}`))
+  await context.saveArtifact(`${key}-decision-evidence-audit`,decisionIssues,'DATA')
   const sources=(context.artifacts.get('research-evaluation')?.evidence||context.artifacts.get('research-snapshot')?.evidence||[]) as Evidence[]
+  let droppedUnsupportedClaims=0
   const audit=(value:unknown):unknown=>{
-    if(Array.isArray(value))return value.map(audit)
+    if(Array.isArray(value))return value.map(audit).filter(item=>item!==undefined)
     if(!value||typeof value!=='object')return value
     const row=value as Record<string,unknown>
-    if(typeof row.claim==='string'){const checked=auditClaim(row as EvidenceClaim,sources);result.issues.push(...(checked.referenceIssues||[]));return checked}
+    if(typeof row.claim==='string'){
+      const checked=auditClaim(row as EvidenceClaim,sources)
+      if((checked.referenceIssues||[]).length){droppedUnsupportedClaims++;return undefined}
+      return checked
+    }
     return Object.fromEntries(Object.entries(row).map(([field,item])=>[field,audit(item)]))
   }
   result.text=JSON.stringify(audit(JSON.parse(result.text)))
   await context.saveArtifact(key,result.text,'DATA')
-  await context.saveArtifact(`${key}-validation`,{status:result.issues.length?'limited':'passed',issues:result.issues},'DATA')
+  await context.saveArtifact(`${key}-validation`,{status:result.issues.length||droppedUnsupportedClaims?'limited':'passed',issues:result.issues,droppedUnsupportedClaims,note:droppedUnsupportedClaims?'未完整绑定冻结证据的AI支撑句已在入库前删除，模块质量已降级且未用规则补写替代观点':'所有支撑句均已绑定冻结证据'},'DATA')
   const graph=(context.artifacts.get('graph-context')||context.artifacts.get('research-snapshot')?.graphContext) as FrozenGraphContext|undefined
   const usageIssues:string[]=[]
   const parsed=JSON.parse(result.text) as Record<string,unknown>

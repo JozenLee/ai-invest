@@ -16,6 +16,18 @@ def stock_market(code):
     return 'cn' if re.fullmatch(r'\d{6}', code) else 'us'
 
 
+def stock_exchange(code):
+    """Return the Tushare exchange suffix for a canonical mainland code."""
+    code = canonical_stock_code(code)
+    if not re.fullmatch(r'\d{6}', code):
+        return ''
+    if code.startswith(('4', '8', '92')):
+        return 'BJ'
+    if code.startswith(('0', '2', '3')):
+        return 'SZ'
+    return 'SH'
+
+
 def provider_symbol(code, provider='yfinance'):
     code = canonical_stock_code(code)
     if code.endswith('.hk'):

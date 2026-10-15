@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const { prompt, db } = vi.hoisted(() => ({ prompt: vi.fn(), db: { findFirst: vi.fn(), create: vi.fn(), update: vi.fn() } }))
 vi.mock('@/lib/workflow/analysis-prompt', () => ({ runAnalysisPrompt: prompt, recoverableAnalysisError: (error:unknown) => /aborted|timed out|timeout/i.test(error instanceof Error ? error.message : String(error)) }))
-vi.mock('@/lib/db', () => ({ prisma: { aIAnalysisReport: db } }))
+vi.mock('@/lib/db', () => ({ prisma: { aIAnalysisReport: db, executionRun:{findUnique:vi.fn(async()=>null)} } }))
 import { socialReportStep } from '../workflow/steps/social-report-step'
 import { industryOverviewStep } from '../workflow/steps/industry-overview-step'
 import { marketAnalysisStep } from '../workflow/steps/market-analysis-step'
@@ -16,44 +16,58 @@ import type { SocialReport } from '../analysis/social-report'
 const valid = { version: 2, title: '产业观察', subtitle: '来源与日期待核验', takeaways: ['需求','盈利','风险'], sections: REPORT_SECTIONS.map(title => ({title,body:'有依据的分析'})), risks: ['风险一','风险二','风险三'] }
 const response = (value: unknown) => ({ content: [{type:'text',text:JSON.stringify(value)}] })
 function context(): StepContext {
-  const artifacts = new Map<string, any>([['industry-info', {id:'industry',name:'AI硬件'}], ['market-analysis',JSON.stringify({analysis:'完整市场证据',evidence:[{source:'交易所',date:'2026-09-04'}]})], ['portfolio-analysis','PRIVATE'], ['etf-actions',[]]])
+  const decision={ticker:'159001',name:'测试ETF',indexCode:'IDX',state:'watch',metrics:{date:'2026-09-04',amount20:100},conditions:[],evidenceIds:['market-evidence']}
+  const company={stockCode:'600001',stockName:'公司甲',stage:'中游',segment:'服务器',financials:[{evidenceId:'financial-evidence',reportType:'income',period:'2026-06-30',publishDate:'2026-08-01',source:'公司财报',currency:'CNY',metrics:[]}],announcements:[]}
+  const artifacts = new Map<string, any>([['industry-info', {id:'industry',name:'AI硬件'}], ['market-analysis',JSON.stringify({analysis:'完整市场证据',evidence:[{source:'交易所',date:'2026-09-04'}]})], ['portfolio-analysis','PRIVATE'], ['etf-actions',[]],['data-quality',{status:'available',modules:{}}],['research-preflight',{status:'fresh',completed:0,partial:0,failed:0}],['research-evaluation',{decisions:[decision],events:[],evidence:[],modules:{},profile:{name:'AI硬件',horizonDays:20,rules:{}},indexBreadth:{mappedIndices:1,usableIndices:1,aboveMA20:0,coverage:1},products:[]}],['etf-market-data',[{ticker:'159001',name:'测试ETF',dataDate:'2026-09-04',source:'交易所',evidenceIds:['market-evidence']}]],['company-market-data',[company]]])
   return {runId:'run',stepId:'step',input:{},artifacts,saveArtifact:vi.fn(async (key,data) => { artifacts.set(key,data) }),updateProgress:vi.fn()}
 }
 beforeEach(() => { vi.clearAllMocks(); prompt.mockReset(); db.findFirst.mockResolvedValue(null); db.create.mockResolvedValue({id:'saved'}); db.update.mockResolvedValue({id:'saved'}) })
 describe('report recovery', () => {
-  it('uses the configured Opus model for market and company research',async()=>{
+  it('archives independent domain research separately and makes it the report lead', async () => {
+    const ctx=context()
+    const domain={version:1,status:'completed',snapshotId:'s1',asOf:'2026-09-04T08:00:00Z',generatedAt:'2026-09-04T09:00:00Z',inputHash:'hash',promptVersion:'1',opinion:{conclusion:'独立领域判断：产业需求增长但等待价格确认'}}
+    ctx.artifacts.set('domain-research',domain)
+    ctx.artifacts.set('investment-advice',{executiveSummary:{conclusion:'原分步基线结论'},recommendation:{held:'观望'}})
+    await generateReportStep.execute(ctx)
+    const saved=db.create.mock.calls[0][0].data,structured=JSON.parse(saved.dataJson)
+    expect(saved.summary).toContain(domain.opinion.conclusion)
+    expect(structured.domainResearch).toEqual(domain)
+    expect(structured.investmentAdvice.executiveSummary.conclusion).toBe('原分步基线结论')
+    expect(structured.domainComparison.performanceWinner).toBeNull()
+  })
+  it('uses the configured Opus model for market research and the fast model for company research',async()=>{
     prompt.mockResolvedValueOnce(response({analysis:'市场判断',dimensions:[],dataBoundary:'边界',score:null,trend:'震荡',risk_level:'中',evidence:[],counterEvidence:[],watchlist:[]}))
       .mockResolvedValueOnce(response({analysis:'企业判断',key_companies:[],chain_structure:[],evidence:[],counterEvidence:[],watchlist:[]}))
     const ctx=context()
     await marketAnalysisStep.execute(ctx)
     await companyAnalysisStep.execute(ctx)
     expect(prompt.mock.calls[0][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5'})
-    expect(prompt.mock.calls[1][1]).toMatchObject({model:process.env.CLAUDE_MODEL||'claude-opus-5'})
+    expect(prompt.mock.calls[1][1]).toMatchObject({model:process.env.CLAUDE_FAST_MODEL||process.env.CLAUDE_MODEL||'claude-opus-5'})
   })
-  it('keeps the report chain running when early analysis requests are aborted',async()=>{
+  it('fails closed when an AI viewpoint cannot be generated',async()=>{
     prompt.mockRejectedValue(new Error('Request was aborted.'))
     const ctx=context()
     const event={id:'event-1',title:'算力项目进展',category:'technology',publishedAt:'2026-09-07T08:00:00Z',expiresAt:'2026-09-10T08:00:00Z',companies:['公司甲'],segments:['服务器'],evidenceIds:['event-evidence'],sources:['公司公告'],urls:['https://example.com'],excerpt:'项目进展材料',status:'evidence',priority:5,verification:'source-linked-not-independently-verified'}
-    ctx.artifacts.set('research-evaluation',{decisions:[],events:[event],evidence:[],modules:{},profile:{name:'AI硬件',rules:{}},products:[]})
+    ctx.artifacts.set('research-evaluation',{...ctx.artifacts.get('research-evaluation'),events:[event]})
     ctx.artifacts.set('etf-market-data',[{ticker:'159001',name:'测试ETF',date:'2026-09-07',source:'交易所',evidenceIds:['market-evidence']}])
     ctx.artifacts.set('company-market-data',[{stockCode:'600001',stockName:'公司甲',stage:'中游',segment:'服务器',financials:[{evidenceId:'financial-evidence',reportType:'income',period:'2026-06-30',publishDate:'2026-08-01',source:'公司财报',currency:'CNY',metrics:[]}],announcements:[]}])
-    await marketAnalysisStep.execute(ctx)
-    await newsAnalysisStep.execute(ctx)
-    await companyAnalysisStep.execute(ctx)
-    expect(ctx.artifacts.get('market-analysis-ai-status')).toMatchObject({status:'fallback'})
-    expect(ctx.artifacts.get('news-analysis-ai-status')).toMatchObject({status:'deterministic'})
-    expect(ctx.artifacts.get('company-analysis-ai-status')).toMatchObject({status:'fallback'})
-    expect(JSON.parse(ctx.artifacts.get('news-analysis'))).toMatchObject({sentiment:'未知',catalysts:[{event:'算力项目进展'}]})
+    await expect(marketAnalysisStep.execute(ctx)).rejects.toThrow('aborted')
+    await expect(newsAnalysisStep.execute(ctx)).rejects.toThrow('aborted')
+    await expect(companyAnalysisStep.execute(ctx)).rejects.toThrow('aborted')
+    expect(ctx.artifacts.get('market-analysis-ai-status')).toMatchObject({status:'failed'})
+    expect(ctx.artifacts.get('news-analysis-ai-status')).toMatchObject({status:'failed'})
+    expect(ctx.artifacts.get('company-analysis-ai-status')).toMatchObject({status:'failed'})
+    expect(ctx.artifacts.has('news-analysis')).toBe(false)
   })
-  it('degrades an industry overview timeout to a traceable structured synthesis',async()=>{
+  it('does not replace an AI industry overview with deterministic prose after timeout',async()=>{
     prompt.mockRejectedValue(new Error('Request timed out.'))
     const ctx=context()
     ctx.artifacts.set('graph-context',{revisionId:'r1',version:1,contentHash:'h1',mappingRevisionId:'m1',mappingContentHash:'mh1',industry:{id:'i',code:'ai',name:'AI'},coverage:{},stages:[{name:'上游',segments:[{name:'芯片',companies:[],etfs:[],indices:[]}]}],relations:[],etfExposure:[],eventMappings:[]})
     ctx.artifacts.set('news-analysis',{analysis:'事件结论',catalysts:[],evidence:[],counterEvidence:[],watchlist:[]})
     ctx.artifacts.set('company-analysis',{analysis:'企业结论',key_companies:[],evidence:[],counterEvidence:[],watchlist:[]})
-    await industryOverviewStep.execute(ctx)
-    expect(ctx.artifacts.get('industry-overview-ai-status')).toMatchObject({status:'deterministic'})
-    expect(JSON.parse(ctx.artifacts.get('industry-overview'))).toMatchObject({stage:'未知',segmentSignals:[{segment:'芯片'}]})
+    await expect(industryOverviewStep.execute(ctx)).rejects.toThrow('timed out')
+    expect(ctx.artifacts.get('industry-overview-ai-status')).toMatchObject({status:'failed'})
+    expect(ctx.artifacts.has('industry-overview')).toBe(false)
   })
   it('reports exact overflow paths and lengths, invalid JSON and section order', () => {
     expect(() => parseSocialReport(JSON.stringify({...valid,title:'字'.repeat(21)}))).toThrow('title：实际21字，最多20字')

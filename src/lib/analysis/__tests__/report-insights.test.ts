@@ -9,7 +9,7 @@ describe('report investment readiness', () => {
     expect(reportReadiness(evaluation, { status: 'available' }).level).toBe('advice-ready')
     expect(reportReadiness(evaluation, { status: 'available' }).confidencePct).toBeGreaterThan(0)
     expect(safeDecisionAction(evaluation.decisions[0]).unheld).toBe('建仓')
-    expect(safeDecisionAction(evaluation.decisions[0], false).unheld).toBe('待盘中复核')
+    expect(safeDecisionAction(evaluation.decisions[0], false).unheld).toBe('仅供研究参考')
   })
 
   it('does not rank a product with an implausible tracking error', () => {
@@ -28,12 +28,30 @@ describe('report investment readiness', () => {
     const evaluation = evaluateResearch(fixture())
     evaluation.events.push({ ...evaluation.events[0], id: 'admin', category: 'administrative', priority: 5 })
     expect(decisionEvents(evaluation).some(item => item.id === 'admin')).toBe(false)
+    evaluation.events.push({ ...evaluation.events[0], id: 'cash',title:'关于使用部分闲置募集资金进行现金管理的进展公告',evidenceGrade:'A',materialityScore:90 })
+    expect(decisionEvents(evaluation).some(item=>item.id==='cash')).toBe(false)
+  })
+
+  it('reserves recent developments and both announcements and broader news',()=>{
+    const evaluation=evaluateResearch(fixture()),base=evaluation.events[0]
+    evaluation.events=Array.from({length:6},(_,index)=>({...base,id:`event-${index}`,title:`产业重大事件${index}`,publishedAt:`2026-09-${String(index+1).padStart(2,'0')}T01:00:00Z`,companies:index===0?['600000']:[],segments:[`环节${index}`],status:'evidence' as const,category:'technology' as const,priority:4,evidenceGrade:'A' as const,materialityScore:index===5?65:95,sourceTier:index===0?'primary' as const:'corroborated' as const,independentSourceCount:index===0?1:2}))
+    const selected=decisionEvents(evaluation,4)
+    expect(selected.map(item=>item.id)).toEqual(expect.arrayContaining(['event-0','event-5']))
+    expect(selected.some(item=>item.companies.length>0)).toBe(true)
+    expect(selected.some(item=>item.companies.length===0)).toBe(true)
+  })
+
+  it('reserves bounded slots for the highest influence events',()=>{
+    const evaluation=evaluateResearch(fixture()),base=evaluation.events[0]
+    evaluation.events=Array.from({length:20},(_,index)=>({...base,id:`impact-${index}`,title:`影响事件${index}`,publishedAt:`2026-09-${String((index%9)+1).padStart(2,'0')}T01:00:00Z`,status:'evidence' as const,category:'technology' as const,priority:4,evidenceGrade:'A' as const,materialityScore:90,influenceScore:index<6?95:60,influenceLevel:index<6?'high' as const:'medium' as const}))
+    const selected=decisionEvents(evaluation,8)
+    expect(selected.filter(item=>item.influenceLevel==='high').length).toBeGreaterThanOrEqual(4)
   })
 
   it('guards direct action wording in archived AI sections',()=>{
     expect(guardActionLanguage({analysis:'未持有观望、已持有减仓'},false)).toEqual({analysis:'未持有暂缓新增、已持有复核风险敞口'})
-    expect(guardActionLanguage({recommendation:{unheld:'建仓',held:'减仓'}},false)).toEqual({recommendation:{unheld:'待交易时段复核',held:'复核风险敞口'}})
-    expect(guardActionLanguage(JSON.stringify({recommendation:{unheld:'建仓',held:'减仓'}}),false)).toEqual({recommendation:{unheld:'待交易时段复核',held:'复核风险敞口'}})
+    expect(guardActionLanguage({recommendation:{unheld:'建仓',held:'减仓'}},false)).toEqual({recommendation:{unheld:'仅供研究参考',held:'复核风险敞口'}})
+    expect(guardActionLanguage(JSON.stringify({recommendation:{unheld:'建仓',held:'减仓'}}),false)).toEqual({recommendation:{unheld:'仅供研究参考',held:'复核风险敞口'}})
   })
   it('separates missing data from unmet market signals and deduplicates valuation indices',()=>{
     const evaluation=evaluateResearch(fixture())

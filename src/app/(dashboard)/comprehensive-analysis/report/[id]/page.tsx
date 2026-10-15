@@ -1,5 +1,9 @@
 "use client";
 
+import { DomainResearchView } from "@/components/analysis/DomainResearchView";
+import type { DomainResearch } from "@/lib/workflow/domain-research";
+import { UnifiedAllocationView } from "@/components/analysis/UnifiedAllocationView";
+import type { UnifiedAllocation } from "@/lib/research/strategy/kernel";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -25,6 +29,8 @@ import {
   parseAnalysis,
 } from "@/components/analysis/MarketResearchView";
 import { ReportEvidenceView } from "@/components/analysis/ReportEvidenceView";
+import { actionAvailability } from "@/lib/analysis/action-availability";
+import { DailyExecutionPanel } from "@/components/analysis/DailyExecutionPanel";
 import { PortfolioDecisionPanel } from "@/components/analysis/PortfolioDecisionPanel";
 import { SocialReportView } from "@/components/analysis/SocialReportView";
 import { ComprehensiveConclusionView } from "@/components/analysis/ComprehensiveConclusionView";
@@ -55,6 +61,7 @@ import {
   type DecisionTimingAssessment,
 } from "@/lib/analysis/decision-timing";
 import { cleanClaim } from "@/lib/analysis/evidence-references";
+import { normalizeAIProductDecisions } from "@/lib/analysis/investment-conclusion";
 
 type Report = {
   id: string;
@@ -68,6 +75,13 @@ type Report = {
   createdAt: string;
 };
 type Structured = {
+  domainResearch?: DomainResearch;
+  domainValidation?: {matured:number;pending:number;excluded:number;basis:string};
+  unifiedAllocation?:UnifiedAllocation;
+  integrityWarnings?: string[];
+  dataRemediationPlan?:Array<{condition:string;label:string;tickers:string[];priority:string}>;
+  performance?: {wallMs:number;activeMs:number;idleMs:number;failedAttempts:number;failedRequests?:number};
+  inputCoverage?:Record<string,{requirementCoveragePct?:number;candidateCoveragePct?:number}>;
   socialReport?: SocialReport;
   researchEvaluation?: Evaluation;
   researchPreflight?: {
@@ -81,7 +95,7 @@ type Structured = {
   };
   dataQuality?: { status?: string };
   reportQuality?: ReportQualityAssessment;
-  strategyValidation?: {status?:string;validation?:string;reason?:string;snapshots?:number;trades?:number;observations?:number;limitations?:string[];results?:Array<{ticker:string;status:string;returnPct:number|null;excessReturnPct?:number|null;maxDrawdownPct:number|null;sharpeRatio?:number|null;informationRatio?:number|null}>};
+  strategyValidation?: {status?:string;validation?:string;reason?:string;snapshots?:number;trades?:number;observations?:number;limitations?:string[];policyComparison?:{reports:number;executableAIProducts:number;excludedAIProducts:number;basis:string;rules:Array<{ticker:string;trades:number;performanceUsable:boolean;returnPct:number|null;buyAndHoldReturnPct:unknown}>;ai:Array<{ticker:string;trades:number;performanceUsable:boolean;returnPct:number|null}>};forecastCalibration?:{status:string;horizonTradingDays:number;minimumOutcomes:number;maturedOutcomes:number;pendingOutcomes:number;brierScore:number|null;hitRatePct:number|null};results?:Array<{ticker:string;status:string;performanceUsable?:boolean;returnPct:number|null;excessReturnPct?:number|null;maxDrawdownPct:number|null;sharpeRatio?:number|null;informationRatio?:number|null}>};
   decisionTiming?: DecisionTimingAssessment;
   inheritedFromReportId?: string | null;
   historicalReportContext?: Array<{
@@ -156,7 +170,7 @@ const reportPages = [
   {
     id: "decisions",
     label: "投资决策",
-    description: "指数规则、产品选择与行动条件",
+    description: "AI逐产品决策与程序约束",
     icon: BriefcaseBusiness,
   },
   {
@@ -169,7 +183,7 @@ const reportPages = [
   {
     id: "readiness",
     label: "数据附录",
-    description: "时效、质量、来源与版本",
+    description: "口径、质量、来源与版本",
     icon: DatabaseZap,
   },
   {
@@ -243,14 +257,16 @@ export default function ComprehensiveReportPage() {
   const readiness = reportReadiness(evaluation, structured.dataQuality, timing),
     coverage = reportCoverage(evaluation),
     groups = productGroups(evaluation);
-  const quality = evaluation
+  const storedQuality = structured.reportQuality || (evaluation
     ? buildReportQuality({
         evaluation,
         dataQuality: structured.dataQuality,
         preflight: structured.researchPreflight,
         decisionTiming: timing,
+        analysisStatuses: structured.analysisStatuses,
       })
-    : structured.reportQuality;
+    : undefined);
+  const quality = storedQuality && !timing.executionReady ? {...storedQuality,executionReadinessScore:0,usability:'limited-advice' as const,blockers:[...new Set([...storedQuality.blockers,...timing.reasons])]} : storedQuality;
   const decisions = evaluation?.decisions || [],
     sources = evaluation?.evidence || [];
   const baseUrl = `/api/research/${report.industryId}?snapshot=${evaluation?.snapshotId || ""}`;
@@ -258,8 +274,15 @@ export default function ComprehensiveReportPage() {
       guardActionLanguage(structured.investmentAdvice, timing.executionReady),
     ),
     industry = parseAnalysis(structured.industryAnalysis);
+  const aiProductDecisions = normalizeAIProductDecisions(
+    advice.productDecisions,
+    decisions.map((item) => item.ticker),
+  );
+  const aiDecisionByTicker = new Map(
+    aiProductDecisions.map((item) => [item.ticker, item]),
+  );
   const summary = cleanClaim(
-    String(parseAnalysis(advice.executiveSummary).conclusion || advice.thesis || industry.analysis || report.summary || ""),
+    String((structured.domainResearch?.status === "completed" ? structured.domainResearch.opinion?.conclusion : null) || parseAnalysis(advice.executiveSummary).conclusion || advice.thesis || industry.analysis || report.summary || ""),
   );
   const investmentFallback = structured.analysisStatuses?.investment?.status === "fallback" || JSON.stringify(advice).includes("智能投资建议请求超时");
   const portfolio = applyDecisionTimingGate(
@@ -295,8 +318,7 @@ export default function ComprehensiveReportPage() {
     ? normalizedRequestedPage as ReportPageId
     : "summary";
   return (
-    <main
-      id="main-content"
+    <div
       className="mx-auto w-full max-w-7xl space-y-8 px-4 py-6 sm:px-6 [overflow-wrap:anywhere]"
     >
       <header className="space-y-4">
@@ -333,6 +355,15 @@ export default function ComprehensiveReportPage() {
           {decisions.length}只产品 / {coverage.indexCount}个指数
         </p>
       </header>
+      <section aria-label="报告使用边界" className="space-y-3 rounded-2xl border bg-card p-4 sm:p-5">
+        {structured.integrityWarnings?.map(warning=><p key={warning} role="alert" className="rounded-lg border border-destructive p-3 text-sm leading-6">{warning}。</p>)}
+        <p className="font-medium">{timing.executionReady ? "研究时效通过，操作仍需逐产品核验" : "当前仅供研究参考，操作前请重新复核"}</p>
+        <p className="text-sm leading-6 text-muted-foreground">执行条件待复核 {aiProductDecisions.filter(item=>item.executionContract?.status!=="verified").length}/{aiProductDecisions.length} 只 · {timing.validUntil?`有效至 ${date(timing.validUntil)}`:"有效期未记录，需重新分析"}</p>
+        {(quality?.blockers?.length || 0)>0 && <details className="text-sm"><summary className="min-h-11 cursor-pointer py-2 focus-visible:outline-2 focus-visible:outline-ring">查看研究限制（{quality?.blockers.length}项）</summary><ul className="list-disc space-y-1 pl-5 leading-6">{quality?.blockers.map(item=><li key={item}>{chineseNarrative(item)}</li>)}</ul></details>}
+        {structured.performance && <p className="text-sm text-muted-foreground">生成用时 {(structured.performance.wallMs/60000).toFixed(1)} 分钟 · 实际处理 {(structured.performance.activeMs/60000).toFixed(1)} 分钟 · 等待 {(structured.performance.idleMs/60000).toFixed(1)} 分钟 · {structured.performance.failedRequests===undefined?`失败步骤 ${structured.performance.failedAttempts} 次`:`失败请求 ${structured.performance.failedRequests} 次`}</p>}
+        {Object.values(structured.inputCoverage||{}).some(item=>item.candidateCoveragePct!==undefined) && <details className="text-sm"><summary className="min-h-11 cursor-pointer py-2 focus-visible:outline-2 focus-visible:outline-ring">证据筛选覆盖</summary><div className="space-y-1 leading-6">{Object.entries(structured.inputCoverage||{}).filter(([,item])=>item.candidateCoveragePct!==undefined).map(([name,item])=><p key={name}>{name==="news-analysis"?"资讯分析":"综合建议"}：候选事件展开 {item.candidateCoveragePct}% · 最低输入要求达标 {item.requirementCoveragePct}%</p>)}<p className="text-muted-foreground">达标率不代表模型阅读了全部候选资料。</p></div></details>}
+      </section>
+      <Link className="inline-flex min-h-11 items-center rounded-xl border bg-card px-4 py-3 font-medium text-primary" href={`/comprehensive-analysis?industryId=${encodeURIComponent(report.industryId)}&tab=daily`}>打开最新每日执行清单 · 与归档报告时点分开</Link>
       <div className="grid items-start gap-6 print:grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)]">
         <nav
           aria-label="报告子页面"
@@ -364,22 +395,25 @@ export default function ComprehensiveReportPage() {
           })}
         </nav>
         <div className="min-w-0 space-y-6" key={activePage}>
+          {activePage === "summary" && <DomainResearchView validation={structured.domainValidation} research={structured.domainResearch} baselineConclusion={String(parseAnalysis(advice.executiveSummary).conclusion || "")} />}
           {activePage === "summary" && (
             <section
               id="summary"
               className="scroll-mt-20 rounded-2xl border bg-card p-5 sm:p-6"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
-                {title("综合投资结论")}
+                {title(structured.domainResearch?.status === "completed" ? "原分步流程基线" : "综合投资结论")}
                 <Badge variant={investmentFallback ? "outline" : "default"}>{investmentFallback ? "超时降级汇编" : "AI 综合研判"}</Badge>
               </div>
               {investmentFallback && <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.05] px-3 py-2 text-xs leading-5 text-amber-800 dark:text-amber-200">综合模型请求未在时限内完成；本结论由已完成的市场、事件、企业、行业总览和冻结规则结构化汇编，不新增模型推断。</p>}
               <ComprehensiveConclusionView
                 advice={advice}
+                executionAvailable={aiProductDecisions.length>0&&aiProductDecisions.every(item=>actionAvailability(item,timing.executionReady).available)}
                 fallbackSummary={summary}
                 industryOutlook={industry.outlook}
-                decisionSummary={`${decisions.filter((item) => item.state === "risk-off").length}只产品风险收缩，${decisions.filter((item) => item.state === "eligible").length}只满足条件。`}
+                decisionSummary={!aiProductDecisions.some(item=>actionAvailability(item,timing.executionReady).available)?"归档原观点当前无有效执行动作，请查看每日执行清单。":`${aiProductDecisions.filter((item) => item.heldAction === "减仓").length}只AI建议减仓，${aiProductDecisions.filter((item) => item.unheldAction === "建仓" || item.heldAction === "加仓").length}只AI建议增加暴露。`}
               />
+              <UnifiedAllocationView allocation={structured.unifiedAllocation}/>
               {structured.inheritedFromReportId && (
                 <p className="mt-4 text-xs text-amber-700">
                   本轮为规则复核，研究正文继承自{" "}
@@ -452,16 +486,20 @@ export default function ComprehensiveReportPage() {
           )}
           {activePage === "decisions" && (
             <section id="decisions" className="scroll-mt-20 space-y-4">
-              {title("指数基金规则与行动建议")}
+              {title("AI逐产品投资决策")}
               <p className="text-sm text-muted-foreground">
-                以下动作来自逐产品规则；模型研究观点另列。相同状态可以对应相同动作，每只产品的触发依据与数据覆盖独立展示。
+                投资方向由AI综合市场、企业、新闻、估值与反证生成；量化状态仅作为证据。实际持仓金额还会受到产品范围、数据时效、现金底仓、仓位上限、费用和每日最大调整比例约束。
               </p>
               <div className="grid gap-3 lg:grid-cols-2">
                 {decisions.map((decision) => {
-                  const action = safeDecisionAction(
+                  const aiDecision = aiDecisionByTicker.get(decision.ticker);
+                  const legacyAction = safeDecisionAction(
                     decision,
                     timing.executionReady && readiness.level === "advice-ready",
                   );
+                  const action = aiDecision
+                    ? { ...actionAvailability(aiDecision,timing.executionReady), intent: aiDecision.reason, confidencePct: aiDecision.confidencePct }
+                    : legacyAction;
                   return (
                     <details
                       key={decision.ticker}
@@ -472,20 +510,21 @@ export default function ComprehensiveReportPage() {
                           {chineseNarrative(decision.name)}
                         </span>
                         <span className="ml-2 text-xs text-muted-foreground">
-                          {decision.ticker} · {stateLabels[decision.state]}
+                          {decision.ticker} · 量化证据 {stateLabels[decision.state]}
                         </span>
                         <span className="mt-2 block text-sm">
                           未持有：{action.unheld} · 已持有：{action.held}
                         </span>
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          产品证据覆盖度 {decisionConfidence(decision)}/100 ·
+                          {aiDecision ? `AI置信度 ${aiDecision.confidencePct.toFixed(0)}/100 · 建议单日调整 ${aiDecision.suggestedAdjustmentPct.toFixed(1)}个百分点` : `历史规则动作 · 产品证据覆盖度 ${decisionConfidence(decision)}/100`} ·
                           指数 {decision.indexCode || "待映射"}
                         </span>
                       </summary>
                       <div className="space-y-3 border-t p-4">
                         <p className="text-sm leading-6">
-                          {chineseNarrative(decision.reason)}
+                          {chineseNarrative(action.intent)}
                         </p>
+                        {aiDecision && <p className="rounded-lg border border-primary/15 bg-primary/[0.035] px-3 py-2 text-xs leading-5"><span className="font-medium">AI决策</span> · 触发：{chineseNarrative(aiDecision.trigger)}<br/><span className="text-muted-foreground">失效：{chineseNarrative(aiDecision.invalidation)}</span></p>}
                         <p className="text-xs leading-5 text-muted-foreground">
                           相对基准{" "}
                           {decision.metrics.relative20Pct?.toFixed(2) ?? "未知"}{" "}
@@ -522,10 +561,10 @@ export default function ComprehensiveReportPage() {
               </div>
               <details className="rounded-xl border bg-card p-5">
                 <summary className="cursor-pointer font-medium">
-                  模型研究观点与逐产品说明
+                  AI综合观点与逐产品说明
                 </summary>
                 <p className="mt-3 text-xs text-muted-foreground">
-                  模型观点用于解释产业机会、风险和情景；规则动作及组合预算单独计算。旧报告中建议方向可能曾被程序覆盖。
+                  AI观点决定投资方向；程序仅计算并裁剪超出本地风险预算的目标范围和金额。旧报告没有AI逐产品决策时，仍按归档规则动作展示。
                 </p>
                 <div className="mt-4">
                   <ReportAnalysisView
@@ -540,6 +579,7 @@ export default function ComprehensiveReportPage() {
                             "scenarios",
                             "productSelection",
                             "ruleAssessment",
+                            "productDecisions",
                           ].includes(key),
                       ),
                     )}
@@ -671,7 +711,8 @@ export default function ComprehensiveReportPage() {
           )}
           {activePage === "readiness" && (
             <section id="readiness" className="scroll-mt-20 space-y-4">
-              {title("数据、时效与复盘附录")}
+<DailyExecutionPanel industryId={report.industryId} archivedContext />
+              {title("数据、质量与复盘附录")}
               <p className="text-sm leading-6 text-muted-foreground">这里集中保留数据健康度、字段限制、完整来源目录和版本链，供核对与复盘；用于形成结论的模块数据已放回对应研究页面。</p>
               <div className="grid gap-3 md:grid-cols-3">
                 <div className="rounded-xl border p-4">
@@ -703,8 +744,12 @@ export default function ComprehensiveReportPage() {
                 <div className="rounded-xl border p-4">
                   <h3 className="font-medium">{timing.label}</h3>
                   <p className="mt-2 text-xs leading-6 text-muted-foreground">
-                    {timing.reasons.join("；") || "实时数据符合时效要求"}
-                    。非交易时间不要求实时报价，不降低收盘研究的完整性。
+                    {timing.executionReady
+                      ? timing.phase === "trading"
+                        ? "使用底层订阅提供的实时行情快照。"
+                        : `使用底层订阅提供的最新交易日收盘数据${timing.closeDataSession ? `（${timing.closeDataSession}）` : ""}。`
+                      : timing.reasons.join("；") || "本轮仅供研究参考。"}
+                    分析流程与建议等级不因生成时点变化。
                   </p>
                 </div>
               </div>
@@ -802,8 +847,15 @@ export default function ComprehensiveReportPage() {
               {quality && (
                 <details className="rounded-xl border p-4">
                   <summary className="cursor-pointer text-sm font-medium">
-                    质量评分：{quality.overallScore}分 · {quality.grade}级
+                    报告等级：{quality.overallScore}分 · {quality.grade}级 · {quality.usability==='advice-grade'?'建议级':quality.usability==='limited-advice'?'有限建议':'证据不足'}
                   </summary>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm">证据置信度 <span className="float-right font-medium">{quality.evidenceConfidenceScore??quality.overallScore}</span></div>
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm">决策置信度 <span className="float-right font-medium">{quality.decisionConfidenceScore??quality.confidenceScore}</span></div>
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm">数据准备度 <span className="float-right font-medium">{quality.dataReadinessScore??"未审计"}</span></div>
+                    <div className="rounded-lg bg-muted/40 p-3 text-sm">执行合同与组合就绪度 <span className="float-right font-medium">{quality.executionReadinessScore??0}</span></div>
+                    {quality.executionAudit && <p className="text-xs text-muted-foreground">合同通过 {quality.executionAudit.verifiedProducts}/{quality.executionAudit.products}；可交易产品 {quality.executionAudit.tradableProducts}；组合可执行项 {quality.executionAudit.executablePortfolioActions}/{quality.executionAudit.portfolioActions}。持有、观望不代表交易许可，分数不代表收益概率。</p>}
+                  </div>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     {quality.dimensions.map((item) => (
                       <div key={item.key} className="text-sm">
@@ -816,7 +868,9 @@ export default function ComprehensiveReportPage() {
                   </div>
                 </details>
               )}
-              {structured.strategyValidation&&<details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">规则样本外回放：{structured.strategyValidation.validation==='candidate-walk-forward'?'达到候选样本门槛':'历史样本不足'}</summary><p className="mt-3 text-sm leading-6">{structured.strategyValidation.reason}</p><p className="mt-2 text-xs text-muted-foreground">冻结交易日 {structured.strategyValidation.snapshots||0} · 模拟交易 {structured.strategyValidation.trades||0} · 最少观察日 {structured.strategyValidation.observations||0}</p>{structured.strategyValidation.results?.length?<div className="mt-3 grid gap-2 sm:grid-cols-2">{structured.strategyValidation.results.slice(0,8).map(item=><div className="rounded-lg border p-3 text-xs" key={item.ticker}><span className="font-mono">{item.ticker}</span><span className="float-right">{item.status}</span><p className="mt-1 text-muted-foreground">回放收益 {item.returnPct?.toFixed(2)??'—'}% · 超额 {item.excessReturnPct?.toFixed(2)??'—'}% · 最大回撤 {item.maxDrawdownPct?.toFixed(2)??'—'}%</p></div>)}</div>:null}{structured.strategyValidation.limitations?.map((item,index)=><p className="mt-2 text-xs text-muted-foreground" key={index}>{item}</p>)}</details>}
+              {!!structured.dataRemediationPlan?.length && <details className="rounded-xl border p-4"><summary className="min-h-11 cursor-pointer py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">待补齐的数据（{structured.dataRemediationPlan.length}类）</summary><p className="mt-2 text-sm text-muted-foreground">这些是研究证据缺口，不代表市场走弱。数据更新后需新建分析。</p><ul className="mt-3 space-y-2 text-sm leading-6">{structured.dataRemediationPlan.map(item=><li key={item.condition}>{item.priority==='critical'?'优先补齐':'补充研究'} · {item.label} · {item.tickers.join('、')}</li>)}</ul></details>}
+              {structured.strategyValidation?.policyComparison && <details className="rounded-xl border p-4"><summary className="min-h-11 cursor-pointer py-2 text-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">规则、AI与持有基线对照</summary><p className="mt-2 text-sm leading-6">{structured.strategyValidation.policyComparison.basis}</p><p className="mt-2 text-sm text-muted-foreground">报告 {structured.strategyValidation.policyComparison.reports} 份 · 可核验AI产品决策 {structured.strategyValidation.policyComparison.executableAIProducts} 项 · 排除 {structured.strategyValidation.policyComparison.excludedAIProducts} 项</p><div className="mt-3 space-y-2">{structured.strategyValidation.policyComparison.ai.map(item=>{const rule=structured.strategyValidation?.policyComparison?.rules.find(row=>row.ticker===item.ticker);return <p className="text-sm leading-6" key={item.ticker}>{item.ticker}：AI模拟交易 {item.trades} 笔 / 规则 {rule?.trades||0} 笔；{item.performanceUsable&&rule?.performanceUsable?`AI收益 ${item.returnPct?.toFixed(2)}% / 规则 ${rule.returnPct?.toFixed(2)}% / 持有 ${typeof rule.buyAndHoldReturnPct==='number'?rule.buyAndHoldReturnPct.toFixed(2):'—'}%`:"样本未达门槛，不展示收益对比"}</p>})}</div></details>}
+              {structured.strategyValidation&&<details className="rounded-xl border p-4"><summary className="cursor-pointer text-sm font-medium">规则样本外回放：{structured.strategyValidation.validation==='candidate-walk-forward'?'达到候选样本门槛':'历史样本不足'}</summary><p className="mt-3 text-sm leading-6">{structured.strategyValidation.reason}</p><p className="mt-2 text-xs text-muted-foreground">冻结交易日 {structured.strategyValidation.snapshots||0} · 模拟交易 {structured.strategyValidation.trades||0} · 最少观察日 {structured.strategyValidation.observations||0}</p>{structured.strategyValidation.forecastCalibration&&<p className="mt-2 text-xs text-muted-foreground">明确概率预测校准：成熟结果 {structured.strategyValidation.forecastCalibration.maturedOutcomes}/{structured.strategyValidation.forecastCalibration.minimumOutcomes} · 待成熟 {structured.strategyValidation.forecastCalibration.pendingOutcomes} · Brier {structured.strategyValidation.forecastCalibration.brierScore?.toFixed(3)??'样本不足'} · 命中率 {structured.strategyValidation.forecastCalibration.hitRatePct?.toFixed(1)??'样本不足'}%</p>}{structured.strategyValidation.results?.length?<div className="mt-3 grid gap-2 sm:grid-cols-2">{structured.strategyValidation.results.slice(0,8).map(item=><div className="rounded-lg border p-3 text-xs" key={item.ticker}><span className="font-mono">{item.ticker}</span><span className="float-right">{item.status}</span><p className="mt-1 text-muted-foreground">{item.performanceUsable===false?'样本未达门槛，收益指标隐藏':`回放收益 ${item.returnPct?.toFixed(2)??'—'}% · 超额 ${item.excessReturnPct?.toFixed(2)??'—'}% · 最大回撤 ${item.maxDrawdownPct?.toFixed(2)??'—'}%`}</p></div>)}</div>:null}{structured.strategyValidation.limitations?.map((item,index)=><p className="mt-2 text-xs text-muted-foreground" key={index}>{item}</p>)}</details>}
               <details className="rounded-xl border p-4">
                 <summary className="cursor-pointer text-sm font-medium">
                   历史上下文与版本记录
@@ -934,6 +988,6 @@ export default function ComprehensiveReportPage() {
       <p className="pb-6 text-center text-xs text-muted-foreground">
         研究结果仅供参考，不构成投资建议，不自动执行交易。
       </p>
-    </main>
+    </div>
   );
 }

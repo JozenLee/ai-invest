@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- Workflow API artifacts are runtime JSON. */
 import { config } from 'dotenv'
 import { mkdir, open, readFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
@@ -24,9 +25,7 @@ async function main() {
     // A previous worker exited. Never retry a possibly accepted platform request.
     await prisma.$executeRawUnsafe("UPDATE publish_schedule_runs SET status='needs_review',error='后台中断，请核查流程与平台结果；未自动重发',updatedAt=? WHERE status IN ('generating','publishing')", new Date().toISOString())
     const slots = dueSlots(schedule)
-    for (const slot of slots) for (const industryId of schedule.industryIds) {
-      await prisma.$executeRawUnsafe('INSERT OR IGNORE INTO publish_schedule_runs (id,slot,industryId,status,config,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)', crypto.randomUUID(), slot, industryId, 'queued', JSON.stringify(schedule), new Date().toISOString(), new Date().toISOString())
-    }
+    for (const slot of slots) await prisma.$executeRawUnsafe('INSERT OR IGNORE INTO publish_schedule_runs (id,slot,industryId,status,config,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)', crypto.randomUUID(), slot, 'bundle', 'queued', JSON.stringify(schedule), new Date().toISOString(), new Date().toISOString())
     const jobs = await prisma.$queryRawUnsafe<Array<{ id: string; industryId: string; config: string }>>("SELECT * FROM publish_schedule_runs WHERE status='queued' ORDER BY slot,industryId")
     const base = process.env.NEXT_JS_URL || 'http://127.0.0.1:3000'
     const api = async (url: string, body?: unknown) => {
@@ -53,30 +52,40 @@ async function main() {
         const loginIdentity = typeof login.user_id === 'string' && login.user_id.trim() ? login.user_id.trim() : typeof login.username === 'string' ? login.username.trim() : ''
         if (!loginIdentity || ![account.accountId, account.displayName].includes(loginIdentity)) throw new Error('MCP当前账号与计划账号无法匹配，请重新扫码确认账号后保存计划')
         await prisma.$executeRawUnsafe("UPDATE publish_schedule_runs SET status='generating',updatedAt=? WHERE id=?", new Date().toISOString(), job.id)
-        const { runId } = await api('/api/analysis/comprehensive', { industryId: job.industryId, publicOnly: true })
-        await prisma.$executeRawUnsafe('UPDATE publish_schedule_runs SET runId=? WHERE id=?', runId, job.id)
-        await api(`/api/analysis/comprehensive/${runId}/execute`, { mode: 'all' })
-        let reportId: string | undefined
+        const runs = await Promise.all(saved.industryIds.map(async (industryId:string) => {
+          const { runId } = await api('/api/analysis/comprehensive', { industryId, publicOnly: true })
+          await api(`/api/analysis/comprehensive/${runId}/execute`, { mode: 'all' })
+          return { industryId,runId }
+        }))
+        await prisma.$executeRawUnsafe('UPDATE publish_schedule_runs SET runId=? WHERE id=?', JSON.stringify(runs.map(item=>item.runId)), job.id)
+        const reportIds = new Map<string,string>()
         const deadline = Date.now() + 90 * 60000
         while (Date.now() < deadline) {
-          const run = await api(`/api/analysis/comprehensive/${runId}`)
-          if (run.status === 'FAILED') throw new Error(run.error || '综合分析失败')
-          if (run.status === 'COMPLETED') {
-            reportId = run.steps.find((s: any) => s.stepName === 'generate-report')?.artifacts.find((a: any) => a.artifactKey === 'report-id')?.data
-            break
+          const states = await Promise.all(runs.filter(item=>!reportIds.has(item.runId)).map(async item=>({item,run:await api(`/api/analysis/comprehensive/${item.runId}`)})))
+          for (const {item,run} of states) {
+            if (run.status === 'FAILED') throw new Error(`${item.industryId}：${run.error || '综合分析失败'}`)
+            if (run.status === 'COMPLETED') {
+              const reportId=run.steps.find((s: any) => s.stepName === 'generate-report')?.artifacts.find((a: any) => a.artifactKey === 'report-id')?.data
+              if (!reportId) throw new Error(`${item.industryId}：分析完成但未生成报告`)
+              reportIds.set(item.runId,reportId)
+            }
           }
+          if (reportIds.size === runs.length) break
           await new Promise(resolve => setTimeout(resolve, 5000))
         }
-        if (!reportId) throw new Error('分析未生成报告或已超时')
-        await prisma.$executeRawUnsafe('UPDATE publish_schedule_runs SET reportId=? WHERE id=?', reportId, job.id)
-        const { preparePublicReport } = await import('../src/lib/services/publish-report.service')
-        const prepared = await preparePublicReport(reportId)
+        if (reportIds.size !== runs.length) throw new Error('部分产业分析未生成报告或已超时')
+        const orderedReportIds=runs.map(item=>reportIds.get(item.runId)!)
+        await prisma.$executeRawUnsafe('UPDATE publish_schedule_runs SET reportId=? WHERE id=?', JSON.stringify(orderedReportIds), job.id)
+        const { buildPublishBundle,renderPublishBundleImages } = await import('../src/lib/services/publish-bundle.service')
+        const bundle=await buildPublishBundle(orderedReportIds)
+        const outputDirectory=path.join(directory,job.id)
+        const images=await renderPublishBundleImages(bundle,outputDirectory)
         const latest = await getPublishSchedule()
         const activeAccount = await prisma.xiaohongshuAccount.findUnique({ where: { id: saved.accountId } })
         if (!activeAccount?.enabled || !latest.enabled || JSON.stringify(latest) !== JSON.stringify(current)) throw new Error('计划或账号已变更，已停止本次发布，请检查已生成报告')
         publishing = true
         await prisma.$executeRawUnsafe("UPDATE publish_schedule_runs SET status='publishing',updatedAt=? WHERE id=?", new Date().toISOString(), job.id)
-        const result = await publishXiaohongshuNote({ title: prepared.title, content: prepared.content, images: prepared.images, tags: saved.tags, visibility: saved.visibility, isOriginal: saved.isOriginal })
+        const result = await publishXiaohongshuNote({ title: bundle.title, content: bundle.content, images, tags: saved.tags, visibility: saved.visibility, isOriginal: saved.isOriginal })
         if (result.success === false) throw new Error(result.error || result.message || '平台拒绝发布')
         await prisma.$executeRawUnsafe("UPDATE publish_schedule_runs SET status='published',updatedAt=? WHERE id=?", new Date().toISOString(), job.id)
       } catch (error) {
@@ -90,9 +99,7 @@ async function enqueue() {
   try {
     const { getPublishSchedule, dueSlots } = await import('../src/lib/publish-schedule')
     const schedule = await getPublishSchedule()
-    for (const slot of dueSlots(schedule)) for (const industryId of schedule.industryIds) {
-      await prisma.$executeRawUnsafe('INSERT OR IGNORE INTO publish_schedule_runs (id,slot,industryId,status,config,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)', crypto.randomUUID(), slot, industryId, 'queued', JSON.stringify(schedule), new Date().toISOString(), new Date().toISOString())
-    }
+    for (const slot of dueSlots(schedule)) await prisma.$executeRawUnsafe('INSERT OR IGNORE INTO publish_schedule_runs (id,slot,industryId,status,config,createdAt,updatedAt) VALUES (?,?,?,?,?,?,?)', crypto.randomUUID(), slot, 'bundle', 'queued', JSON.stringify(schedule), new Date().toISOString(), new Date().toISOString())
     const queued = await prisma.$queryRawUnsafe<Array<{ id: string }>>("SELECT id FROM publish_schedule_runs WHERE status IN ('queued','generating','publishing') LIMIT 1")
     if (queued.length) {
       const child = spawn(process.execPath, ['--import', 'tsx', path.join(process.cwd(), 'scripts/run-publish-schedule.ts'), '--worker'], { cwd: process.cwd(), env: process.env, detached: true, stdio: 'ignore' })

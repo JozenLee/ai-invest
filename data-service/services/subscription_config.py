@@ -15,9 +15,25 @@ def get_config():
     rows = db.execute("SELECT payload FROM subscription_configuration WHERE id='global'")
     if rows:
         saved = json.loads(rows[0]['payload'])
-        policies = {**config['policies'], **saved.get('policies', {})}
+        policies = {
+            key: {**policy, **saved.get('policies', {}).get(key, {})}
+            for key, policy in config['policies'].items()
+        }
+        retention = {
+            **config.get('storageRetention', {}),
+            **saved.get('storageRetention', {}),
+            'rawPayloadDays': {
+                **config.get('storageRetention', {}).get('rawPayloadDays', {}),
+                **saved.get('storageRetention', {}).get('rawPayloadDays', {}),
+            },
+            'rawPayloadMaxVersions': {
+                **config.get('storageRetention', {}).get('rawPayloadMaxVersions', {}),
+                **saved.get('storageRetention', {}).get('rawPayloadMaxVersions', {}),
+            },
+        }
         config.update(saved)
         config['policies'] = policies
+        config['storageRetention'] = retention
     config['policies'].pop('market_news', None)
     return config
 

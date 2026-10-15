@@ -72,10 +72,11 @@ const METRIC_ALIASES: Array<[string, string[]]> = [
   ['毛利率', ['毛利率', 'grossprofit_margin']], ['净利率', ['净利率', 'netprofit_margin']], ['ROE', ['roe', 'ROE']],
   ['经营现金流', ['经营现金流', 'n_cashflow_act', 'Operating Cash Flow', '经营业务现金净额', '经营活动产生的现金流量净额']], ['总资产', ['total_assets', 'Total Assets', '总资产', '资产总额']],
   ['总负债', ['total_liab', 'Total Liabilities Net Minority Interest', '总负债', '负债总额']], ['股东权益', ['total_hldr_eqy_exc_min_int', 'Stockholders Equity', '股东权益', '总权益']],
-  ['每股收益', ['basic_eps', 'diluted_eps', 'Basic EPS', '每股基本盈利']], ['营收同比', ['q_sales_yoy', 'tr_yoy']], ['净利润同比', ['q_netprofit_yoy', 'netprofit_yoy']],
+  ['每股收益', ['eps', 'basic_eps', 'diluted_eps', 'Basic EPS', '每股基本盈利']], ['经营现金流每股', ['ocfps']], ['营收同比', ['tr_yoy']], ['净利润同比', ['netprofit_yoy']],
+  ['单季营收同比', ['q_sales_yoy']], ['单季净利润同比', ['q_netprofit_yoy']],
 ]
 
-export function financialView(row: { reportPeriod: string; reportType: string; publishDate: Date | null; source: string | null; metricsJson: string }) {
+export function financialView(row: { stockCode?: string; reportPeriod: string; reportType: string; publishDate: Date | null; source: string | null; metricsJson: string }) {
   // Older Python payloads contain bare NaN/Infinity. Preserve quoted text,
   // replacing only non-JSON numeric tokens so one old report cannot break details.
   const sanitized = (row.metricsJson || '{}').replace(/"(?:\\.|[^"\\])*"|\bNaN\b|-?Infinity/g, (token) => token.startsWith('"') ? token : 'null')
@@ -87,7 +88,11 @@ export function financialView(row: { reportPeriod: string; reportType: string; p
   })
   const rawMetrics = Object.entries(raw).filter(([key, value]) => typeof value === 'number' && Number.isFinite(value) && !['update_flag'].includes(key)).map(([label, value]) => ({ label, value }))
   const period = row.reportPeriod.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3')
-  return { period, reportType: row.reportType, publishDate: row.publishDate, source: row.source, currency: raw.currency || '来源未标注', metrics: metrics.length ? metrics : rawMetrics.slice(0, 8), rawMetrics, warning }
+  const source=String(row.source||'')
+  const aShareCny=/^(?:sh|sz)?\d{6}(?:\.(?:SH|SZ))?$/i.test(String(row.stockCode||raw.ts_code||''))&&['tushare','stock_financial'].includes(source)
+  const hkHkd=/\.hk$/i.test(String(row.stockCode||raw.stockCode||''))&&source==='akshare_eastmoney_hk'
+  const suppliedCurrency=typeof raw.currency==='string'&&/^[A-Z]{3}$/.test(raw.currency)?raw.currency:null
+  return { period, reportType: row.reportType, publishDate: row.publishDate, source: row.source, currency: suppliedCurrency || (aShareCny?'CNY':hkHkd?'HKD':'来源未标注'), metrics: metrics.length ? metrics : rawMetrics.slice(0, 8), rawMetrics, warning }
 }
 
 export function announcementView(row: { title: string; eventType: string | null; publishDate: Date | null; url: string | null; content: string | null; source: string | null }) {

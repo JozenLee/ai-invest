@@ -18,4 +18,12 @@ describe('background analysis dispatch', () => {
     expect(fakes.spawn).not.toHaveBeenCalled()
     kill.mockRestore()
   })
+  it('does not spawn an analysis worker while the data service is unhealthy',async()=>{
+    const missing=Object.assign(new Error('missing'),{code:'ENOENT'})
+    fakes.readFile.mockRejectedValue(missing)
+    const request=vi.spyOn(globalThis,'fetch').mockRejectedValue(new Error('connection refused'))
+    await expect(dispatchAnalysis('valid-run','all')).rejects.toThrow('数据服务健康检查失败')
+    expect(fakes.spawn).not.toHaveBeenCalled()
+    request.mockRestore()
+  })
 })

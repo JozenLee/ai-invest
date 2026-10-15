@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { frozenIndustryGraphs, frozenIndustrySummaries } from '@/lib/graph/local-industry-fallback'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 
@@ -61,6 +62,9 @@ export async function GET() {
 
   } catch (error) {
     console.error('[industries API] 获取产业列表失败:', error)
+
+    const cached=frozenIndustrySummaries(await frozenIndustryGraphs())
+    if(cached.length)return NextResponse.json({success:true,data:cached,meta:{degraded:true,source:'frozen-local-cache',reason:error instanceof Error?error.message:'数据服务不可用'}})
 
     return NextResponse.json(
       {

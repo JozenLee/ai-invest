@@ -52,9 +52,24 @@ describe('unified market detail', () => {
     expect(report.metrics.map((item) => item.label)).toEqual(['营业收入', '净利润'])
     expect(announcementView({ title: '公告', eventType: '重大事项', publishDate: null, url: 'https://example.com', source: 'test', content: '摘要正文' }).summary).toBe('摘要正文')
   })
+  it('keeps official per-share indicators available for cash conversion fallback',()=>{
+    const report=financialView({reportPeriod:'2026-06-30',reportType:'indicator',publishDate:null,source:'tushare',metricsJson:JSON.stringify({eps:1.2,ocfps:0.9,netprofit_yoy:25,currency:'CNY'})})
+    expect(report.metrics).toEqual(expect.arrayContaining([{label:'每股收益',value:1.2},{label:'经营现金流每股',value:0.9},{label:'净利润同比',value:25}]))
+  })
+  it('uses source-backed market currency when upstream omitted the currency field',()=>{
+    expect(financialView({stockCode:'300604',reportPeriod:'2026-06-30',reportType:'income',publishDate:null,source:'tushare',metricsJson:'{}'}).currency).toBe('CNY')
+    expect(financialView({stockCode:'700.hk',reportPeriod:'2026-06-30',reportType:'income',publishDate:null,source:'akshare_eastmoney_hk',metricsJson:JSON.stringify({currency:'来源未标注'})}).currency).toBe('HKD')
+  })
   it('reads legacy Python NaN fields without losing valid metrics', () => {
     const report = financialView({ reportPeriod: '2026-06-30', reportType: 'income', publishDate: null, source: 'tushare', metricsJson: '{"total_revenue": 10, "netdebt": NaN, "note": "NaN remains quoted"}' })
     expect(report.metrics).toEqual([{ label: '营业收入', value: 10 }])
     expect(report.warning).toBeNull()
   })
+})
+
+it('never substitutes a quarterly growth field for the report-period growth field',()=>{
+  const row=financialView({reportPeriod:'2026-06-30',reportType:'indicator',publishDate:null,source:'tushare',metricsJson:JSON.stringify({tr_yoy:24.9,q_sales_yoy:23.98,netprofit_yoy:5.05,q_netprofit_yoy:0.85})})
+  expect(row.metrics).toEqual(expect.arrayContaining([{label:'营收同比',value:24.9},{label:'单季营收同比',value:23.98},{label:'净利润同比',value:5.05},{label:'单季净利润同比',value:0.85}]))
+  const quarterly=financialView({reportPeriod:'2026-06-30',reportType:'indicator',publishDate:null,source:'tushare',metricsJson:'{"q_sales_yoy":23.98}'})
+  expect(quarterly.metrics.some(row=>row.label==='营收同比')).toBe(false)
 })

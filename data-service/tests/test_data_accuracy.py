@@ -6,11 +6,11 @@
 import pytest
 import asyncio
 from datetime import datetime, time
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 import pandas as pd
 
 from services.data_service import data_service
-from utils.trading_hours import get_last_trading_date, is_trading_hours
+from utils.trading_hours import get_last_trading_date, is_trading_hours, should_use_current_session_quotes
 
 
 class TestCacheKeyConsistency:
@@ -86,6 +86,29 @@ class TestTradingDateLogic:
             mock_dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
             result = get_last_trading_date()
             assert result == "2024-07-26"
+
+    def test_lunch_keeps_current_session_quotes_without_claiming_continuous_trading(self):
+        with patch('utils.trading_hours.datetime') as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 16, 11, 38)
+            assert is_trading_hours() is False
+            assert should_use_current_session_quotes() is True
+
+        with patch('utils.trading_hours.datetime') as mock_dt:
+            mock_dt.now.return_value = datetime(2026, 9, 16, 15, 1)
+            assert should_use_current_session_quotes() is False
+
+    @pytest.mark.asyncio
+    async def test_akshare_index_spot_keeps_the_morning_snapshot_during_lunch(self):
+        from providers.akshare_provider import AKShareProvider
+        provider = AKShareProvider()
+        provider._call = AsyncMock(return_value=pd.DataFrame([{'代码':'sh000300','名称':'沪深300','最新价':4479.5}]))
+        provider._patch_with_daily_close = AsyncMock()
+
+        with patch('utils.trading_hours.should_use_current_session_quotes', return_value=True):
+            result = await provider.get_index_spot()
+
+        assert result.iloc[0]['最新价'] == 4479.5
+        provider._patch_with_daily_close.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_akshare_provider_uses_get_last_trading_date(self):

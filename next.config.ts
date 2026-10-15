@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Keep verification builds separate from a running production server.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // 允许远程访问开发服务器
   allowedDevOrigins: [
     '100.80.210.104',      // Tailscale IP

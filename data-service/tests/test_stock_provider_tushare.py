@@ -201,3 +201,24 @@ async def test_sparse_statement_does_not_erase_reported_ratios(provider, monkeyp
     rows = await provider._get_tushare_financial_report('300308', 'income')
     assert rows[0]['netprofit_yoy'] == 25
     assert rows[0]['n_income'] == 0
+
+
+@pytest.mark.asyncio
+async def test_indicator_only_payload_is_not_persisted_as_a_statement(provider, monkeypatch):
+    async def request(api, **params):
+        if api == 'fina_indicator':
+            return pd.DataFrame([{'end_date': '20260630', 'netprofit_yoy': 25.0}])
+        return pd.DataFrame()
+    monkeypatch.setattr(provider.tushare, 'request_dataframe', request)
+    assert await provider._get_tushare_financial_report('300308', 'income') == []
+    assert await provider._get_tushare_financial_report('300308', 'cashflow') == []
+
+
+def test_eastmoney_short_numeric_codes_keep_hk_identity():
+    frame = pd.DataFrame([
+        {'股票代码': '700', '股票名称': '腾讯控股', '占净值比例': '9.3%', '报告期': '20260630'},
+        {'股票代码': '9988', '股票名称': '阿里巴巴-W', '占净值比例': '8.7%', '报告期': '20260630'},
+        {'股票代码': '000001', '股票名称': '平安银行', '占净值比例': '1.0%', '报告期': '20260630'},
+    ])
+    rows = ETFProvider._normalize_frame(frame, 'eastmoney_public_direct')
+    assert [row['stock_code'] for row in rows] == ['700.hk', '9988.hk', '000001']

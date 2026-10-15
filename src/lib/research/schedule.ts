@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db'
-import { digest, encode, getResearchProfile, latestEvaluation } from './store'
+import { digest, encode, getResearchProfile } from './store'
+import { chinaDate } from './time'
 import { validateProfile } from './profile'
 export type ResearchSchedule={enabled:boolean;times:string[]}
 export function validateSchedule(value:unknown):ResearchSchedule {
@@ -31,11 +32,18 @@ export function dueSlots(schedule:ResearchSchedule,now:Date) {
   const local=new Date(now.getTime()+8*3600000),date=local.toISOString().slice(0,10),minute=local.toISOString().slice(11,16)
   // Weekends need no routine review; calendar gates still decide actual tradability.
   if([0,6].includes(local.getUTCDay()))return []
-  return schedule.times.filter(t=>t<=minute).map(time=>({date,time}))
+  const minutes=(text:string)=>Number(text.slice(0,2))*60+Number(text.slice(3,5))
+  // A missed pre-open job must not run hours later as a supposed morning review.
+  return schedule.times.filter(t=>t<=minute&&minutes(minute)-minutes(t)<=20).map(time=>({date,time}))
 }
 export async function runScheduledResearch(now=new Date()) {
   const schedules=await prisma.rawPayload.findMany({where:{datasetKey:'research_schedule'}})
-  const results=[]
+  const results:Array<{status:string;error?:string;runId?:string;snapshotId?:string;changes?:number;asOf?:string;attempts:number;startedAt:string}>=[]
+  const calendarRow=await prisma.rawPayload.findFirst({where:{datasetKey:'research_calendar'},orderBy:{fetchedAt:'desc'}})
+  let calendar:Array<Record<string,unknown>>=[]
+  try{const value=JSON.parse(calendarRow?.payload||'[]');calendar=Array.isArray(value)?value:Array.isArray(value.data)?value.data:[]}catch{}
+  const today=calendar.find(day=>String(day.date||day.cal_date||'').replace(/^(\d{4})(\d{2})(\d{2})$/,'$1-$2-$3')===chinaDate(now.toISOString()))
+  if(!today||!(today.open===true||Number(today.is_open??today.open)===1))return results
   for(const row of schedules) {
     const due=dueSlots(validateSchedule(JSON.parse(row.payload)),now).at(-1)
     if(!due)continue
@@ -54,13 +62,16 @@ export async function runScheduledResearch(now=new Date()) {
     }
     try{
       const {comprehensiveAnalysisWorkflow:workflow}=await import('@/lib/workflow/workflows/comprehensive-analysis')
-      const previous=await latestEvaluation(row.targetCode)
-      const parentRunId=previous?.workflow?.runId||null
-      const runId=await workflow.createRun({industryId:row.targetCode,publicOnly:true,rulesOnly:true,parentRunId,baselineSnapshotId:previous?.snapshotId||null,kind:'review',createdBy:'local-scheduler',timestamp:now.toISOString()})
+      const parent=await prisma.aIAnalysisReport.findFirst({where:{industryId:row.targetCode,type:'comprehensive'},orderBy:{createdAt:'desc'}})
+      const parentData=parent?.dataJson?JSON.parse(parent.dataJson):null
+      const previous=parentData?.researchEvaluation
+      const parentRunId=parentData?.metadata?.runId||null
+      if(!parentRunId||!previous)throw new Error('没有已归档的完整研究报告，不能创建盘前复核')
+      const runId=await workflow.createRun({industryId:row.targetCode,publicOnly:true,rulesOnly:true,autoReanalysis:true,parentRunId,baselineSnapshotId:previous?.snapshotId||null,kind:'review',createdBy:'local-scheduler',timestamp:now.toISOString()})
       await workflow.executeAll(runId)
       const run=await workflow.getRunDetails(runId,true)
       const raw=run?.steps.flatMap(s=>s.artifacts).find(a=>a.artifactKey==='research-evaluation')?.data
-      if(!raw)throw new Error('规则复核没有生成决策产物')
+      if(run?.status!=='COMPLETED'||!raw)throw new Error('复核或升级分析未完成，不能登记为成功')
       const evaluation=JSON.parse(raw)
       const result={status:'completed',runId,snapshotId:evaluation.snapshotId,changes:evaluation.changes.length,asOf:evaluation.asOf,attempts,startedAt:now.toISOString()}
       await prisma.rawPayload.update({where:{id:claimId},data:{payload:encode(result),contentHash:digest(result)}});results.push(result)

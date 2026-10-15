@@ -35,12 +35,13 @@ function companyHighlight(company:Record<string,any>){
 function buildSocialReport(context:StepContext):SocialReport{
   const industry=parsed(context.artifacts.get('industry-info')),market=parsed(context.artifacts.get('market-analysis')),company=parsed(context.artifacts.get('company-analysis'))
   const news=parsed(context.artifacts.get('news-analysis')),overview=parsed(context.artifacts.get('industry-overview')),investment=parsed(context.artifacts.get('investment-advice'))
-  const evaluation=context.artifacts.get('research-evaluation'),decisions=evaluation?.decisions||[],riskOff=decisions.filter((item:any)=>item.state==='risk-off').length,eligible=decisions.filter((item:any)=>item.state==='eligible').length
-  const scenarios=investment.scenarios||{},valuationProducts=(evaluation?.products||[]).filter((item:any)=>Number.isFinite(item.pe)||Number.isFinite(item.pb))
+  const evaluation=context.artifacts.get('research-evaluation'),decisions=evaluation?.decisions||[],productDecisions=Array.isArray(investment.productDecisions)?investment.productDecisions:[]
+  const aiReduce=productDecisions.filter((item:any)=>item.heldAction==='减仓').length,aiIncrease=productDecisions.filter((item:any)=>item.heldAction==='加仓'||item.unheldAction==='建仓').length
+  const scenarios=investment.scenarios||{},valuationProducts=(evaluation?.products||[]).filter((item:any)=>item.valuationDate===evaluation?.expectedSession&&(Number.isFinite(item.pe)||Number.isFinite(item.pb)))
   const valuationCount=new Set(valuationProducts.map((item:any)=>item.indexCode).filter(Boolean)).size
   const draft={version:2 as const,title:`${industry.name||'产业'}ETF观察`,subtitle:first(overview.analysis||investment.thesis,'产业与市场证据已完成交叉复核。'),takeaways:[
     `产业：${overview.stage||'阶段待核验'}，盈利质量仍需持续验证。`,
-    `战术：${riskOff?`${riskOff}只风险收缩`:'暂无产品触发风险收缩'}，${eligible?`${eligible}只满足实验条件`:'暂无产品满足实验条件'}。`,
+    `战术：AI建议${aiReduce?`${aiReduce}只降低暴露`:'暂无产品减仓'}，${aiIncrease?`${aiIncrease}只增加暴露`:'暂无产品增加暴露'}。`,
     `估值：${valuationCount?`${valuationCount}个指数有可核验当期值`:'暂无可核验当期估值'}。`,
   ],sections:[
     {title:REPORT_SECTIONS[0],body:cited(news,first(overview.drivers||overview.analysis,'产业驱动证据不足。'))},
@@ -55,7 +56,7 @@ function buildSocialReport(context:StepContext):SocialReport{
 }
 
 export const socialReportStep: StepDefinition = {
-  name:'social-report',description:'标准化一页产业研究报告',dependencies:['industry-overview','investment-advice'],estimatedDuration:1000,
+  name:'social-report',description:'标准化一页产业研究报告',dependencies:['industry-overview','investment-advice','etf-actions'],estimatedDuration:1000,
   async execute(context){
     await context.updateProgress(0,1,'正在根据已验证分析生成一页版')
     const report=buildSocialReport(context)

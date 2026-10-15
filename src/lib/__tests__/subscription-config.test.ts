@@ -4,7 +4,9 @@ import { DEFAULT_SUBSCRIPTION_CONFIG, validateSubscriptionConfig } from '@/lib/s
 describe('subscription configuration', () => {
   it('uses one 120-point rule and independent efficient policies', () => {
     expect(DEFAULT_SUBSCRIPTION_CONFIG.historyPoints).toBe(120)
-    expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.constituent_stock_realtime.tradingIntervalSeconds).toBe(60)
+    expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.etf_realtime.tradingIntervalSeconds).toBe(1800)
+    expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.constituent_stock_realtime.tradingIntervalSeconds).toBe(10800)
+    expect(DEFAULT_SUBSCRIPTION_CONFIG.storageRetention.rawPayloadMaxVersions.etf_research).toBe(8)
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.constituent_stock_daily.dailyTimes).toEqual(['12:10', '16:30'])
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.stock_financial.dailyTimes).toHaveLength(1)
     expect(DEFAULT_SUBSCRIPTION_CONFIG.policies.stock_announcement.dailyTimes).toHaveLength(1)

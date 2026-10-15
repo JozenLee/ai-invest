@@ -6,10 +6,10 @@ export function evidenceText(value: unknown): string {
   return JSON.stringify(value ?? null, null, 2)
 }
 
-export function auditPrompt(messages: Array<{ content: string }>) {
+export function auditPrompt(messages: Array<{ content: string }>,maxCharacters=40_000) {
   const text = messages.map(row => row.content).join('\n')
   const placeholders = text.match(/\[object Object\]|\[Array\]|\[Object\]|Array\(\d+\)|\bundefined\b/g) || []
-  return { passed: text.trim().length >= 100 && placeholders.length === 0, characters: text.length, numericValues: (text.match(/:\s*-?\d+(?:\.\d+)?/g) || []).length, unexpandedPlaceholders: placeholders, capturedAt: new Date().toISOString() }
+  return { passed: text.trim().length >= 100 && text.length<=maxCharacters&&placeholders.length === 0, characters: text.length,maxCharacters,overBudgetBy:Math.max(0,text.length-maxCharacters), numericValues: (text.match(/:\s*-?\d+(?:\.\d+)?/g) || []).length, unexpandedPlaceholders: placeholders, capturedAt: new Date().toISOString() }
 }
 
 export function companyEvidence(rows: any[]) {
@@ -46,6 +46,12 @@ const median=(values:number[])=>{
   const sorted=[...values].sort((a,b)=>a-b),middle=Math.floor(sorted.length/2)
   return sorted.length%2?sorted[middle]:(sorted[middle-1]+sorted[middle])/2
 }
+const robust=(values:number[])=>{
+  if(!values.length)return {median:null,min:null,max:null}
+  const sorted=[...values].sort((a,b)=>a-b),low=sorted[Math.floor((sorted.length-1)*.05)],high=sorted[Math.ceil((sorted.length-1)*.95)]
+  const winsorized=sorted.map(value=>Math.min(high,Math.max(low,value)))
+  return {median:median(winsorized),min:sorted[0],max:sorted.at(-1)!}
+}
 
 /** Aggregate the complete company universe before selecting a bounded set of
  * examples. The model receives breadth and dispersion instead of inferring an
@@ -57,19 +63,21 @@ export function companyResearchPacket(rows:any[]){
   const aggregates=[...grouped.entries()].map(([segment,companies])=>{
     const profit=companies.map(row=>row.profitGrowthPct).filter(numeric)
     const cash=companies.map(row=>row.cashConversionPct).filter(numeric)
+    const profitStats=robust(profit),cashStats=robust(cash),minimumSample=5
     const mapped=companies.filter(row=>row.matchConfidence>=.7||(row.representativeEtfs||[]).some((item:any)=>item.holdingVerified)).length
     return {
       segment,companyCount:companies.length,mappedCompanyCount:mapped,
       multiPeriodFinancialCount:companies.filter(row=>(row.financialPeriods||0)>=2).length,
-      profitGrowthKnown:profit.length,positiveProfitGrowth:profit.filter(value=>value>0).length,medianProfitGrowthPct:median(profit),
-      cashQualityKnown:cash.length,healthyCashConversion:cash.filter(value=>value>=50).length,medianCashConversionPct:median(cash),
+      profitGrowthKnown:profit.length,positiveProfitGrowth:profit.filter(value=>value>0).length,medianProfitGrowthPct:profit.length>=minimumSample?profitStats.median:null,profitGrowthRangePct:[profitStats.min,profitStats.max],
+      cashQualityKnown:cash.length,healthyCashConversion:cash.filter(value=>value>=50).length,medianCashConversionPct:cash.length>=minimumSample?cashStats.median:null,cashConversionRangePct:[cashStats.min,cashStats.max],
+      sampleStatus:Math.min(profit.length,cash.length)>=minimumSample?'可用于环节聚合':'小样本，仅展示范围，不得作为环节中位数结论',minimumSample,
       evidenceIds:[...new Set(companies.flatMap(row=>row.evidenceIds||[]))].slice(0,16),
     }
   }).sort((a,b)=>b.companyCount-a.companyCount||a.segment.localeCompare(b.segment,'zh-CN'))
-  const selected=companyEvidence(eligible).slice(0,6)
+  const selected=companyEvidence(eligible).slice(0,10)
   return {
     coverage:{companyCount:eligible.length,multiPeriodFinancialCount:eligible.filter(row=>(row.financialPeriods||0)>=2).length,profitGrowthKnown:eligible.filter(row=>numeric(row.profitGrowthPct)).length,cashQualityKnown:eligible.filter(row=>numeric(row.cashConversionPct)).length,segmentCount:grouped.size,evidenceIds:[...new Set(eligible.flatMap(row=>row.evidenceIds||[]))].slice(0,24)},
     segmentAggregates:aggregates.slice(0,12),representativeCompanies:selected,
-    boundary:'聚合指标覆盖完整冻结企业池；“ETF持仓补充样本（图谱外）”表示真实披露持仓但不属于当前图谱核心节点，不是数据缺失。代表企业仅用于解释分化，不代表个股推荐。中位数按公司等权统计，ETF持仓权重另由产品规则计算。',
+    boundary:'聚合指标覆盖完整冻结企业池；“ETF持仓补充样本（图谱外）”表示真实披露持仓但不属于当前图谱核心节点，不是数据缺失。代表企业仅用于解释分化，不代表个股推荐。至少5个有效样本才展示经5%/95%去极值后的环节中位数；小样本只展示范围。ETF持仓权重另由产品规则计算。',
   }
 }

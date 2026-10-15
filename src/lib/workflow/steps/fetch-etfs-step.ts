@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db'
 import type { StepDefinition } from '../types'
 import { workflowNodeConfig } from '../method-config'
 export const fetchETFsStep: StepDefinition = {
-  name: 'fetch-etfs', description: '读取已订阅ETF与产业映射', dependencies: [], estimatedDuration: 1000,
+  name: 'fetch-etfs', description: '读取已订阅ETF与产业映射', dependencies: ['freeze-research'], estimatedDuration: 1000,
   async execute(context) {
     const industryId = context.input.industryId
     const subscriptions = await prisma.dataSubscription.findMany({ where: { enabled: true, instrument: { type: 'ETF' } }, include: { instrument: true } })
@@ -13,8 +13,11 @@ export const fetchETFsStep: StepDefinition = {
     const subscribed = new Set(subscriptions.map((item) => item.instrument.code))
     const minimumRelevance=Number(workflowNodeConfig(context,'fetch-etfs')?.parameters.minimumRelevance??0.5)
     const matched = group?.etfs?.filter((item: any) => subscribed.has(item.code)&&(item.relevance==null||Number(item.relevance)>=minimumRelevance)) || []
-    const fallback = subscriptions.filter((item) => { try { return JSON.parse(item.profile || '{}').industryId === industryId } catch { return false } })
-    const bindings = matched.length ? matched.map((item: any) => ({ etf_code: item.code, etf_name: item.name })) : fallback.map((item) => ({ etf_code: item.instrument.code, etf_name: item.instrument.name }))
+    const fallback = subscriptions.filter((item) => { try { const profile=JSON.parse(item.profile || '{}');return profile.industryId === industryId&&(!group||profile.source==='verified-portfolio-underlying') } catch { return false } })
+    const bindings = [...new Map([
+      ...matched.map((item: any) => [item.code,{ etf_code: item.code, etf_name: item.name }]),
+      ...fallback.map((item) => [item.instrument.code,{ etf_code: item.instrument.code, etf_name: item.instrument.name }]),
+    ]).values()]
     const industryName = group?.name || (fallback[0] ? JSON.parse(fallback[0].profile!).industryName : null)
     if (!industryName) throw new Error('数据订阅中没有该产业映射，请先同步订阅')
     await context.saveArtifact('industry-info', { id: industryId, name: industryName, code: group?.code, source: 'subscription-database' }, 'DATA')

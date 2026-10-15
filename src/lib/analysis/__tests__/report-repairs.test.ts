@@ -84,7 +84,7 @@ it('merges near-duplicate rumours across sources and keeps them out of decisions
     {...base,id:'b',title:'行云科技：市场传闻造谣者已被行政处罚',source:'媒体乙'},
   ],'2026-09-08T00:00:00Z')
   expect(events).toHaveLength(1)
-  expect(events[0]).toMatchObject({independentSourceCount:2,category:'other'})
+  expect(events[0]).toMatchObject({independentSourceCount:1,category:'other'})
   const evaluation=evaluateResearch(fixture());evaluation.events=events
   expect(decisionEvents(evaluation,99)).toEqual([])
 })

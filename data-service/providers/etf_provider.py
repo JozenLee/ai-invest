@@ -308,8 +308,17 @@ class ETFProvider:
                     market_value = None
             except (TypeError, ValueError):
                 market_value = None
+            if re.fullmatch(r'(?:\d+\.HK|HK\d+)', code, re.IGNORECASE):
+                digits = re.sub(r'(?i)^hk|\.hk$', '', code)
+                normalized_code = f'{int(digits)}.hk'
+            elif source == 'eastmoney_public_direct' and code.isdigit() and len(code) < 6:
+                # Eastmoney drops the HK suffix and leading zero in some fund
+                # tables; mainland securities retain six digits in this source.
+                normalized_code = f'{int(code)}.hk'
+            else:
+                normalized_code = code.zfill(6) if code.isdigit() else code
             result.append({
-                'stock_code': code.zfill(6) if code.isdigit() else code,
+                'stock_code': normalized_code,
                 'stock_name': str(row.get(name_column) or code).strip() if name_column is not None else code,
                 'weight': weight,
                 'weight_available': weight_column is not None and weight > 0,

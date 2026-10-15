@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Deliberately mutable Prisma test doubles; production boundaries are typed in store.ts. */
 import {beforeEach,afterEach,describe,it,expect,vi} from 'vitest'
-const state=vi.hoisted(()=>({raw:[] as any[],daily:[] as any[],index:[] as any[],holdings:[] as any[],reports:[] as any[],historicalReports:[] as any[],announcements:[] as any[],subscriptions:[] as any[]}))
+const state=vi.hoisted(()=>({raw:[] as any[],daily:[] as any[],index:[] as any[],holdings:[] as any[],reports:[] as any[],historicalReports:[] as any[],announcements:[] as any[],subscriptions:[] as any[],quotes:[] as any[]}))
 vi.mock('@/lib/db',()=>{
   const match=(r:any,w:any)=>!w||( (!w.id||r.id===w.id)&&(!w.datasetKey||typeof w.datasetKey==='object'||r.datasetKey===w.datasetKey)&&(!w.targetCode||typeof w.targetCode==='object'||r.targetCode===w.targetCode))
   const db:any={
+    portfolio:{findFirst:vi.fn(async()=>null)},
     rawPayload:{findFirst:vi.fn(async({where}:any)=>state.raw.filter(r=>match(r,where)).sort((a,b)=>b.fetchedAt-a.fetchedAt)[0]||null),findMany:vi.fn(async()=>state.raw.filter(r=>!r.datasetKey.startsWith('research_evaluation')&&!r.datasetKey.startsWith('research_snapshot'))),findUnique:vi.fn(async({where}:any)=>state.raw.find(r=>r.id===where.id)||null),upsert:vi.fn(async({where,create}:any)=>{const existing=state.raw.find(r=>r.id===where.id);if(existing)return existing;const r={...create,fetchedAt:new Date()};state.raw.push(r);return r})},
-    dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},eTFDaily:{findMany:vi.fn(async()=>state.daily)},indexDaily:{findMany:vi.fn(async()=>state.index)},eTFHolding:{findMany:vi.fn(async()=>state.holdings)},stockFinancialReport:{findMany:vi.fn(async()=>state.reports)},stockAnnouncement:{findMany:vi.fn(async()=>state.announcements)},stockDaily:{findMany:vi.fn(async()=>[])},newsArticle:{findMany:vi.fn(async()=>[])},aIAnalysisReport:{findMany:vi.fn(async()=>state.historicalReports)},
+    dataSubscription:{findMany:vi.fn(async()=>state.subscriptions)},eTFDaily:{findMany:vi.fn(async()=>state.daily)},indexDaily:{findMany:vi.fn(async()=>state.index)},eTFHolding:{findMany:vi.fn(async()=>state.holdings)},stockFinancialReport:{findMany:vi.fn(async()=>state.reports)},stockAnnouncement:{findMany:vi.fn(async()=>state.announcements)},stockDaily:{findMany:vi.fn(async()=>[])},marketQuote:{findMany:vi.fn(async()=>state.quotes)},newsArticle:{findMany:vi.fn(async()=>[])},aIAnalysisReport:{findMany:vi.fn(async()=>state.historicalReports)},
     $transaction:vi.fn(async(arg:any)=>typeof arg==='function'?arg(db):Promise.all(arg)),
   };return {prisma:db}
 })
@@ -79,6 +80,17 @@ describe('P0→P2 frozen workflow integration',()=>{
     payload.data.daily=[];raw.payload=JSON.stringify(payload)
     const snapshot=await captureResearchSnapshot('ai')
     expect(snapshot.etfs[0].bars[0].amount).toBe(50000000)
+  })
+  it('uses a verified close snapshot for the expected session after midnight and normalizes Tushare amount units',async()=>{
+    vi.setSystemTime(new Date('2026-09-05T01:00:00Z'))
+    const fetchedAt=new Date('2026-09-04T07:05:00Z')
+    state.quotes=[
+      {id:'etf-quote',instrumentType:'ETF',code:'159995',price:2,previousClose:1.9,open:1.95,high:2.01,low:1.94,volume:100,amount:123456,changePct:5,tradeDate:'2026-09-04',source:'tushare_daily',fetchedAt},
+      {id:'index-quote',instrumentType:'INDEX',code:'sh000300',price:4500,previousClose:4450,open:4460,high:4510,low:4440,volume:100,amount:456789,changePct:1,tradeDate:'2026-09-04',source:'index_realtime',fetchedAt},
+    ]
+    const snapshot=await captureResearchSnapshot('ai')
+    expect(snapshot.etfs[0].bars.at(-1)).toMatchObject({date:'2026-09-04',close:2,amount:123456000})
+    expect(snapshot.benchmarkBars.at(-1)).toMatchObject({date:'2026-09-04',close:4500})
   })
   it('uses the latest current index valuation without inventing a historical percentile',async()=>{
     const current=state.raw.find(r=>r.id==='etf'),payload=JSON.parse(current.payload)
@@ -182,4 +194,25 @@ it('chooses a completed report baseline instead of a newer intermediate evaluati
   state.raw.push({id:'unfinished:evaluation',datasetKey:'research_evaluation',targetCode:'ai',payload:JSON.stringify(intermediate),fetchedAt:new Date('2026-09-04T08:30:00Z')})
   expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z')).toMatchObject({snapshotId:completed.snapshotId,baselineReport:{id:'completed-report'}})
   expect(await latestReportEvaluation('ai','2026-09-04T09:00:00Z','unfinished')).toBeNull()
+})
+
+it('hides paper returns until the walk-forward sample threshold is met',async()=>{
+  const {historicalStrategyValidation}=await import('../store')
+  const snapshot=fixture(),current=evaluateResearch(snapshot),previous=structuredClone(current)
+  previous.snapshotId='prior';previous.asOf='2026-09-03T09:00:00.000Z';previous.expectedSession='2026-09-03'
+  state.historicalReports=[{id:'prior-report',industryId:'ai',industryName:'测试领域',title:'前序报告',createdAt:new Date(previous.asOf),dataJson:JSON.stringify({researchEvaluation:previous})}]
+  const validation=await historicalStrategyValidation(snapshot,current)
+  expect(validation).toMatchObject({validation:'insufficient-history',status:'insufficient',thresholds:{minimumObservations:252,minimumTrades:30},forecastCalibration:{status:'insufficient-outcomes',minimumOutcomes:30}})
+  expect(validation.results.every((row:any)=>row.performanceUsable===false&&row.returnPct===null&&row.excessReturnPct===null)).toBe(true)
+})
+
+it('reuses only explicitly matching index observations without importing another ETF factors',async()=>{
+  const source=state.raw.find(r=>r.id==='etf'),payload=JSON.parse(source.payload)
+  const indexCode=payload.data.info[0].index_code
+  const missing=payload.data.indexDaily.pop()
+  source.payload=JSON.stringify(payload)
+  state.raw.unshift({...source,id:'shared-index',targetCode:'159801',payload:JSON.stringify({data:{indexDaily:[{...missing,ts_code:indexCode}],factors:[{trade_date:missing.trade_date,adj_factor:999}]}})})
+  const snapshot=await captureResearchSnapshot('ai')
+  expect(snapshot.etfs[0].indexBars.at(-1)?.date).toBe('2026-09-04')
+  expect(snapshot.etfs[0].factors.some(item=>item.factor===999)).toBe(false)
 })

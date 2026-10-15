@@ -18,12 +18,71 @@ except ImportError:
     tushare_sdk = None
 
 from providers.base import DataProvider
-from utils.trading_hours import is_trading_hours
+from providers.stock_symbols import stock_exchange
+from utils.trading_hours import should_use_current_session_quotes
 
 
-_TUSHARE_GATEWAY_SEMAPHORE = threading.Semaphore(
-    max(1, int(os.getenv("TUSHARE_MAX_CONCURRENCY", "1")))
-)
+_TUSHARE_API_SEMAPHORES: Dict[str, threading.Semaphore] = {}
+_TUSHARE_API_SEMAPHORES_LOCK = threading.Lock()
+_TUSHARE_API_NEXT_REQUEST_AT: Dict[str, float] = {}
+_TUSHARE_API_RATE_LOCK = threading.Lock()
+_TUSHARE_GLOBAL_SEMAPHORE: Optional[threading.Semaphore] = None
+_TUSHARE_GLOBAL_SEMAPHORE_LIMIT: Optional[int] = None
+_TUSHARE_GLOBAL_NEXT_REQUEST_AT = 0.0
+_TUSHARE_GLOBAL_RATE_LOCK = threading.Lock()
+
+
+def _tushare_global_semaphore() -> threading.Semaphore:
+    """Apply the provider's aggregate quota across all endpoint names."""
+    global _TUSHARE_GLOBAL_SEMAPHORE, _TUSHARE_GLOBAL_SEMAPHORE_LIMIT
+    limit = max(1, int(os.getenv('TUSHARE_GLOBAL_MAX_CONCURRENCY', '1')))
+    with _TUSHARE_API_SEMAPHORES_LOCK:
+        if _TUSHARE_GLOBAL_SEMAPHORE is None or _TUSHARE_GLOBAL_SEMAPHORE_LIMIT != limit:
+            _TUSHARE_GLOBAL_SEMAPHORE = threading.Semaphore(limit)
+            _TUSHARE_GLOBAL_SEMAPHORE_LIMIT = limit
+        return _TUSHARE_GLOBAL_SEMAPHORE
+
+
+def _wait_for_tushare_global_slot() -> None:
+    global _TUSHARE_GLOBAL_NEXT_REQUEST_AT
+    interval = max(0.0, float(os.getenv(
+        'TUSHARE_GLOBAL_MIN_INTERVAL_SECONDS',
+        os.getenv('TUSHARE_MIN_INTERVAL_SECONDS', '1'),
+    )))
+    with _TUSHARE_GLOBAL_RATE_LOCK:
+        now = time.monotonic()
+        delay = max(0.0, _TUSHARE_GLOBAL_NEXT_REQUEST_AT - now)
+        _TUSHARE_GLOBAL_NEXT_REQUEST_AT = max(now, _TUSHARE_GLOBAL_NEXT_REQUEST_AT) + interval
+    if delay:
+        time.sleep(delay)
+
+
+def _tushare_api_semaphore(api: str) -> threading.Semaphore:
+    """Limit each Tushare endpoint independently instead of globally serializing all APIs."""
+    normalized = ''.join(character if character.isalnum() else '_' for character in api.upper())
+    limit = max(1, int(os.getenv(f"TUSHARE_{normalized}_MAX_CONCURRENCY", os.getenv("TUSHARE_MAX_CONCURRENCY", "1"))))
+    with _TUSHARE_API_SEMAPHORES_LOCK:
+        semaphore = _TUSHARE_API_SEMAPHORES.get(api)
+        if semaphore is None:
+            semaphore = threading.Semaphore(limit)
+            _TUSHARE_API_SEMAPHORES[api] = semaphore
+        return semaphore
+
+
+def _wait_for_tushare_api_slot(api: str) -> None:
+    """Pace one endpoint without delaying unrelated Tushare APIs."""
+    normalized = ''.join(character if character.isalnum() else '_' for character in api.upper())
+    interval = max(0.0, float(os.getenv(
+        f"TUSHARE_{normalized}_MIN_INTERVAL_SECONDS",
+        os.getenv("TUSHARE_MIN_INTERVAL_SECONDS", "0.5"),
+    )))
+    with _TUSHARE_API_RATE_LOCK:
+        now = time.monotonic()
+        allowed = _TUSHARE_API_NEXT_REQUEST_AT.get(api, now)
+        delay = max(0.0, allowed - now)
+        _TUSHARE_API_NEXT_REQUEST_AT[api] = max(now, allowed) + interval
+    if delay:
+        time.sleep(delay)
 
 
 class TushareProvider(DataProvider):
@@ -77,6 +136,7 @@ class TushareProvider(DataProvider):
     async def _call_api(self, api: str, **params) -> pd.DataFrame:
         """调用 Tushare SDK 或 Promax 聚合接口，并统一返回 DataFrame。"""
         request_timeout = float(params.pop("_timeout_seconds", os.getenv("TUSHARE_TIMEOUT_SECONDS", "30")))
+        busy_retries_override = params.pop("_busy_retries", None)
         def normalize(frame: pd.DataFrame) -> pd.DataFrame:
             if "date" in frame.columns and "trade_date" not in frame.columns:
                 frame = frame.rename(columns={"date": "trade_date"})
@@ -122,35 +182,43 @@ class TushareProvider(DataProvider):
         def _request():
             # 网关对 upstream_busy 通常会固定等待约 8 秒；重复重试只会放大
             # 综合分析耗时，应立即交给本地/其他数据源降级。
-            busy_retries = max(0, int(os.getenv("TUSHARE_BUSY_RETRIES", "4")))
-            with _TUSHARE_GATEWAY_SEMAPHORE:
+            busy_retries = max(0, int(os.getenv("TUSHARE_BUSY_RETRIES", "4") if busy_retries_override is None else busy_retries_override))
+            with _tushare_api_semaphore(api):
                 for attempt in range(busy_retries + 1):
-                    response = requests.get(
-                        f"{self._api_url}/{api}",
-                        params=params,
-                        headers={"X-API-Key": self._api_key},
-                        verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
-                        timeout=request_timeout,
-                    )
-                    # Promax can report the same transient upstream saturation as
-                    # 429/5xx with different response bodies. A single partial
-                    # research bundle would otherwise leave an ETF permanently
-                    # without factors/index evidence until the next day.
-                    if response.status_code in (429, 500, 502, 503, 504):
-                        if attempt < busy_retries:
-                            retry_after = response.headers.get("Retry-After", "")
-                            try:
-                                delay = min(8.0, max(0.5, float(retry_after)))
-                            except (TypeError, ValueError):
-                                delay = min(8.0, 2.0 ** attempt)
-                            time.sleep(delay)
-                            continue
-                        raise RuntimeError(f"Tushare API {api} 临时不可用: HTTP {response.status_code}")
-                    response.raise_for_status()
-                    payload = response.json()
-                    if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
-                        raise RuntimeError(payload.get("msg") or f"Tushare API {api} 返回错误码 {payload.get('code')}")
-                    return frame_from_payload(payload)
+                    _wait_for_tushare_api_slot(api)
+                    with _tushare_global_semaphore():
+                        _wait_for_tushare_global_slot()
+                        response = requests.get(
+                            f"{self._api_url}/{api}",
+                            params=params,
+                            headers={"X-API-Key": self._api_key, "Connection": "close"},
+                            verify=os.getenv("TUSHARE_VERIFY_SSL", "true").lower() != "false",
+                            timeout=request_timeout,
+                        )
+                    # A response must be closed on every retry/error branch. The
+                    # old code continued on 429/5xx without closing the socket,
+                    # accumulating CLOSE_WAIT descriptors until the data service
+                    # could no longer accept graph requests or spawn workers.
+                    with response:
+                        # Promax can report the same transient upstream saturation as
+                        # 429/5xx with different response bodies. A single partial
+                        # research bundle would otherwise leave an ETF permanently
+                        # without factors/index evidence until the next day.
+                        if response.status_code in (429, 500, 502, 503, 504):
+                            if attempt < busy_retries:
+                                retry_after = response.headers.get("Retry-After", "")
+                                try:
+                                    delay = min(8.0, max(0.5, float(retry_after)))
+                                except (TypeError, ValueError):
+                                    delay = min(8.0, 2.0 ** attempt)
+                                time.sleep(delay)
+                                continue
+                            raise RuntimeError(f"Tushare API {api} 临时不可用: HTTP {response.status_code}")
+                        response.raise_for_status()
+                        payload = response.json()
+                        if isinstance(payload, dict) and payload.get("code") not in (None, 0, "0"):
+                            raise RuntimeError(payload.get("msg") or f"Tushare API {api} 返回错误码 {payload.get('code')}")
+                        return frame_from_payload(payload)
             raise RuntimeError(f"Tushare API {api} 未返回数据")
         return await asyncio.to_thread(_request)
 
@@ -192,13 +260,13 @@ class TushareProvider(DataProvider):
         # 市场概览是页面首屏接口，不能串行等待 5 个 Tushare 请求。
         # 单个指数失败或超时时跳过该指数，其他指数仍可正常返回。
         request_timeout = float(os.getenv("TUSHARE_MARKET_TIMEOUT_SECONDS", "8"))
-        trading = is_trading_hours()
+        current_session = should_use_current_session_quotes()
 
         async def fetch_realtime(code: str) -> Optional[Dict[str, Any]]:
             """通过 rt_k 获取单个指数实时快照。"""
             try:
                 df = await asyncio.wait_for(
-                    self._call_api("rt_k", ts_code=code),
+                    self._call_api("rt_k", ts_code=code, _timeout_seconds=request_timeout, _busy_retries=0),
                     timeout=request_timeout,
                 )
                 if df.empty:
@@ -285,7 +353,7 @@ class TushareProvider(DataProvider):
                 return None
 
         async def fetch_one(code: str) -> Optional[Dict[str, Any]]:
-            return await (fetch_realtime(code) if trading else fetch_daily(code))
+            return await (fetch_realtime(code) if current_session else fetch_daily(code))
 
         results = await asyncio.gather(*(fetch_one(code) for code in index_codes))
         records = [record for record in results if record is not None]
@@ -366,19 +434,24 @@ class TushareProvider(DataProvider):
         self._check_available()
         today = datetime.now().strftime('%Y%m%d')
         start = (datetime.now() - timedelta(days=10)).strftime('%Y%m%d')
-        trading = is_trading_hours()
+        current_session = should_use_current_session_quotes()
         records = []
         for symbol in symbols:
-            ts_code = self._to_ts_code(symbol, default_market='SZ' if symbol.startswith(('0', '1', '3')) else 'SH')
-            if trading:
+            default_market = ('SZ' if symbol.startswith(('0', '1', '3')) else 'SH') if daily_api == 'fund_daily' else stock_exchange(symbol) or 'SH'
+            ts_code = self._to_ts_code(symbol, default_market=default_market)
+            if current_session:
                 # Failure must be visible; never label yesterday's daily close as live.
-                frame = await self._call_api('rt_k', ts_code=ts_code)
+                frame = await self._call_api(
+                    'rt_k', ts_code=ts_code,
+                    _timeout_seconds=float(os.getenv('TUSHARE_MARKET_TIMEOUT_SECONDS', '8')),
+                    _busy_retries=0,
+                )
             else:
                 frame = await self._call_api(daily_api, ts_code=ts_code, start_date=start, end_date=today)
                 if not frame.empty and 'trade_date' in frame:
                     frame = frame.sort_values('trade_date', ascending=False)
             if not frame.empty:
-                records.append(self._normalize_quote(frame.iloc[0], symbol, trading))
+                records.append(self._normalize_quote(frame.iloc[0], symbol, current_session))
         return pd.DataFrame(records)
 
     async def get_stock_spot(self, symbols: List[str]) -> pd.DataFrame:
@@ -389,7 +462,7 @@ class TushareProvider(DataProvider):
         """获取个股日K数据"""
         self._check_available()
 
-        ts_code = self._to_ts_code(ticker, default_market="SZ" if ticker.startswith(("0", "3")) else "SH")
+        ts_code = self._to_ts_code(ticker, default_market=stock_exchange(ticker) or 'SH')
 
         # Tushare 的复权参数
         adj_map = {"qfq": "qfq", "hfq": "hfq", "": None}
@@ -419,7 +492,7 @@ class TushareProvider(DataProvider):
 
         ts_code = self._to_ts_code(
             ticker,
-            default_market="SZ" if ticker.startswith(("0", "2", "3")) else "SH",
+            default_market=stock_exchange(ticker) or 'SH',
         )
         frame = await self._call_api(
             endpoint,
@@ -582,7 +655,7 @@ class TushareProvider(DataProvider):
 
         # 交易时段不能把上一交易日的行业资金快照当作“今日”数据。
         # 抛出异常后由注册表继续尝试 AKShare，避免旧数据遮蔽备用实时源。
-        if is_trading_hours() and day_count == 1:
+        if should_use_current_session_quotes() and day_count == 1:
             today = datetime.now().strftime("%Y%m%d")
             if latest_date != today:
                 raise RuntimeError(f"Tushare 板块资金流向不是当日数据: {latest_date}")
@@ -744,7 +817,7 @@ class TushareProvider(DataProvider):
         """获取个股资金流向"""
         self._check_available()
 
-        ts_code = self._to_ts_code(ticker, default_market="SZ" if ticker.startswith(("0", "3")) else "SH")
+        ts_code = self._to_ts_code(ticker, default_market=stock_exchange(ticker) or 'SH')
         today = datetime.now().strftime("%Y%m%d")
         start = (datetime.now() - timedelta(days=10)).strftime("%Y%m%d")
 

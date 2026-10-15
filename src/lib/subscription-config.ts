@@ -1,14 +1,24 @@
 import defaults from '../../config/subscription-defaults.json'
 
-export type SubscriptionScope = 'market_index' | 'etf_index' | 'company_quote'
+export type SubscriptionScope = 'market_index' | 'etf_index' | 'company_quote' | 'portfolio_fund'
 export type SubscriptionPolicy = { scope: string; label: string; enabled: boolean; mode: string; tradingIntervalSeconds: number; closedIntervalSeconds: number; dailyTimes: string[]; weekdaysOnly: boolean }
-export type SubscriptionConfig = { historyPoints: number; pollSeconds: number; requestConcurrency: number; scopeEnabled: Record<SubscriptionScope, boolean>; policies: Record<string, SubscriptionPolicy> }
+export type StorageRetentionConfig = {
+  fetchRunDays: number
+  normalizedDailyDays: number
+  announcementDays: number
+  financialDays: number
+  unreferencedSnapshotDays: number
+  researchSnapshotDays: number
+  rawPayloadDays: Record<string, number>
+  rawPayloadMaxVersions: Record<string, number>
+}
+export type SubscriptionConfig = { historyPoints: number; pollSeconds: number; requestConcurrency: number; storageRetention: StorageRetentionConfig; scopeEnabled: Record<SubscriptionScope, boolean>; policies: Record<string, SubscriptionPolicy> }
 export const DEFAULT_SUBSCRIPTION_CONFIG: SubscriptionConfig = defaults
 export const MARKET_INDEXES = [
   { code: 'sh000001', name: '上证指数' }, { code: 'sz399001', name: '深证成指' },
   { code: 'sz399006', name: '创业板指' }, { code: 'sh000688', name: '科创50' }, { code: 'sh000300', name: '沪深300' },
 ]
-export const SCOPE_LABELS: Record<SubscriptionScope, string> = { market_index: '市场数据', etf_index: 'ETF指数', company_quote: '企业行情' }
+export const SCOPE_LABELS: Record<SubscriptionScope, string> = { market_index: '市场数据', etf_index: 'ETF指数', company_quote: '企业行情', portfolio_fund: '持仓基金' }
 
 export function validateSubscriptionConfig(value: unknown): SubscriptionConfig {
   if (!value || typeof value !== 'object') throw new Error('无效的订阅配置')
@@ -18,6 +28,13 @@ export function validateSubscriptionConfig(value: unknown): SubscriptionConfig {
   }
   const result = structuredClone(defaults) as SubscriptionConfig
   Object.assign(result, { historyPoints: config.historyPoints, pollSeconds: config.pollSeconds, requestConcurrency: config.requestConcurrency })
+  const retention=config.storageRetention||defaults.storageRetention
+  for(const field of ['fetchRunDays','normalizedDailyDays','announcementDays','financialDays','unreferencedSnapshotDays','researchSnapshotDays'] as const){
+    if(!Number.isInteger(retention[field])||retention[field]<1||retention[field]>3650)throw new Error(`${field} 必须为 1–3650 天`)
+  }
+  for(const [key,days] of Object.entries(retention.rawPayloadDays||{}))if(!Number.isInteger(days)||days<1||days>3650)throw new Error(`${key} 原始数据保留期必须为 1–3650 天`)
+  for(const [key,count] of Object.entries(retention.rawPayloadMaxVersions||{}))if(!Number.isInteger(count)||count<1||count>1000)throw new Error(`${key} 原始版本上限必须为 1–1000`)
+  result.storageRetention={...retention,rawPayloadDays:{...retention.rawPayloadDays},rawPayloadMaxVersions:{...retention.rawPayloadMaxVersions}}
   for (const scope of Object.keys(SCOPE_LABELS) as SubscriptionScope[]) {
     if (typeof config.scopeEnabled?.[scope] !== 'boolean') throw new Error('缺少模块启停配置')
     result.scopeEnabled[scope] = config.scopeEnabled[scope]

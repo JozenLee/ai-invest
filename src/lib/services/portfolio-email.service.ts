@@ -136,31 +136,51 @@ export function parseFundPdf(pdf: Buffer) {
     if (!/^\d{6}$/.test(ticker)) continue
     const quantity = Number(tokens[index + 1])
     const unitNav = Number(tokens[index + 2])
-    if (!Number.isFinite(quantity) || !Number.isFinite(unitNav) || !tokens[index + 3]?.startsWith('2026')) continue
+    if (!Number.isFinite(quantity) || !Number.isFinite(unitNav) || !/^(?:19|20)\d{2}(?:\d{4}|-\d{2}-\d{2})$/.test(tokens[index + 3]||'')) continue
     holdings.push({ ticker, name: FUND_NAMES[ticker] ?? `基金 ${ticker}`, quantity, unitNav })
   }
   return holdings
 }
 
 export function parseBalancePdf(pdf: Buffer) {
-  const values = [...extractPdfText(pdf).matchAll(/\b\d{2,}[\d,]*(?:\.\d{1,2})\b/g)].map(match => number(match[0]))
-  const balance = Math.max(...values.filter(value => value >= 1000))
-  if (!Number.isFinite(balance)) throw new Error('未能从余额宝资产查询情况告知书中识别余额')
-  return balance
+  if(parseFundPdf(pdf).length)throw new Error('基金持仓证明不能作为现金余额凭证')
+  const tokens=extractPdfText(pdf).split(/\s+/).filter(Boolean)
+  const money=/^\d[\d,]*\.\d{2}$/
+  const rows:Array<{amount:number;end:number}>=[]
+  for(let i=0;i<tokens.length;i++){
+    if(!/^\d{16,20}$/.test(tokens[i]))continue
+    for(let j=i+1;j<Math.min(tokens.length,i+16);j++){
+      if(/^\d{16,20}$/.test(tokens[j]))break
+      if(/^\d{6}$/.test(tokens[j])&&money.test(tokens[j+1]||'')){
+        rows.push({amount:number(tokens[j+1]),end:j+1});break
+      }
+    }
+  }
+  if(rows.length){
+    const printed=tokens.slice(rows.at(-1)!.end+1).find(token=>money.test(token))
+    const total=rows.reduce((sum,row)=>sum+Math.round(row.amount*100),0)/100
+    if(printed===undefined||Math.abs(number(printed)-total)>.011)throw new Error('余额明细与合计不一致，未更新账户')
+    return number(printed)
+  }
+  // Legacy amount-only evidence must be unambiguous. Zero and small balances
+  // are valid financial facts, never missing data or a reason to reuse old cash.
+  const values=tokens.filter(token=>money.test(token)).map(number)
+  if(values.length===1&&Number.isFinite(values[0]))return values[0]
+  throw new Error('未能唯一识别余额宝明细与合计，未更新账户')
 }
 
 export function parsePortfolioEmails(messages: EmailMessage[]): ParsedPortfolioEmails {
   messages = [...messages].filter(message => message.attachments.length > 0 && message.subject.includes('支付宝业务凭证')).sort((a, b) => (Date.parse(b.date || '') || 0) - (Date.parse(a.date || '') || 0))
   const withFunds = messages.map(message => ({ message, holdings: message.attachments.flatMap(parseFundPdf) }))
   const funds = withFunds.find(item => item.holdings.length > 0)
-  const balance = messages.find(message => message.attachments.some(attachment => parseFundPdf(attachment).length === 0))
+  const balance = messages.flatMap(message=>message.attachments.filter(attachment=>parseFundPdf(attachment).length===0).map(attachment=>({message,attachment})))[0]
   if (!balance || !funds) throw new Error('邮箱中未找到完整的两类支付宝业务凭证邮件')
   return {
-    cashBalance: parseBalancePdf(balance.attachments[0]),
+    cashBalance: parseBalancePdf(balance.attachment),
     holdings: funds.holdings,
-    balanceSubject: balance.subject,
+    balanceSubject: balance.message.subject,
     holdingsSubject: funds.message.subject,
-    balanceDate: balance.date,
+    balanceDate: balance.message.date,
     holdingsDate: funds.message.date,
   }
 }
@@ -258,11 +278,15 @@ class Pop3Client {
   }
 }
 
-export async function readPortfolioEmails() {
+export async function readPortfolioMessages() {
   if (!process.env.PORTFOLIO_IMAP_PASSWORD) throw new Error('未配置 PORTFOLIO_IMAP_PASSWORD（请使用 163 邮箱授权码）')
   const protocol = process.env.PORTFOLIO_MAIL_PROTOCOL ?? 'pop3'
   const messages = protocol === 'imap'
     ? await new ImapClient().fetchRecent()
     : await new Pop3Client().fetchRecent()
-  return parsePortfolioEmails(messages)
+  return messages
+}
+
+export async function readPortfolioEmails() {
+  return parsePortfolioEmails(await readPortfolioMessages())
 }

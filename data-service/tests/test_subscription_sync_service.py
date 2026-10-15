@@ -44,6 +44,27 @@ DATASET = {'id': 'dataset', 'code': '159995', 'datasetKey': 'constituent_stock_d
 ROW = {'date': '2026-09-03', 'open': 10, 'high': 12, 'low': 9, 'close': 11}
 
 
+def test_service_construction_does_not_require_an_event_loop(monkeypatch):
+    monkeypatch.setattr(module, 'ETFProvider', Mock)
+    monkeypatch.setattr(module, 'StockProvider', Mock)
+    try:
+        previous = asyncio.get_event_loop_policy().get_event_loop()
+    except RuntimeError:
+        previous = None
+    try:
+        asyncio.set_event_loop(None)
+        instance = module.SubscriptionSyncService()
+        assert instance._run_due_lock is None
+    finally:
+        asyncio.set_event_loop(previous)
+
+
+def test_legacy_request_concurrency_caps_each_company_interface(service):
+    service.config['requestConcurrency'] = 2
+    service.config['interfaceConcurrency']['stock_financial'] = 4
+    assert service._company_request_limit('stock_financial') == 2
+
+
 @pytest.mark.asyncio
 async def test_index_close_uses_fresh_feed_when_primary_is_old(service, monkeypatch):
     import pandas as pd
@@ -70,6 +91,25 @@ async def test_index_close_calendar_respects_holidays_and_is_shared(service, mon
 
 
 @pytest.mark.asyncio
+async def test_index_close_uses_versioned_local_calendar_when_live_calendar_fails(service, monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    local = datetime.now(ZoneInfo('Asia/Shanghai'))
+    expected = local if local.hour >= 15 else local - timedelta(days=1)
+    previous = expected - timedelta(days=1)
+    module.db.execute_many('INSERT INTO raw_payloads (id,datasetKey,targetCode,payload,fetchedAt) VALUES (?,?,?,?,?)', [
+        ('calendar', 'research_calendar', 'sh000001', json.dumps({'data': [
+            {'cal_date': previous.strftime('%Y%m%d'), 'is_open': 1}, {'cal_date': expected.strftime('%Y%m%d'), 'is_open': 1},
+        ]}), '2026-09-17T12:00:00Z'),
+    ])
+    calendar = AsyncMock(side_effect=RuntimeError('calendar gateway unavailable'))
+    monkeypatch.setattr(module, 'TushareProvider', lambda: Mock(request_dataframe=calendar))
+    result = await service._expected_index_close_date()
+    assert result == expected.strftime('%Y-%m-%d')
+    calendar.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_old_index_close_is_failed_and_retried_not_success(service, monkeypatch):
     import pandas as pd
     from datetime import datetime, timezone
@@ -91,7 +131,30 @@ async def test_partial_realtime_does_not_keep_legacy_half_hour_backoff(service, 
     now = datetime.now(timezone.utc)
     row = {'id': 'dataset', 'datasetKey': 'constituent_stock_realtime', 'status': 'partial', 'market': 'CN', 'nextRunAt': (now + timedelta(minutes=20)).isoformat(), 'lastStartedAt': (now - timedelta(minutes=10)).isoformat()}
     monkeypatch.setattr(module.db, 'execute', lambda *args: [row])
+    monkeypatch.setattr(module, 'market_open', lambda *_args: True)
     assert await service.list_due_datasets() == [row]
+
+
+@pytest.mark.asyncio
+async def test_partial_realtime_respects_closed_session_interval(service, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    row = {'id': 'dataset', 'datasetKey': 'constituent_stock_realtime', 'status': 'partial', 'market': 'CN', 'closedIntervalSeconds': 21600, 'nextRunAt': (now-timedelta(minutes=1)).isoformat(), 'lastStartedAt': (now-timedelta(minutes=10)).isoformat()}
+    monkeypatch.setattr(module.db, 'execute', lambda *args: [row])
+    monkeypatch.setattr(module, 'market_open', lambda *_args: False)
+    assert await service.list_due_datasets() == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_skips_unsupported_custom_index_realtime(service, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    rows = [
+        {'id': 'benchmark', 'datasetKey': 'index_realtime', 'status': 'success', 'code': 'sh000300', 'market': 'CN', 'nextRunAt': (now - timedelta(seconds=1)).isoformat()},
+        {'id': 'custom', 'datasetKey': 'index_realtime', 'status': 'failed', 'code': 'sz399363', 'market': 'CN', 'nextRunAt': (now - timedelta(seconds=1)).isoformat()},
+    ]
+    monkeypatch.setattr(module.db, 'execute', lambda *args: rows)
+    assert [row['id'] for row in await service.list_due_datasets()] == ['benchmark']
 
 
 def test_news_write_is_committed_and_idempotent(service):
@@ -196,6 +259,18 @@ async def test_partial_batch_stores_good_rows_but_does_not_claim_success(service
 
 
 @pytest.mark.asyncio
+async def test_partial_financial_batch_records_fresh_verified_rows_without_fast_retry_loop(service, monkeypatch):
+    batch = module.CompanyBatch([ROW], {'872808': 'unsupported'}, ['000001'])
+    monkeypatch.setattr(service, '_fetch_with_retry', AsyncMock(return_value=batch))
+    monkeypatch.setattr(service, '_store', Mock(return_value=1))
+    assert not await service.run_dataset({**DATASET, 'datasetKey': 'stock_financial'})
+    dataset = module.db.execute('SELECT lastSuccessAt,nextRunAt FROM subscription_datasets')[0]
+    assert dataset['lastSuccessAt'] is not None
+    from datetime import datetime
+    assert (datetime.fromisoformat(dataset['nextRunAt'])-datetime.fromisoformat(dataset['lastSuccessAt'])).total_seconds() >= 5.9*3600
+
+
+@pytest.mark.asyncio
 async def test_successful_run_reuses_queue_and_clears_error(service, monkeypatch):
     monkeypatch.setattr(service, '_fetch_with_retry', AsyncMock(return_value=[ROW]))
     monkeypatch.setattr(service, '_store', Mock(return_value=1))
@@ -230,6 +305,24 @@ async def test_shared_company_requests_are_deduplicated(service):
     service.stock_provider.get_kline = AsyncMock(return_value=[ROW])
     await asyncio.gather(*(service._company_request('constituent_stock_daily', '000001') for _ in range(3)))
     service.stock_provider.get_kline.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_financial_request_cache_survives_across_overlapping_etf_batches(service):
+    service._financial_bundle = AsyncMock(return_value=[ROW])
+    await service._company_request('stock_financial', '000001')
+    service._request_times[('stock_financial', '000001', '', '')] -= 600
+    await service._company_request('stock_financial', '000001')
+    service._financial_bundle.assert_awaited_once_with('000001', 'cn')
+
+
+@pytest.mark.asyncio
+async def test_financial_bundle_keeps_indicators_separate_and_reports_missing_statements(service):
+    service.stock_provider.get_financial_indicators = AsyncMock(return_value=[{'报告期': '20260630', 'netprofit_yoy': 20, 'ocfps': 1.2, 'eps': 1.0}])
+    service.stock_provider.get_financial_report = AsyncMock(side_effect=lambda _symbol, report_type, _market: [{'报告期': '20260630', 'n_income': 10}] if report_type == 'income' else [])
+    rows = await service._financial_bundle('000001', 'cn')
+    assert {row['reportType'] for row in rows} == {'indicator', 'income'}
+    assert rows.failures == {'cashflow': 'cashflow 财报未返回，保留已有报表'}
 
 
 @pytest.mark.asyncio
@@ -282,6 +375,8 @@ async def test_company_sync_pool_includes_published_graph_companies(service):
 
     assert {row['stockCode'] for row in rows} == {'000001', '688001'}
     assert next(row for row in rows if row['stockCode'] == '688001')['researchPool'] == 'graph'
+    holdings_only = await service._company_holdings('159995', graph_limit=0)
+    assert {row['stockCode'] for row in holdings_only} == {'000001'}
 
 
 def test_holding_storage_does_not_overwrite_name_with_suffixed_code(service):
@@ -349,6 +444,24 @@ def test_stock_quote_updates_canonical_instrument_name(service):
     assert instrument == {'code': '002049', 'name': '紫光国微'}
 
 
+def test_older_daily_fallback_cannot_overwrite_same_day_realtime_quote(service):
+    with sqlite3.connect(module.db.db_path) as conn:
+        conn.execute('''CREATE TABLE market_quotes (id TEXT PRIMARY KEY, instrumentType TEXT,
+          code TEXT, market TEXT, currency TEXT, price REAL, previousClose REAL, open REAL,
+          high REAL, low REAL, volume REAL, amount REAL, changePct REAL, tradeDate TEXT,
+          source TEXT, fetchedAt TEXT, UNIQUE(instrumentType,code))''')
+
+    service._store_quotes('etf_realtime', '159995', [{
+        '代码': '159995', '最新价': 1.12, '日期': '2026-09-16', 'source': 'tushare_rt_k',
+    }])
+    service._store_quotes('etf_realtime', '159995', [{
+        '代码': '159995', '最新价': 1.07, '日期': '2026-09-15', 'source': 'tushare_daily',
+    }])
+
+    quote = module.db.execute("SELECT price,tradeDate,source FROM market_quotes WHERE code='159995'")[0]
+    assert quote == {'price': 1.12, 'tradeDate': '2026-09-16', 'source': 'tushare_rt_k'}
+
+
 @pytest.mark.asyncio
 async def test_dispatch_does_not_block_new_quotes_behind_slow_reports(service, monkeypatch):
     monkeypatch.setattr(module, 'get_config', lambda: service.config)
@@ -390,6 +503,24 @@ async def test_realtime_collects_orderbook_without_waiting_for_research_bundle(s
 
 
 @pytest.mark.asyncio
+async def test_realtime_fallback_is_stamped_as_current_session_evidence(service, monkeypatch):
+    import pandas as pd
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    monkeypatch.setattr(module.data_service, 'get_etf_realtime', AsyncMock(return_value=pd.DataFrame([
+        {'代码': '159995', '最新价': 1.1},
+    ])))
+    monkeypatch.setattr(module.data_service.registry, 'get_last_source', lambda _key: 'AKShare')
+    monkeypatch.setattr(module, 'should_use_current_session_quotes', lambda: True)
+    monkeypatch.setattr('services.research_collection.fetch_orderbook', Mock(side_effect=ValueError('unavailable')))
+
+    rows = await service._fetch('etf_realtime', '159995')
+
+    assert rows[0]['数据日期'] == datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
+    assert rows[0]['source'] == 'AKShare'
+
+
+@pytest.mark.asyncio
 async def test_realtime_retains_valid_price_when_both_books_fail(service, monkeypatch):
     import pandas as pd
     monkeypatch.setattr(module.data_service, 'get_etf_realtime', AsyncMock(return_value=pd.DataFrame([
@@ -426,7 +557,7 @@ async def test_slow_constituent_batches_do_not_starve_etf_quotes(service, monkey
 
 
 @pytest.mark.asyncio
-async def test_scheduler_bounds_background_work_and_reserves_manual_capacity(service, monkeypatch):
+async def test_scheduler_uses_independent_bounded_dataset_queues(service, monkeypatch):
     monkeypatch.setattr(module, 'get_config', lambda: service.config)
     monkeypatch.setattr(service, '_ensure_subscription_datasets', AsyncMock())
     monkeypatch.setattr(service, '_refill_slots', lambda task: None)
@@ -434,15 +565,36 @@ async def test_scheduler_bounds_background_work_and_reserves_manual_capacity(ser
     async def run(dataset):
         await release.wait()
     monkeypatch.setattr(service, 'run_dataset', run)
-    background = [{'id': f'b{i}', 'datasetKey': 'stock_financial', 'status': 'pending'} for i in range(30)]
-    monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=background))
+    financials = [{'id': f'b{i}', 'datasetKey': 'stock_financial', 'status': 'pending'} for i in range(30)]
+    announcements = [{'id': f'a{i}', 'datasetKey': 'stock_announcement', 'status': 'pending'} for i in range(30)]
+    monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=[*financials,*announcements]))
     try:
         assert await service.run_due() == 3
-        assert len(service._tasks) == 3
-        manual = {'id': 'manual', 'datasetKey': 'etf_research', 'status': 'queued'}
-        monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=[*background, manual]))
+        assert sum(lane == 'stock_financial' for lane in service._task_lanes.values()) == 2
+        assert sum(lane == 'stock_announcement' for lane in service._task_lanes.values()) == 1
+        quote = {'id': 'quote', 'datasetKey': 'etf_realtime', 'status': 'queued'}
+        monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=[*financials,*announcements,quote]))
         assert await service.run_due() == 1
-        assert service._task_lanes['manual'] == 'manual'
+        assert service._task_lanes['quote'] == 'etf_realtime'
+    finally:
+        release.set()
+        await asyncio.gather(*service._tasks.values())
+
+
+@pytest.mark.asyncio
+async def test_manual_hard_research_overtakes_soft_financial_refresh(service, monkeypatch):
+    monkeypatch.setattr(module, 'get_config', lambda: service.config)
+    monkeypatch.setattr(service, '_ensure_subscription_datasets', AsyncMock())
+    monkeypatch.setattr(service, '_refill_slots', lambda task: None)
+    service.config['requestConcurrency'] = 1
+    release = asyncio.Event()
+    monkeypatch.setattr(service, 'run_dataset', lambda _dataset: release.wait())
+    financial={'id':'financial','datasetKey':'stock_financial','status':'queued'}
+    research={'id':'research','datasetKey':'etf_research','status':'queued'}
+    monkeypatch.setattr(service, 'list_due_datasets', AsyncMock(return_value=[financial,research]))
+    try:
+        assert await service.run_due() == 1
+        assert service._task_lanes == {'research':'etf_research'}
     finally:
         release.set()
         await asyncio.gather(*service._tasks.values())

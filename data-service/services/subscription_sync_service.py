@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from providers.tushare_provider import TushareProvider
 from services.data_service import data_service
 from services.subscription_config import DEFAULTS, INDEXES, get_config, parse_timestamp, next_run, market_open
 from providers.stock_symbols import canonical_stock_code, stock_market
+from utils.trading_hours import should_use_current_session_quotes
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,15 @@ class CompanyBatch(list):
         }, ensure_ascii=False)
 
 
+class FinancialRows(list):
+    """Valid per-company rows plus missing statement diagnostics."""
+    def __init__(self, rows, failures):
+        super().__init__(rows)
+        self.failures = failures
+
+
 DATASET_DEFAULTS = {key: (policy['tradingIntervalSeconds'], policy['closedIntervalSeconds']) for key, policy in DEFAULTS['policies'].items()}
+SUPPORTED_INDEX_REALTIME_CODES = {code for code, _name in INDEXES}
 
 GLOBAL_DATASETS = {"market_capital_flow", "sector_capital_flow", "news"}
 
@@ -96,20 +106,31 @@ class SubscriptionSyncService:
         self.etf_provider = ETFProvider()
         self.stock_provider = StockProvider()
         self._locks: Dict[str, asyncio.Lock] = {}
-        self._run_due_lock = asyncio.Lock()
-        self._fetch_semaphore = asyncio.Semaphore(4)
+        self._run_due_lock: Optional[asyncio.Lock] = None
         self.max_retries = 3
-        self._company_semaphore = asyncio.Semaphore(8)
         self._company_requests: Dict[tuple, asyncio.Task] = {}
         self.config = json.loads(json.dumps(DEFAULTS))
         self._tasks: Dict[str, asyncio.Task] = {}
         self._task_lanes: Dict[str, str] = {}
         self._last_ensure_at = 0.0
         self._request_times: Dict[tuple, float] = {}
-        self._realtime_fetch_semaphore = asyncio.Semaphore(4)
-        self._company_realtime_semaphore = asyncio.Semaphore(2)
-        self._quote_semaphore = asyncio.Semaphore(2)
         self._request_loop = None
+        self._dataset_semaphores: Dict[str, asyncio.Semaphore] = {}
+        self._company_request_semaphores: Dict[str, asyncio.Semaphore] = {}
+
+    def _queue_limit(self, key: str) -> int:
+        configured = self.config.get('queueConcurrency', {}).get(key)
+        return max(1, int(configured or 1))
+
+    def _dataset_timeout(self, key: str) -> int:
+        configured = self.config.get('datasetTimeoutSeconds', {}).get(key)
+        return max(15, int(configured or 300))
+
+    def _company_request_limit(self, key: str) -> int:
+        defaults = {'constituent_stock_realtime': 8, 'constituent_stock_daily': 6,
+                    'stock_financial': 4, 'stock_announcement': 4}
+        configured = int(self.config.get('interfaceConcurrency', {}).get(key, defaults.get(key, 2)))
+        return max(1, min(configured, int(self.config.get('requestConcurrency', configured))))
 
     def _ensure_request_loop(self):
         # Python 3.9 binds semaphores to the constructing loop. The singleton is
@@ -118,15 +139,11 @@ class SubscriptionSyncService:
         if self._request_loop is loop:
             return
         self._request_loop = loop
-        self._fetch_semaphore = asyncio.Semaphore(4)
-        self._realtime_fetch_semaphore = asyncio.Semaphore(4)
-        self._company_realtime_semaphore = asyncio.Semaphore(2)
-        concurrency = self.config['requestConcurrency']
-        reserved = 1 if concurrency <= 3 else 2
-        self._company_semaphore = asyncio.Semaphore(max(1, concurrency-reserved))
-        self._quote_semaphore = self._company_semaphore if concurrency == 1 else asyncio.Semaphore(reserved)
+        self._run_due_lock = asyncio.Lock()
         self._company_requests.clear()
         self._request_times.clear()
+        self._dataset_semaphores.clear()
+        self._company_request_semaphores.clear()
 
     def recover_interrupted_runs(self) -> None:
         """Called once at process startup, before any worker can claim a run."""
@@ -152,14 +169,22 @@ class SubscriptionSyncService:
             policy = self.config['policies'].get(row['datasetKey'])
             if not policy:
                 continue
+            # The realtime index provider exposes the five broad market indices
+            # only. Custom industry indices use their daily series; repeatedly
+            # scheduling them here creates guaranteed empty responses and 429s.
+            if row['datasetKey'] == 'index_realtime' and row.get('code') not in SUPPORTED_INDEX_REALTIME_CODES:
+                continue
             # An explicit manual refresh may run while automatic collection is paused.
             if row['status'] != 'queued' and (not policy['enabled'] or not self.config['scopeEnabled'].get(policy['scope'], True)):
                 continue
             next_run = row.get("nextRunAt")
             if row['status'] == 'partial' and row['datasetKey'].endswith('_realtime'):
                 started = parse_timestamp(row.get('lastStartedAt'))
-                if started and (now - started).total_seconds() >= 300:
+                elapsed = (now-started).total_seconds() if started else 0
+                if market_open(row.get('market', 'cn'), now) and elapsed >= 300:
                     due.append(row)
+                    continue
+                if not market_open(row.get('market', 'cn'), now) and elapsed < row['closedIntervalSeconds']:
                     continue
             # Repair persisted pre-opening six-hour waits without resetting failures/backoff.
             if policy['mode'] == 'interval' and row['status'] == 'success' and market_open(row.get('market', 'cn'), now):
@@ -179,6 +204,8 @@ class SubscriptionSyncService:
         return due
 
     async def run_due(self) -> int:
+        self._ensure_request_loop()
+        assert self._run_due_lock is not None
         if self._run_due_lock.locked():
             return 0
         async with self._run_due_lock:
@@ -192,30 +219,31 @@ class SubscriptionSyncService:
                     self._tasks.pop(dataset_id, None)
                     self._task_lanes.pop(dataset_id, None)
             if not self._tasks:
-                concurrency = self.config['requestConcurrency']
-                reserved = 1 if concurrency <= 3 else 2
-                self._company_semaphore = asyncio.Semaphore(max(1, concurrency - reserved))
-                self._quote_semaphore = self._company_semaphore if concurrency == 1 else asyncio.Semaphore(reserved)
                 self._company_requests.clear()
                 self._request_times.clear()
+                self._dataset_semaphores.clear()
+                self._company_request_semaphores.clear()
             if time.monotonic() - self._last_ensure_at >= 60:
                 await self._ensure_subscription_datasets()
                 self._last_ensure_at = time.monotonic()
             datasets = await self.list_due_datasets()
             def priority(dataset):
                 key = dataset['datasetKey']
-                category = 0 if key.endswith('_realtime') else 1 if key.endswith('_daily') else 2 if key == 'stock_financial' else 3
+                category = 0 if key.endswith('_realtime') else 1 if key.endswith('_daily') else 2 if key in ('etf_research','etf_holdings','research_calendar','index_daily','sector_capital_flow') else 3 if key == 'stock_financial' else 4
                 return (0 if dataset['status'] == 'queued' else 1, category)
             datasets.sort(key=priority)
             if not datasets:
                 return 0
             started = 0
+            global_limit=max(1,int(self.config.get('requestConcurrency',4)))
             for dataset in datasets:
+                capacity=global_limit if dataset['status']=='queued' else max(1,global_limit-1)
+                if len(self._tasks)>=capacity:
+                    break
                 dataset_id = str(dataset['id'])
                 key = dataset['datasetKey']
-                lane = 'company-live' if key == 'constituent_stock_realtime' else 'market-live' if key.endswith('_realtime') else 'manual' if dataset['status'] == 'queued' else 'background'
-                counts = {name: sum(value == name for value in self._task_lanes.values()) for name in ('company-live', 'market-live', 'manual', 'background')}
-                available = (counts[lane] < (2 if lane == 'company-live' else 4)) if lane.endswith('live') else counts['manual'] + counts['background'] < 4 and (lane == 'manual' or counts['background'] < 3)
+                lane = key
+                available = sum(value == lane for value in self._task_lanes.values()) < self._queue_limit(key)
                 if dataset_id not in self._tasks and available:
                     task = asyncio.create_task(self.run_dataset(dataset))
                     self._tasks[dataset_id] = task
@@ -271,6 +299,27 @@ class SubscriptionSyncService:
                    VALUES (?, ?, ?, 1, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 values,
             )
+        fund_policy = self.config['policies'].get('fund_research')
+        if fund_policy:
+            holdings = db.execute('SELECT DISTINCT ticker, name FROM Holding WHERE quantity > 0')
+            for holding in holdings:
+                code = str(holding.get('ticker') or '')
+                if not re.fullmatch(r'\d{6}', code):
+                    continue
+                db.execute_many("INSERT OR IGNORE INTO instruments (id,type,code,name,market,status,createdAt,updatedAt) VALUES (?, 'FUND', ?, ?, 'CN', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, code, holding.get('name') or code)])
+                instrument = db.execute("SELECT id FROM instruments WHERE type='FUND' AND code=?", (code,))[0]
+                db.execute_many("INSERT OR IGNORE INTO data_subscriptions (id,instrumentId,enabled,timezone,profile,createdAt,updatedAt) VALUES (?, ?, 1, 'Asia/Shanghai', 'portfolio_fund', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, instrument['id'])])
+                subscription = db.execute('SELECT id FROM data_subscriptions WHERE instrumentId=?', (instrument['id'],))[0]
+                db.execute_many("INSERT OR IGNORE INTO subscription_datasets (id,subscriptionId,datasetKey,enabled,tradingIntervalSeconds,closedIntervalSeconds,status,nextRunAt,createdAt,updatedAt) VALUES (?, ?, 'fund_research', 1, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)", [(uuid.uuid4().hex, subscription['id'], fund_policy['tradingIntervalSeconds'], fund_policy['closedIntervalSeconds'])])
+        retention = self.config.get('storageRetention', {}).get('rawPayloadDays', {})
+        db.execute_many(
+            """UPDATE subscription_datasets
+                  SET tradingIntervalSeconds=?, closedIntervalSeconds=?, retentionDays=?
+                WHERE datasetKey=?""",
+            [(policy['tradingIntervalSeconds'], policy['closedIntervalSeconds'],
+              int(retention.get(dataset_key, 365)), dataset_key)
+             for dataset_key, policy in self.config.get('policies', {}).items()],
+        )
 
     async def sync_global_assets(self) -> Dict[str, int]:
         """Legacy scheduler entry: all collection now uses tracked datasets."""
@@ -349,7 +398,7 @@ class SubscriptionSyncService:
                 db.insert("INSERT INTO data_fetch_runs (id, datasetId, targetCode, status, startedAt) VALUES (?, ?, ?, 'running', ?)", (run_id, dataset_id, code, started.isoformat()))
             db.update("UPDATE subscription_datasets SET status='running', lastStartedAt=?, lastError=NULL, updatedAt=? WHERE id=?", (started.isoformat(), started.isoformat(), dataset_id))
             try:
-                result = await asyncio.wait_for(self._fetch_with_retry(key, code), timeout=1800)
+                result = await asyncio.wait_for(self._fetch_with_retry(key, code), timeout=self._dataset_timeout(key))
                 if not result and key != 'stock_announcement':
                     raise ValueError(f"{key}/{code}: 数据源返回空数据，未完成同步")
                 stored = await asyncio.to_thread(self._store, key, code, result)
@@ -366,13 +415,16 @@ class SubscriptionSyncService:
                 status = 'partial' if partial else 'success'
                 error = (result.error_json() if isinstance(result, CompanyBatch) else json.dumps(result.get('failures'), ensure_ascii=False)) if partial else None
                 if partial and key != 'northbound_flow':
-                    scheduled_next = completed + timedelta(minutes=5 if key.endswith('_realtime') else 30)
+                    if key.endswith('_realtime'):
+                        scheduled_next = completed + timedelta(minutes=5) if market_open(market,completed) else next_run(policy,completed,market)
+                    else:
+                        scheduled_next = completed + timedelta(minutes=360 if key == 'stock_financial' else 30)
                 db.update("UPDATE data_fetch_runs SET status=?, fetchedCount=?, storedCount=?, durationMs=?, qualityStatus=?, error=?, completedAt=? WHERE id=?", (status, len(result) if isinstance(result, list) else len(result['data']) if isinstance(result, dict) and isinstance(result.get('data'), list) else 1, stored, int((completed - started).total_seconds() * 1000), 'partial' if partial else 'verified', error, completed.isoformat(), run_id))
                 # Partial means the bundle contains verified usable fields plus explicit
                 # optional gaps. Record its freshness so every analysis does not refetch
                 # the same successful price/factor data merely because valuation or book
                 # depth was unavailable.
-                freshness_recorded = status == 'success' or (status == 'partial' and key == 'etf_research')
+                freshness_recorded = status == 'success' or (status == 'partial' and key in ('etf_research', 'fund_research', 'stock_financial'))
                 db.update("UPDATE subscription_datasets SET status=?, lastSuccessAt=CASE WHEN ? = 1 THEN ? ELSE lastSuccessAt END, lastError=?, nextRunAt=?, updatedAt=? WHERE id=?", (status, 1 if freshness_recorded else 0, completed.isoformat(), error, scheduled_next.isoformat(), completed.isoformat(), dataset_id))
                 return not partial
             except Exception as error:
@@ -384,10 +436,32 @@ class SubscriptionSyncService:
                 return False
 
     async def _fetch(self, key: str, code: str) -> Any:
+        if key == 'fund_research':
+            from services.portfolio_product_research import collect_portfolio_product
+            return await asyncio.to_thread(collect_portfolio_product, code)
         if key in ('research_calendar', 'etf_research'):
             from services.research_collection import collect_research
+            expected_session = await self._expected_index_close_date() if key == 'etf_research' else None
+            expected_dates, cached = [], {}
+            if key == 'etf_research':
+                calendar_rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey='research_calendar' ORDER BY fetchedAt DESC LIMIT 1")
+                history_rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey='etf_research' AND targetCode=? ORDER BY fetchedAt DESC LIMIT 5", (code,))
+                try:
+                    calendar = json.loads(calendar_rows[0]['payload']).get('data', []) if calendar_rows else []
+                    expected_dates = sorted({_date(row.get('cal_date') or row.get('date')) for row in calendar
+                                             if str(row.get('is_open')) in ('1', '1.0') and _date(row.get('cal_date') or row.get('date'))
+                                             and _date(row.get('cal_date') or row.get('date')) <= expected_session})[-self.config['historyPoints']-40:]
+                    for history_row in reversed(history_rows):
+                        prior = json.loads(history_row['payload']).get('data', {})
+                        for field in ('daily', 'factors', 'indexDaily'):
+                            merged = {_date(row.get('trade_date') or row.get('date')): row for row in [*cached.get(field, []), *prior.get(field, [])]}
+                            cached[field] = list(merged.values())
+                        if prior.get('info'):
+                            cached['info'] = prior['info']
+                except (ValueError, TypeError, KeyError):
+                    pass
             return await collect_research(TushareProvider(), key, code, self.config['historyPoints'],
-                                          expected_session=await self._expected_index_close_date() if key == 'etf_research' else None)
+                                          expected_session=expected_session, expected_dates=expected_dates, cached_history=cached)
         if key == 'sector_capital_flow':
             # 板块资金只允许 AKShare 单源。每次订阅执行都强制刷新，
             # 由调度策略在交易时段持续保存最新横截面快照。
@@ -460,7 +534,13 @@ class SubscriptionSyncService:
                 self._company_requests[request_key] = asyncio.create_task(data_service.get_index_spot(force_refresh=True))
                 self._request_times[request_key] = time.monotonic()
             frame = await self._company_requests[request_key]
-            return [row for row in frame.to_dict('records') if _code(_value(row, '代码', 'code')) == _code(code)]
+            rows = [row for row in frame.to_dict('records') if _code(_value(row, '代码', 'code')) == _code(code)]
+            if should_use_current_session_quotes():
+                source = data_service.registry.get_last_source('index_spot')
+                today = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
+                if source not in ('缓存', '不可用', 'unavailable'):
+                    rows = [{**row, '数据日期': _value(row, '数据日期', '日期', 'date', 'trade_date', default=today), 'source': row.get('source') or source} for row in rows]
+            return rows
         if key == 'index_daily':
             start, end = self._history_range('IndexDaily', 'code', code)
             frame = await data_service.get_index_daily(code, start.replace('-', ''), end.replace('-', ''))
@@ -485,6 +565,11 @@ class SubscriptionSyncService:
             frame = await data_service.get_etf_realtime([code])
             rows = frame.to_dict("records") if frame is not None else []
             rows = [row for row in rows if _code(_value(row, '代码', 'code', 'ticker', default='')) == code]
+            if should_use_current_session_quotes():
+                source = data_service.registry.get_last_source('etf_realtime')
+                today = datetime.now(ZoneInfo('Asia/Shanghai')).strftime('%Y-%m-%d')
+                if source not in ('缓存', '不可用', 'unavailable'):
+                    rows = [{**row, '数据日期': _value(row, '数据日期', '日期', 'date', 'trade_date', default=today), 'source': row.get('source') or source} for row in rows]
             if rows:
                 from services.research_collection import fetch_orderbook
                 try:
@@ -555,7 +640,7 @@ class SubscriptionSyncService:
                 raise ValueError(result.error_json())
             return result
         if key == "stock_financial":
-            holdings = await self._company_holdings(code)
+            holdings = await self._company_holdings(code, graph_limit=max(0, int(os.getenv('GRAPH_FINANCIAL_SYNC_LIMIT', '10'))))
             targets = list(dict.fromkeys(
                 _code(_value(row, "stock_code", "stockCode", "code", "ticker", default=""))
                 for row in holdings[:100]
@@ -573,7 +658,7 @@ class SubscriptionSyncService:
             return await self._company_reports(key, targets, start, datetime.now().strftime("%Y-%m-%d"))
         raise ValueError(f"unsupported dataset: {key}")
 
-    async def _company_holdings(self, code: str):
+    async def _company_holdings(self, code: str, graph_limit: Optional[int] = None):
         # Holdings already have their own refresh dataset. Reuse that snapshot
         # instead of fetching it four times for every company refresh.
         rows = db.execute("SELECT stockCode, stockName, weight FROM ETFHolding WHERE etfCode=? ORDER BY weight DESC", (code,))
@@ -628,7 +713,7 @@ class SubscriptionSyncService:
                     existing_candidate = ranked.get(graph_code)
                     if not existing_candidate or rank > existing_candidate[0]:
                         ranked[graph_code] = (rank, company)
-                limit = max(1, int(os.getenv('GRAPH_COMPANY_SYNC_LIMIT', '30')))
+                limit = max(0, graph_limit if graph_limit is not None else int(os.getenv('GRAPH_COMPANY_SYNC_LIMIT', '30')))
                 for graph_code, (_rank, company) in sorted(ranked.items(), key=lambda item: item[1][0], reverse=True)[:limit]:
                     if graph_code not in unique:
                         unique[graph_code] = {
@@ -648,12 +733,13 @@ class SubscriptionSyncService:
         self._ensure_request_loop()
         request_key = (key, symbol, start, end)
         task = self._company_requests.get(request_key)
-        ttl = 30 if key.endswith('_realtime') else 300
+        ttl = 30 if key.endswith('_realtime') else 86400 if key == 'stock_financial' else 3600 if key == 'stock_announcement' else 300
         if task is not None and task.done() and time.monotonic() - self._request_times.get(request_key, 0) >= ttl:
             task = None
         if task is None:
             async def fetch():
-                async with (self._quote_semaphore if key.endswith('_realtime') else self._company_semaphore):
+                semaphore = self._company_request_semaphores.setdefault(key, asyncio.Semaphore(self._company_request_limit(key)))
+                async with semaphore:
                     market = stock_market(symbol)
                     if key == 'constituent_stock_daily':
                         request = self.stock_provider.get_kline(symbol, 'daily', start, end, market, '')
@@ -681,14 +767,22 @@ class SubscriptionSyncService:
             raise
 
     async def _financial_bundle(self, symbol, market):
-        result = []
-        for report_type in ('income', 'balance', 'cashflow'):
+        result, failures = [], {}
+        indicators = await self.stock_provider.get_financial_indicators(symbol, market)
+        result.extend({**row, 'reportType': 'indicator', 'currency': row.get('currency') or ('CNY' if market == 'cn' else '来源未标注')} for row in indicators[:8])
+        # Income and cash flow are the absolute statements required by the
+        # report. Balance-sheet ratios are already present in fina_indicator;
+        # avoiding a third statement request materially reduces quota pressure.
+        for report_type in ('income', 'cashflow'):
             rows = await self.stock_provider.get_financial_report(symbol, report_type, market)
             if not rows:
-                raise ValueError(f'{symbol}: {report_type} 财报未返回，保留已有报表')
+                failures[report_type] = f'{report_type} 财报未返回，保留已有报表'
+                continue
             rows = sorted(rows, key=lambda row: str(_value(row, '报告期', 'report_period', 'end_date', 'period', default='')), reverse=True)[:8]
             result.extend({**row, 'reportType': report_type, 'currency': row.get('currency') or ('CNY' if market == 'cn' else '来源未标注')} for row in rows)
-        return result
+        if not result:
+            raise ValueError(f'{symbol}: 财务指标与报表均未返回，保留已有报表')
+        return FinancialRows(result, failures)
 
     def _history_range(self, table, column, code):
         # SQL identifiers are internal constants, never request input.
@@ -712,6 +806,8 @@ class SubscriptionSyncService:
                 rows = await self._company_request(key, target, start, end)
                 if not rows and key == 'stock_financial':
                     raise ValueError('未返回有效财报')
+                if isinstance(rows, FinancialRows) and rows.failures:
+                    failures[target] = '；'.join(rows.failures.values())
                 succeeded.append(target)
                 return [{**row, 'stockCode': target} for row in (rows or [])]
             except Exception as error:
@@ -846,8 +942,24 @@ class SubscriptionSyncService:
             self._company_requests[request_key] = asyncio.create_task(
                 TushareProvider().request_dataframe('trade_cal', exchange='SSE',
                     start_date=(end - timedelta(days=40)).strftime('%Y%m%d'), end_date=end.strftime('%Y%m%d')))
-        frame = await self._company_requests[request_key]
-        dates = [_date(row.get('cal_date')) for row in frame.to_dict('records') if str(row.get('is_open')) in ('1', '1.0')]
+        try:
+            frame = await self._company_requests[request_key]
+            dates = [_date(row.get('cal_date')) for row in frame.to_dict('records') if str(row.get('is_open')) in ('1', '1.0')]
+        except Exception as error:
+            # The frozen research calendar is a versioned Tushare record and can
+            # authoritatively establish the latest close when the live calendar
+            # endpoint is temporarily unavailable. Never guess from weekdays.
+            rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey='research_calendar' ORDER BY fetchedAt DESC LIMIT 1")
+            try:
+                payload = json.loads(rows[0]['payload']) if rows else {}
+                calendar = payload if isinstance(payload, list) else payload.get('data', [])
+                dates = [_date(row.get('cal_date') or row.get('date')) for row in calendar
+                         if str(row.get('is_open', row.get('open'))) in ('1', '1.0', 'True', 'true')
+                         and (_date(row.get('cal_date') or row.get('date')) or '') <= end.strftime('%Y-%m-%d')]
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                dates = []
+            if not dates:
+                raise ValueError(f'交易日历刷新失败且本地无可核验快照: {error}') from error
         if not dates:
             raise ValueError('交易日历不可用，无法确认最新收盘日期')
         return max(date for date in dates if date)
@@ -855,8 +967,9 @@ class SubscriptionSyncService:
     async def _fetch_with_retry(self, key: str, code: str) -> Any:
         """Bound external API concurrency and retry transient provider failures."""
         self._ensure_request_loop()
-        # Large constituent batches must not occupy every ETF/index live slot.
-        semaphore = self._company_realtime_semaphore if key == 'constituent_stock_realtime' else self._realtime_fetch_semaphore if key.endswith('_realtime') else self._fetch_semaphore
+        # Each dataset/API class owns an independent queue. A slow financial or
+        # announcement batch must never consume the quote or daily-data budget.
+        semaphore = self._dataset_semaphores.setdefault(key, asyncio.Semaphore(self._queue_limit(key)))
         async with semaphore:
             last_error: Optional[Exception] = None
             for attempt in range(self.max_retries):
@@ -879,7 +992,27 @@ class SubscriptionSyncService:
         # require standards-compliant JSON so stored evidence is cross-runtime.
         clean_result = _clean_json(result)
         payload = json.dumps(clean_result, ensure_ascii=False, default=str, allow_nan=False)
-        db.insert("INSERT INTO raw_payloads (id, datasetKey, targetCode, provider, payload, contentHash, fetchedAt) VALUES (?, ?, ?, ?, ?, ?, ?)", (uuid.uuid4().hex, key, code, provider, payload, _hash(clean_result), now))
+        content_hash = _hash(clean_result)
+        latest = db.execute(
+            "SELECT id,contentHash FROM raw_payloads WHERE datasetKey=? AND targetCode=? ORDER BY fetchedAt DESC LIMIT 1",
+            (key, code),
+        )
+        if latest and latest[0].get('contentHash') == content_hash:
+            # A successful revalidation of unchanged data advances observation
+            # time without retaining another multi-megabyte copy.
+            db.update("UPDATE raw_payloads SET provider=?,fetchedAt=? WHERE id=?", (provider, now, latest[0]['id']))
+        else:
+            db.insert("INSERT INTO raw_payloads (id, datasetKey, targetCode, provider, payload, contentHash, fetchedAt) VALUES (?, ?, ?, ?, ?, ?, ?)", (uuid.uuid4().hex, key, code, provider, payload, content_hash, now))
+        max_versions = int(self.config.get('storageRetention', {}).get('rawPayloadMaxVersions', {}).get(key, 0) or 0)
+        if max_versions:
+            db.update(
+                """DELETE FROM raw_payloads WHERE id IN (
+                       SELECT id FROM raw_payloads
+                        WHERE datasetKey=? AND targetCode=?
+                        ORDER BY fetchedAt DESC, id DESC LIMIT -1 OFFSET ?
+                   )""",
+                (key, code, max_versions),
+            )
         if key in ('sector_capital_flow', 'northbound_flow', 'market_volume', 'dragon_tiger', 'market_news', 'market_main_flow', 'margin_balance'):
             data = result['data']
             if key == 'market_news':
@@ -1024,7 +1157,7 @@ class SubscriptionSyncService:
             if instrument_type == 'STOCK' and not self._is_placeholder_stock_name(name, ticker):
                 instrument_names.append((uuid.uuid4().hex, ticker, str(name).strip(), market.upper()))
         if values:
-            db.execute_many('INSERT INTO market_quotes (id,instrumentType,code,market,currency,price,previousClose,open,high,low,volume,amount,changePct,tradeDate,source,fetchedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(instrumentType,code) DO UPDATE SET market=excluded.market,currency=excluded.currency,price=excluded.price,previousClose=excluded.previousClose,open=excluded.open,high=excluded.high,low=excluded.low,volume=excluded.volume,amount=excluded.amount,changePct=excluded.changePct,tradeDate=excluded.tradeDate,source=excluded.source,fetchedAt=excluded.fetchedAt', values)
+            db.execute_many('INSERT INTO market_quotes (id,instrumentType,code,market,currency,price,previousClose,open,high,low,volume,amount,changePct,tradeDate,source,fetchedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(instrumentType,code) DO UPDATE SET market=excluded.market,currency=excluded.currency,price=excluded.price,previousClose=excluded.previousClose,open=excluded.open,high=excluded.high,low=excluded.low,volume=excluded.volume,amount=excluded.amount,changePct=excluded.changePct,tradeDate=excluded.tradeDate,source=excluded.source,fetchedAt=excluded.fetchedAt WHERE excluded.tradeDate > market_quotes.tradeDate OR (excluded.tradeDate = market_quotes.tradeDate AND excluded.fetchedAt >= market_quotes.fetchedAt)', values)
         if instrument_names:
             db.execute_many("INSERT INTO instruments (id,type,code,name,market,status,createdAt,updatedAt) VALUES (?, 'STOCK', ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) ON CONFLICT(type,code) DO UPDATE SET name=excluded.name,market=excluded.market,status='active',updatedAt=CURRENT_TIMESTAMP", instrument_names)
         return len(values)

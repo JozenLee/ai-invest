@@ -86,12 +86,15 @@ function candidateByResult(result: Record<string, unknown>, candidates: GraphInd
 
 export async function matchHoldingsToGraphIndustries(holdings: HoldingInput[]): Promise<Record<string, IndustryMatch>> {
   if (!holdings.length) return {}
+  // Structural typing does not strip the account fields present on imported
+  // holdings. Only public product descriptors belong in a classification request.
+  const publicHoldings=holdings.map(({ticker,name,category})=>({ticker,name,...(category?{category}:{})}))
   const candidates = await fetchGraphIndustryCandidates()
   if (!candidates.length) return {}
 
   try {
     const response = await aiClient.complete({
-      prompt: `请将每只基金匹配到最合适的知识图谱产业领域。只能从候选领域中选择，无法可靠匹配时返回 null。\n\n基金：${JSON.stringify(holdings)}\n候选领域：${JSON.stringify(candidates.slice(0, 300))}\n\n只返回 JSON：\n{"matches":[{"ticker":"基金代码","industryDomainCode":"候选代码或null","industryDomain":"候选名称或null","confidence":0.0,"reason":"简短理由"}]}`,
+      prompt: `请将每只基金匹配到最合适的知识图谱产业领域。只能从候选领域中选择，无法可靠匹配时返回 null。\n\n基金：${JSON.stringify(publicHoldings)}\n候选领域：${JSON.stringify(candidates.slice(0, 300))}\n\n只返回 JSON：\n{"matches":[{"ticker":"基金代码","industryDomainCode":"候选代码或null","industryDomain":"候选名称或null","confidence":0.0,"reason":"简短理由"}]}`,
       maxTokens: Math.min(3000, Math.max(900, holdings.length * 180)),
       system: '你是知识图谱标注助手。只能使用候选领域，不得创造领域名称。优先依据基金名称、基金类别和代码判断，输出纯 JSON。',
     })

@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db/prisma'
 import { fetchFundCategory } from '@/lib/services/fund-category.service'
 import { matchHoldingToGraphIndustry } from '@/lib/services/portfolio-industry-matcher.service'
+import { ensurePortfolioFundSubscriptions } from '@/lib/portfolio-fund-subscriptions'
+import { refreshPortfolioProductResearch } from '@/lib/services/portfolio-product-research.service'
+import { refreshStoredPortfolioFundProducts } from '@/lib/services/fund-product-verification.service'
 
 interface RouteContext {
   params: Promise<{ id: string }>
@@ -17,7 +20,7 @@ const productFields = (body: Record<string, unknown>) => {
   if (has('targetEtfCode') || has('targetIndexCode')) { data.mappingSource = body.targetEtfCode || body.targetIndexCode ? 'manual' : null; data.mappingConfidence = body.targetEtfCode || body.targetIndexCode ? 1 : null }
   if (has('purchaseDate')) data.purchaseDate = typeof body.purchaseDate === 'string' && body.purchaseDate ? new Date(body.purchaseDate) : null
   if (has('costNav')) data.costNav = optionalNumber(body.costNav)
-  if (has('redemptionFeePct')) data.redemptionFeePct = optionalNumber(body.redemptionFeePct)
+  if (has('redemptionFeePct')) { data.redemptionFeePct = optionalNumber(body.redemptionFeePct); data.redemptionFeeSource = optionalNumber(body.redemptionFeePct) == null ? null : 'manual' }
   return data
 }
 
@@ -122,6 +125,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       })
     }
 
+    await ensurePortfolioFundSubscriptions([{ticker,name}])
+    await refreshPortfolioProductResearch([ticker],{timeoutMs:45_000,totalTimeoutMs:60_000})
+    await refreshStoredPortfolioFundProducts(id)
+    holding=await prisma.holding.findUniqueOrThrow({where:{id:holding.id}})
     return NextResponse.json({ success: true, data: holding })
   } catch (error) {
     console.error('添加持仓失败:', error)
@@ -182,7 +189,10 @@ export async function PUT(request: NextRequest, context: RouteContext) {
       },
     })
 
-    return NextResponse.json({ success: true, data: holding })
+    await ensurePortfolioFundSubscriptions([{ticker:existing.ticker,name:existing.name}])
+    await refreshPortfolioProductResearch([existing.ticker],{timeoutMs:45_000,totalTimeoutMs:60_000})
+    await refreshStoredPortfolioFundProducts(id)
+    return NextResponse.json({ success: true, data: await prisma.holding.findUniqueOrThrow({where:{id:holding.id}}) })
   } catch (error) {
     console.error('更新持仓失败:', error)
     return NextResponse.json(

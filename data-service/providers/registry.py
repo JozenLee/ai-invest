@@ -387,6 +387,15 @@ class ProviderRegistry:
                 dates = result["数据日期"].dropna().astype(str).str.replace("/", "-").str[:10]
                 if not any(date == today for date in dates):
                     return False
+            # A partial Tushare snapshot used to be accepted when any one index
+            # succeeded. The subscription worker then filtered for 沪深300 and
+            # received an empty frame instead of falling back to AKShare.
+            if "代码" in result.columns:
+                normalize=lambda value: str(value).lower().removeprefix('sh').removeprefix('sz').split('.')[0]
+                required={'000001','399001','399006','000688','000300'}
+                available={normalize(value) for value in result["代码"].dropna()}
+                if not required.issubset(available):
+                    return False
 
         if is_trading_hours() and category == "sector_capital_flow" and isinstance(result, list):
             today = datetime.now().strftime("%Y%m%d")

@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { frozenIndustryGraph } from '@/lib/graph/local-industry-fallback'
 
 const DATA_SERVICE_URL = process.env.DATA_SERVICE_URL || 'http://localhost:8000'
 
 /**
  * Helper function to convert snake_case to camelCase
  */
-function toCamelCase(obj: any): any {
+function toCamelCase(obj: unknown): unknown {
   if (Array.isArray(obj)) {
     return obj.map(item => toCamelCase(item))
   } else if (obj !== null && typeof obj === 'object') {
-    return Object.keys(obj).reduce((acc, key) => {
+    const record=obj as Record<string,unknown>
+    return Object.keys(record).reduce<Record<string,unknown>>((acc, key) => {
       const camelKey = key.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase())
-      acc[camelKey] = toCamelCase(obj[key])
+      acc[camelKey] = toCamelCase(record[key])
       return acc
-    }, {} as any)
+    }, {})
   }
   return obj
 }
@@ -25,7 +27,7 @@ function toCamelCase(obj: any): any {
  * Proxies to: GET /api/v1/industries/{industry_id}
  */
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -65,6 +67,10 @@ export async function GET(
 
   } catch (error) {
     console.error('[industries/[id] API] 获取产业详情失败:', error)
+
+    const {id}=await params
+    const cached=await frozenIndustryGraph(id)
+    if(cached)return NextResponse.json({success:true,data:toCamelCase(cached),meta:{degraded:true,source:'frozen-local-cache',reason:error instanceof Error?error.message:'数据服务不可用'}})
 
     return NextResponse.json(
       {

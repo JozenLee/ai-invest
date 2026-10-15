@@ -110,14 +110,14 @@ class AKShareProvider(DataProvider):
     async def get_index_spot(self) -> pd.DataFrame:
         """获取指数实时行情快照（含备用接口降级）
 
-        注意：在非交易时间，spot接口返回的是盘中快照而非收盘价，
-        因此需要用日线数据的收盘价来覆盖
+        注意：盘前/盘后 spot 接口返回的是盘中快照而非收盘价，
+        因此需要用日线数据的收盘价来覆盖；午休仍保留上午快照。
 
         优先级：新浪财经 > 东方财富 > 日K数据
         """
-        from utils.trading_hours import is_trading_hours
+        from utils.trading_hours import should_use_current_session_quotes
 
-        is_trading = is_trading_hours()
+        current_session = should_use_current_session_quotes()
 
         # 主接口：新浪财经版（更稳定，无代理问题）
         try:
@@ -141,7 +141,7 @@ class AKShareProvider(DataProvider):
                     df = df.rename(columns=rename_map)
                 if self._validate_index_data(df):
                     print(f"[AKShare] 新浪财经接口成功，返回 {len(df)} 条指数数据")
-                    if not is_trading:
+                    if not current_session:
                         df = await self._patch_with_daily_close(df)
                     return df
                 else:
@@ -156,14 +156,18 @@ class AKShareProvider(DataProvider):
             if self._validate_index_data(df):
                 print(f"[AKShare] 东方财富接口成功，返回 {len(df)} 条指数数据")
                 # 如果不是交易时间，用日线数据覆盖价格
-                if not is_trading:
+                if not current_session:
                     df = await self._patch_with_daily_close(df)
                 return df
             print("[AKShare] stock_zh_index_spot_em 返回数据未通过验证")
         except Exception as e:
             print(f"[AKShare] stock_zh_index_spot_em 失败: {e}")
 
-        # 最后降级：通过日K数据获取最新收盘价
+        # 当前交易日会话不能把上一日线伪装成实时指数；交给注册表继续降级。
+        if current_session:
+            return pd.DataFrame()
+
+        # 最后降级：盘前/盘后通过日K数据获取最新收盘价
         try:
             target_codes = ["sh000001", "sz399001", "sz399006", "sh000688", "sh000300"]
             records = []

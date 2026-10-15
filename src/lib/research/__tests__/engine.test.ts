@@ -1,8 +1,8 @@
 import {describe,it,expect} from 'vitest'
 import {fixture} from './fixtures'
-import {evaluateResearch,adjustedBars,requiredHoldingPeriod,selectProductNav} from '../engine'
+import {evaluateResearch,adjustedBars,derivedSectorNetPct,requiredHoldingPeriod,selectProductNav} from '../engine'
 import {analysisSessionBoundary,sessionBoundary,dateKey,visibleAt,nextReview} from '../time'
-import {clusterEvents} from '../events'
+import {clusterEvents,summarizeEventSentiment} from '../events'
 import {validateProfile} from '../profile'
 import {replayResearch} from '../replay'
 
@@ -17,6 +17,11 @@ describe('P0 point-in-time evidence',()=>{
     const calendar=[{date:'2026-09-07',open:true},{date:'2026-09-08',open:true}]
     expect(sessionBoundary(calendar,'2026-09-08T02:00:00Z').expectedSession).toBe('2026-09-07')
     expect(analysisSessionBoundary(calendar,'2026-09-08T02:00:00Z')).toMatchObject({expectedSession:'2026-09-08',verified:true,intraday:true})
+  })
+  it('keeps the current session during the lunch recess',()=>{
+    const calendar=[{date:'2026-09-15',open:true},{date:'2026-09-16',open:true}]
+    expect(sessionBoundary(calendar,'2026-09-16T03:38:00Z')).toMatchObject({expectedSession:'2026-09-15',verified:true})
+    expect(analysisSessionBoundary(calendar,'2026-09-16T03:38:00Z')).toMatchObject({expectedSession:'2026-09-16',verified:true,intraday:true})
   })
   it('uses a frozen intraday bar in prices and technical decisions',()=>{
     const s=fixture(),last=s.etfs[0].bars.at(-1)!
@@ -104,12 +109,33 @@ describe('P1 mapping and representative evidence',()=>{
     expect(rows).toHaveLength(1);expect(rows[0].evidenceIds).toEqual(['a','b']);expect(rows[0].status).toBe('evidence')
     expect(clusterEvents([{...base,content:'上游未提供正文'}],'2026-09-04')[0].status).toBe('lead')
   })
+  it('builds a source-, materiality- and recency-weighted event tone from evidence only',()=>{
+    const positive=clusterEvents([{id:'positive',title:'公司获得重大订单并量产',content:'公司获得重大订单，相关产品已经开始量产供货，预计产能将持续增长。'.repeat(3),source:'stock_announcement',company:'600000',kind:'announcement',publishedAt:'2026-09-03T01:00:00Z',fetchedAt:'2026-09-03T02:00:00Z'}],'2026-09-04T01:00:00Z')
+    const leads=clusterEvents([{id:'lead',title:'传闻获批',content:'上游未提供正文',source:'转载',kind:'news',publishedAt:'2026-09-03T01:00:00Z',fetchedAt:'2026-09-03T02:00:00Z'}],'2026-09-04T01:00:00Z')
+    const summary=summarizeEventSentiment([...positive,...leads],'2026-09-04T01:00:00Z')
+    expect(summary).toMatchObject({evidenceEvents:1,leadEvents:1,announcementEvents:1,positive:1,negative:0,developmentTone:'积极',freshness:'当前'})
+    expect(summary.score).toBeGreaterThan(.15)
+  })
+  it('scores provider and graph impact separately from evidence materiality',()=>{
+    const common={title:'算力基础设施重大订单落地',content:'公司取得重大订单并进入批量交付，覆盖多个产业环节，订单金额和交付周期已经披露。'.repeat(3),source:'产业数据源',kind:'news' as const,publishedAt:'2026-09-03T01:00:00Z',fetchedAt:'2026-09-03T02:00:00Z',segments:['芯片','服务器']}
+    const [high]=clusterEvents([{...common,id:'high',impact:5,propagationImpact:.9}],'2026-09-04T01:00:00Z')
+    const [low]=clusterEvents([{...common,id:'low',title:'算力基础设施一般进展',impact:1,propagationImpact:.1}],'2026-09-04T01:00:00Z')
+    expect(high.influenceScore).toBeGreaterThan(low.influenceScore!)
+    expect(high.influenceLevel).toBe('high')
+    expect(high.influenceFactors).toMatchObject({providerImpact:5,propagationImpact:.9})
+  })
   it('classifies governance boilerplate before broad policy or demand keywords',()=>{
     const base={id:'a',title:'公司:投资者关系管理制度（上市后适用）',content:'本制度用于规范公司治理、内部控制和投资者沟通流程。'.repeat(4),source:'公告',company:'600000',kind:'announcement' as const,publishedAt:'2026-09-01',fetchedAt:'2026-09-02'}
     expect(clusterEvents([base],'2026-09-04')[0].category).toBe('administrative')
     expect(clusterEvents([{...base,title:'公司:关于参加半年度业绩说明会的公告'}],'2026-09-04')[0].category).toBe('administrative')
     expect(clusterEvents([{...base,title:'公司:关于实际控制人部分股票解除质押的公告'}],'2026-09-04')[0].category).toBe('administrative')
     expect(clusterEvents([{...base,title:'公司:关于回购公司股份的进展公告'}],'2026-09-04')[0].category).toBe('administrative')
+    expect(clusterEvents([{...base,title:'公司:董事会薪酬和考核委员会关于股票期权的核查意见'}],'2026-09-04')[0].category).toBe('administrative')
+    expect(clusterEvents([{...base,title:'公司:2026年度向特定对象发行A股股票预案'}],'2026-09-04')[0].category).toBe('administrative')
+  })
+  it('normalizes mixed yuan and 亿元 sector-flow fields before deriving a ratio',()=>{
+    expect(derivedSectorNetPct(20_703_000_000,1089.36,882.33)).toBeCloseTo(10.5,1)
+    expect(derivedSectorNetPct(20.703,1089.36,882.33)).toBeCloseTo(1.05,1)
   })
   it('validates bounded risk rules and requires named segments for leaders',()=>{
     const p=fixture().profile;expect(validateProfile(p,'ai')).toEqual(p)
@@ -169,4 +195,24 @@ describe('P2 decisions and paper replay',()=>{
     expect(overlap).toMatchObject({commonHoldings:1,weightedOverlapPct:50})
     expect(overlap?.basis).toContain('不是完整指数成分重叠')
   })
+})
+
+it('distinguishes a verified split from partial factor coverage and residual jumps',()=>{
+  const snapshot=fixture(),etf=snapshot.etfs[0]
+  etf.bars=etf.bars.map((bar,index)=>index>=100?{...bar,open:bar.open/2,high:bar.high/2,low:bar.low/2,close:bar.close/2}:bar)
+  etf.factors=etf.factors.map((factor,index)=>({...factor,factor:index>=100?2:1}))
+  expect(evaluateResearch(snapshot).decisions[0].adjustmentAudit?.status).toBe('verified')
+  etf.factors=etf.factors.map(row=>({...row,factor:1}))
+  expect(evaluateResearch(snapshot).decisions[0].adjustmentAudit?.status).toBe('discontinuous')
+  etf.factors.splice(-5,1)
+  expect(evaluateResearch(snapshot).decisions[0].adjustmentAudit?.status).toBe('partial')
+})
+
+it('keeps an old extra-history gap out of the 121-session calculation window but blocks a current gap',()=>{
+  const snapshot=fixture()
+  snapshot.etfs[0].factors.splice(0,1)
+  expect(evaluateResearch(snapshot).decisions[0].adjustmentAudit).toMatchObject({status:'verified',priceDates:121,matchedFactorDates:121})
+  snapshot.etfs[0].factors.splice(-5,1)
+  expect(evaluateResearch(snapshot).decisions[0].adjustmentAudit?.status).toBe('partial')
+  expect(evaluateResearch(snapshot).decisions[0].state).toBe('blocked')
 })

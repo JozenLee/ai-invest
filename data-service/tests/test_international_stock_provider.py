@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import AsyncMock, Mock
 
 from providers.international_stock_provider import InternationalStockProvider
-from providers.stock_symbols import canonical_stock_code, provider_symbol, stock_market
+from providers.stock_symbols import canonical_stock_code, provider_symbol, stock_exchange, stock_market
 from providers.openbb_provider import OpenBBProvider
 
 
@@ -14,6 +14,9 @@ def test_international_symbol_mapping():
     assert provider_symbol('700.hk') == '0700.HK'
     assert stock_market('700.hk') == 'hk'
     assert stock_market('AAPL') == 'us'
+    assert stock_exchange('872808') == 'BJ'
+    assert stock_exchange('300308') == 'SZ'
+    assert stock_exchange('688256') == 'SH'
 
 
 @pytest.mark.asyncio

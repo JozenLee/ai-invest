@@ -13,8 +13,15 @@ export async function PATCH(request: NextRequest) {
     const previous = await getSubscriptionConfig()
     await prisma.$transaction([
       prisma.subscriptionConfiguration.upsert({ where: { id: 'global' }, create: { id: 'global', payload: JSON.stringify(config) }, update: { payload: JSON.stringify(config) } }),
-      ...Object.entries(config.policies).filter(([key, policy]) => JSON.stringify(policy) !== JSON.stringify(previous.policies[key]) || (config.historyPoints > previous.historyPoints && key.endsWith('_daily'))).map(([key, policy]) =>
-        prisma.subscriptionDataset.updateMany({ where: { datasetKey: key }, data: { tradingIntervalSeconds: policy.tradingIntervalSeconds, closedIntervalSeconds: policy.closedIntervalSeconds, nextRunAt: null } })),
+      ...Object.entries(config.policies).map(([key, policy]) => {
+        const scheduleChanged=JSON.stringify(policy)!==JSON.stringify(previous.policies[key])||(config.historyPoints>previous.historyPoints&&key.endsWith('_daily'))
+        return prisma.subscriptionDataset.updateMany({ where: { datasetKey: key }, data: {
+          tradingIntervalSeconds: policy.tradingIntervalSeconds,
+          closedIntervalSeconds: policy.closedIntervalSeconds,
+          retentionDays: config.storageRetention.rawPayloadDays[key]||365,
+          ...(scheduleChanged?{nextRunAt:null}:{}),
+        } })
+      }),
     ])
     return NextResponse.json({ success: true, data: config })
   } catch (error) {

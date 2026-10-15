@@ -1,7 +1,7 @@
 import { administrativeTitle } from './event-policy'
 import { productGroups } from '@/lib/analysis/report-insights'
 import { chinaDate } from './time'
-import type { Bar, Condition, Decision, ETFInput, Evaluation, ResearchSnapshot } from './contracts'
+import type { AdjustmentAudit, Bar, Condition, Decision, ETFInput, Evaluation, ResearchSnapshot } from './contracts'
 import { analysisSessionBoundary, dateKey, nextReview, sessionBoundary } from './time'
 
 const mean = (values: number[]) => values.length ? values.reduce((a,b)=>a+b,0)/values.length : null
@@ -9,14 +9,19 @@ const finite = (value: unknown): value is number => typeof value === 'number' &&
 export function validBars(rows: Bar[], cutoff: string | null) {
   return [...new Map(rows.filter(b=>dateKey(b.date) && cutoff && b.date <= cutoff && [b.open,b.high,b.low,b.close].every(n=>finite(n)&&n>0) && b.high >= Math.max(b.open,b.close) && b.low <= Math.min(b.open,b.close) && finite(b.amount)&&b.amount>=0 && finite(b.volume)&&b.volume>=0).map(b=>[b.date,b])).values()].sort((a,b)=>a.date.localeCompare(b.date))
 }
-export function adjustedBars(etf: ETFInput, cutoff: string | null) {
-  const raw = validBars(etf.bars, cutoff)
+export function adjustedBars(etf: ETFInput, cutoff: string | null, windowPoints?: number) {
+  const valid = validBars(etf.bars, cutoff)
+  const raw = windowPoints ? valid.slice(-windowPoints) : valid
   const factors = new Map(etf.factors.filter(f=>dateKey(f.date)&&finite(f.factor)&&f.factor>0).map(f=>[f.date,f.factor]))
   const complete = !!raw.length && raw.every(b=>factors.has(b.date)) && !!etf.adjustmentSource
   const base = factors.get(raw.at(-1)?.date || '') || 1
   const bars = complete ? raw.map(b=>{ const ratio=factors.get(b.date)!/base; return {...b,open:b.open*ratio,high:b.high*ratio,low:b.low*ratio,close:b.close*ratio} }) : raw
-  const discontinuity = bars.some((b,i)=>i>0&&Math.abs(b.close/bars[i-1].close-1)>0.3)
-  return {raw,bars,adjusted:complete,discontinuity}
+  const missingDates=raw.filter(bar=>!factors.has(bar.date)).map(bar=>bar.date)
+  const discontinuityDates=complete?bars.filter((bar,index)=>index>0&&Math.abs(bar.close/bars[index-1].close-1)>.3).map(bar=>bar.date):[]
+  const discontinuity=discontinuityDates.length>0
+  const matchedFactorDates=raw.length-missingDates.length
+  const adjustmentAudit:AdjustmentAudit={status:!matchedFactorDates?'missing':missingDates.length?'partial':!etf.adjustmentSource?'unverified-source':discontinuity?'discontinuous':'verified',priceDates:raw.length,matchedFactorDates,missingDates,discontinuityDates}
+  return {raw,bars,adjusted:complete,discontinuity,adjustmentAudit}
 }
 function returns(bars: Bar[]) { return bars.slice(1).map((b,i)=>b.close/bars[i].close-1) }
 function std(values: number[]) { const m=mean(values); return m!==null&&values.length>1?Math.sqrt(values.reduce((s,v)=>s+(v-m)**2,0)/(values.length-1)):null }
@@ -29,6 +34,15 @@ function maxDrawdown(bars:Bar[],n:number){
   return drawdown*100
 }
 const clamp=(value:number,min=-1,max=1)=>Math.min(max,Math.max(min,value))
+export function derivedSectorNetPct(net:number|null,inflow:number|null,outflow:number|null){
+  if(net===null||inflow===null||outflow===null||inflow+outflow<=0)return null
+  const gross=inflow+outflow
+  // Eastmoney currently returns net in yuan while inflow/outflow are in 亿元;
+  // other providers may keep all three fields in the same unit.
+  const comparableNet=Math.abs(net)>gross*10_000?net/1e8:net
+  const ratio=comparableNet/gross*100
+  return Number.isFinite(ratio)&&Math.abs(ratio)<=100?ratio:null
+}
 function condition(key: string,label: string,value: number|string|null,operator: Condition['operator'],threshold: number|string,evidenceIds: string[]): Condition {
   const known = value!==null && (typeof value !== 'number' || Number.isFinite(value))
   const met = known && (operator==='='?value===threshold:operator==='>='?value>=threshold:value<=threshold)
@@ -70,11 +84,11 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
   const flowIds=[...new Set(flows.map(f=>f.evidenceId))]
   const expiry=nextReview(snapshot.calendar,snapshot.asOf)
   let decisions=snapshot.etfs.map((etf):Decision=>{
-    const {raw,bars,adjusted,discontinuity}=adjustedBars({...etf,bars:etf.bars.filter(b=>openDates.has(b.date))},cutoff)
+    const {raw,bars,adjusted,discontinuity,adjustmentAudit}=adjustedBars({...etf,bars:etf.bars.filter(b=>openDates.has(b.date))},cutoff,Math.max(rules.minHistory,121))
     const indices=validBars(etf.indexBars,indexCutoff).filter(b=>openDates.has(b.date)), date=raw.at(-1)?.date||null
     const current=raw.at(-1)?.close||null, p=etf.product
-    const expectedDates=sessions.slice(-rules.minHistory)
-    const complete=(series:Bar[])=>{const dates=new Set(series.map(b=>b.date));return expectedDates.length===rules.minHistory&&expectedDates.every(d=>dates.has(d))}
+    const expectedDates=sessions.slice(-Math.max(rules.minHistory,121))
+    const complete=(series:Bar[])=>{const dates=new Set(series.map(b=>b.date));return expectedDates.length===Math.max(rules.minHistory,121)&&expectedDates.every(d=>dates.has(d))}
     const expectedIndexDates=indexSessions.slice(-rules.minHistory)
     const indexComplete=(series:Bar[])=>{const dates=new Set(series.map(b=>b.date));return expectedIndexDates.length===rules.minHistory&&expectedIndexDates.every(d=>dates.has(d))}
     const usable=bars.length>=rules.minHistory && complete(bars) && adjusted && !discontinuity && date===cutoff && cutoff!==null
@@ -129,8 +143,13 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
       condition('volatility','年化波动率(%)',volatility===null?null:volatility*Math.sqrt(252)*100,'<=',rules.maxVolatilityPct,priceEvidenceIds),
       condition('holdings','已披露持仓权重覆盖(%，不是实时穿透)',weight,'>=',50,etf.holdings.map(h=>h.evidenceId)),
     ]
+    conditions.find(item=>item.key==='adjustment')!.detail=`本轮计算窗口行情${adjustmentAudit.priceDates}个交易日，已匹配复权因子${adjustmentAudit.matchedFactorDates}个；${adjustmentAudit.missingDates.length?`缺少${adjustmentAudit.missingDates.length}个交易日，属于覆盖不完整而非全部缺失`:adjustmentAudit.discontinuityDates.length?`复权后仍存在${adjustmentAudit.discontinuityDates.length}处价格跳变`:'日期覆盖完整'}；状态${adjustmentAudit.status}`
     const premiumCondition=conditions.find(item=>item.key==='premium')!
-    if(premiumCondition.status==='unknown'){premiumCondition.availability=p.navStatus==='failed'?'failed':p.navStatus==='pending-publication'?'pending-publication':p.date?'stale':'missing';premiumCondition.detail=p.navDetail||`收盘价 ${date||'缺失'}；净值 ${p.date||'缺失'}，日期未对齐`}
+    if(premiumCondition.status==='unknown'){
+      const awaitingIntradayNav=boundary.intraday&&p.date===indexCutoff
+      premiumCondition.availability=p.navStatus==='failed'?'failed':awaitingIntradayNav||p.navStatus==='pending-publication'?'pending-publication':p.date?'stale':'missing'
+      premiumCondition.detail=awaitingIntradayNav?`盘中价格日期 ${date||'缺失'}；当日净值尚未发布，最近完整净值为 ${p.date||'缺失'}，不跨日计算折溢价`:p.navDetail||`收盘价 ${date||'缺失'}；净值 ${p.date||'缺失'}，日期未对齐`
+    }
     const critical=['calendar','session','history','continuity','adjustment','index']
     const blocked=conditions.some(c=>critical.includes(c.key)&&c.status!=='met')
     const riskSignals=[
@@ -175,7 +194,7 @@ export function evaluateResearch(snapshot: ResearchSnapshot, previous?: Evaluati
     const trackingDiff=trackingDates.slice(1).flatMap((d,i)=>{const before=trackingDates[i];return navMap.has(d)&&navMap.has(before)&&iMap.has(d)&&iMap.has(before)?[navMap.get(d)!/navMap.get(before)!-iMap.get(d)!.close/iMap.get(before)!.close]:[]})
     const tracking=trackingDiff.length>=20?std(trackingDiff):null
     const ruleAction={unheld:state==='eligible'?'建仓' as const:'观望' as const,held:state==='eligible'?'持有' as const:state==='risk-off'?'减仓' as const:'观望' as const}
-    return {ticker:etf.ticker,name:etf.name,indexCode:etf.indexCode,state,unheldAction:ruleAction.unheld,heldAction:ruleAction.held,ruleAction,researchOnly:true,
+    return {ticker:etf.ticker,name:etf.name,indexCode:etf.indexCode,state,adjustmentAudit,unheldAction:ruleAction.unheld,heldAction:ruleAction.held,ruleAction,researchOnly:true,
       reason:state==='eligible'?'价格、相对强度、资金与产品门禁均满足，建议按风险预算分批建仓；后续按失效条件复核。':state==='risk-off'?`${etf.name}风险依据：${[benchmarkTrend!==null&&benchmarkTrend<0?`基准低于60日均线${Math.abs(benchmarkTrend*100).toFixed(2)}%`:null,usable&&bars.at(-1)!.close<ma60!?`基金低于60日均线${((1-bars.at(-1)!.close/ma60!)*100).toFixed(2)}%`:null,indexValid&&indices.at(-1)!.close<mean(indices.slice(-20).map(row=>row.close))!?'跟踪指数低于20日均线':null].filter(Boolean).join('；')}。持仓调整结合实际暴露与成本。`:state==='blocked'?'核心数据条件不足，建议维持观望并优先补齐数据。':gaps.join('；'),
       trigger:`规则版本1：连续${rules.entryConfirmDays}日指数趋势确认、相对强度、${rules.flowDays}日资金及全部产品/证据门禁同时满足。`,
       invalidation:'基准或ETF跌破60日均线、重大事件风险、任一关键数据失效；新事件需人工核验，不自动清仓。',horizon:`${profile.horizonDays}个交易日，盘后复核，次日盘前过期`,evidence:evidenceIds.map(id=>{const e=snapshot.evidence.find(e=>e.id===id);return e?`${id} · ${e.source} · ${e.dataDate||e.publishedAt||'日期未知'}`:id}),

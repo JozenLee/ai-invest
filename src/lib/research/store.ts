@@ -1,3 +1,6 @@
+import { managementFeePct } from './product-fees'
+import { compareResearchPolicies } from './policy-comparison'
+import { calibrateForecasts, type ArchivedForecast } from './forecast-calibration'
 import { withDisclosedHoldings } from '@/lib/graph/holding-mappings'
 import { createHash, randomUUID } from 'node:crypto'
 import { prisma } from '@/lib/db'
@@ -7,20 +10,22 @@ import { MARKET_INDEXES } from '@/lib/subscription-config'
 import { matchesNewsIndustry } from '@/lib/news-taxonomy'
 import type { Bar, Evidence, ETFInput, EventInput, Evaluation, Profile, ResearchSnapshot, SourceRecord } from './contracts'
 import { defaultProfile, validateProfile } from './profile'
-import { clusterEvents } from './events'
-import { adjustedBars, evaluateResearch, selectProductNav } from './engine'
-import { analysisSessionBoundary, chinaDate, dateKey, sessionBoundary } from './time'
+import { clusterEvents, summarizeEventSentiment } from './events'
+import { adjustedBars, derivedSectorNetPct, evaluateResearch, selectProductNav } from './engine'
+import { analysisSessionBoundary, chinaDate, currentSessionQuoteCutoff, dateKey, sessionBoundary } from './time'
 import { securityCode, securityAliases, holdingPeriod } from './normalization'
 import { selectResearchOrderbook } from './orderbook'
 import { selectHistoricalReports } from './history-reports'
 import { assessDecisionTiming } from '@/lib/analysis/decision-timing'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 import { buildFrozenGraphContext, graphCompanyCandidates, type RawGraphGroup } from '@/lib/graph/research-context'
 import {compactReplaySnapshot,replayResearch} from './replay'
+import { assessDecisionHistory, compactDecisionHistory, type UnifiedDecisionVersion } from './decision-ledger'
 
 export const encode = (value: unknown) => JSON.stringify(value, (_key,v)=>typeof v==='bigint'?Number(v):v)
 export const digest = (value: unknown) => createHash('sha256').update(encode(value)).digest('hex')
 type WireRow = Record<string, string | number | boolean | null>
-type SubscriptionProfile = {industryId?:string;industryName?:string;industryIds?:string[];industryNames?:string[]}
+type SubscriptionProfile = {industryId?:string;industryName?:string;industryIds?:string[];industryNames?:string[];source?:string}
 type GraphGroup = RawGraphGroup & {etfs?:Array<{code?:string}>;analysisEtfs?:Array<{code?:string}>}
 type Bundle = {source?:string;data?:Record<string,WireRow[]>}
 function parse<T = unknown>(value: string | null | undefined): T | null { try {return JSON.parse(value||'null') as T} catch {return null} }
@@ -42,17 +47,21 @@ function bars(rows: Array<Record<string,unknown>>, amountMultiplier=1): Bar[] {
   return rows.map(r=>({date:dateKey(r.date||r.trade_date||r['日期'])||'',open:Number(r.open??r['开盘']),high:Number(r.high??r['最高']),low:Number(r.low??r['最低']),close:Number(r.close??r['收盘']),volume:Number(r.volume??r.vol??r['成交量']??0),amount:Number(r.amount??r['成交额']??0)*amountMultiplier}))
 }
 type QuoteRow={id:string;instrumentType:string;code:string;price:number;previousClose:number|null;open:number|null;high:number|null;low:number|null;volume:number|null;amount:number|null;changePct:number|null;tradeDate:string;source:string|null;fetchedAt:Date}
-function freshIntradayQuote(quote:QuoteRow|undefined,asOf:string,tradingDate:string){
+function usableSessionQuote(quote:QuoteRow|undefined,asOf:string,expectedSession:string,intraday:boolean){
   if(!quote)return undefined
-  const lag=Date.parse(asOf)-quote.fetchedAt.getTime()
-  return quote?.tradeDate===tradingDate&&Number.isFinite(lag)&&lag>=-30_000&&lag<=300_000?quote:undefined
+  const observed=quote.fetchedAt.getTime(),latest=Date.parse(asOf)+30_000,earliest=currentSessionQuoteCutoff(asOf).getTime()
+  if(quote.tradeDate!==expectedSession||!Number.isFinite(observed)||observed>latest)return undefined
+  if(intraday)return observed>=earliest?quote:undefined
+  const close=Date.parse(`${expectedSession}T07:00:00.000Z`)
+  return observed>=close?quote:undefined
 }
 function mergeIntradayBar(history:Bar[],quote:QuoteRow|undefined):Bar[]{
   if(!quote||!Number.isFinite(quote.price)||quote.price<=0)return history
   const open=number(quote.open)||number(quote.previousClose)||quote.price
   const high=Math.max(number(quote.high)||quote.price,open,quote.price),low=Math.min(number(quote.low)||quote.price,open,quote.price)
   const volume=(number(quote.volume)||0)/(quote.source==='tushare_rt_k'?100:1)
-  const current:Bar={date:quote.tradeDate,open,high,low,close:quote.price,volume,amount:number(quote.amount)||0}
+  const amount=(number(quote.amount)||0)*(quote.source==='tushare_daily'?1000:1)
+  const current:Bar={date:quote.tradeDate,open,high,low,close:quote.price,volume,amount}
   return [...new Map([...history,current].map(row=>[row.date,row])).values()].sort((a,b)=>a.date.localeCompare(b.date))
 }
 function rowsOf(raw?: SourceRecord): WireRow[] {const p=parse<{data?:WireRow[]} | WireRow[]>(raw?.payload);return Array.isArray(p)?p:Array.isArray(p?.data)?p.data:[]}
@@ -76,7 +85,7 @@ export async function saveResearchProfile(value: unknown, industryId: string) {
 
 /** A transaction freezes mutable tables NOW. Historical runs must replay a saved snapshot,
  * never query today's revised fundamentals under an arbitrary past asOf. */
-export async function captureResearchSnapshot(industryId: string): Promise<ResearchSnapshot> {
+export async function captureResearchSnapshot(industryId: string, options: { additionalEtfs?: Array<{ code: string; name: string }> } = {}): Promise<ResearchSnapshot> {
   return prisma.$transaction(async tx=>{
     const asOf=new Date().toISOString(), id=randomUUID()
     const subscriptions=await tx.dataSubscription.findMany({where:{enabled:true,instrument:{type:'ETF'}},include:{instrument:true,datasets:true}})
@@ -86,11 +95,17 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const verifiedA=a.representativeEtfs?.filter(item=>item.holdingVerified).length||0,verifiedB=b.representativeEtfs?.filter(item=>item.holdingVerified).length||0
       return verifiedB-verifiedA||(b.representativenessScore||0)-(a.representativenessScore||0)||a.code.localeCompare(b.code)
     }).slice(0,100)
-    const selected=subscriptions.filter(s=>group ? (group.analysisEtfs||group.etfs)?.some(e=>symbol(e.code)===s.instrument.code) : (()=>{const profile=parse<SubscriptionProfile>(s.profile);return profile?.industryId===industryId||profile?.industryIds?.includes(industryId)})())
+    const selected=subscriptions.filter(s=>{
+      const subscriptionProfile=parse<SubscriptionProfile>(s.profile)
+      const graphMatched=(group?.analysisEtfs||group?.etfs)?.some(e=>symbol(e.code)===s.instrument.code)
+      const profileMatched=(subscriptionProfile?.industryId===industryId||subscriptionProfile?.industryIds?.includes(industryId))&&(!group||subscriptionProfile?.source==='verified-portfolio-underlying')
+      return Boolean(graphMatched||profileMatched)
+    })
     if(!selected.length) throw new Error('该领域没有已订阅ETF，请先同步领域映射')
     const configRow=await tx.rawPayload.findFirst({where:{datasetKey:'research_profile',targetCode:industryId},orderBy:{fetchedAt:'desc'}})
     const profile=configRow?validateProfile(parse(configRow.payload),industryId):defaultProfile(industryId,group?.name||parse<SubscriptionProfile>(selected[0].profile)?.industryName||industryId)
-    const tickers=selected.map(s=>s.instrument.code)
+    const instruments=[...new Map([...(options.additionalEtfs||[]).filter(item=>/^\d{6}$/.test(item.code)),...selected.map(s=>({code:s.instrument.code,name:s.instrument.name}))].map(item=>[item.code,item])).values()]
+    const tickers=instruments.map(s=>s.code)
     const earliest=new Date(Date.parse(asOf)-800*86400000)
     const rawDb=await tx.rawPayload.findMany({where:{fetchedAt:{lte:new Date(asOf),gte:earliest},OR:[{targetCode:{in:tickers},datasetKey:{in:['etf_daily','etf_holdings','etf_research','etf_realtime']}},{datasetKey:{in:['research_calendar','sector_capital_flow','market_main_flow','margin_balance','market_volume','news_taxonomy','index_daily']}}]},orderBy:{fetchedAt:'desc'}})
     const raw:SourceRecord[]=rawDb.map(r=>({...r,fetchedAt:r.fetchedAt.toISOString()}))
@@ -101,6 +116,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     // Missing calendar permits diagnostics, but the engine blocks all actions.
     const cutoff=boundary.expectedSession||chinaDate(asOf)
     const closeCutoff=closeBoundary.expectedSession||cutoff
+    const historyDates=new Set(calendar.filter(day=>day.open&&day.date<=closeCutoff).map(day=>day.date).sort().slice(-profile.rules.minHistory-40))
     // Older replay fixtures predate MarketQuote/subscription dataset auditing;
     // their missing audit data must safely downgrade to reference-only.
     const allQuoteRows:QuoteRow[]=typeof tx.marketQuote?.findMany==='function'?await tx.marketQuote.findMany({where:{OR:[{instrumentType:'ETF',code:{in:tickers}},{instrumentType:'INDEX'}],fetchedAt:{lte:new Date(asOf)}}}) as QuoteRow[]:[]
@@ -121,17 +137,23 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     if(latest('research_calendar')) sourceEvidence(latest('research_calendar')!)
     const daily=await tx.eTFDaily.findMany({where:{ticker:{in:tickers},date:{gte:earliest,lte:new Date(closeCutoff+'T23:59:59Z')}},orderBy:{date:'asc'}})
     const holdings=await tx.eTFHolding.findMany({where:{etfCode:{in:tickers}},orderBy:{weight:'desc'}})
-    const etfs:ETFInput[]=selected.map(s=>{
-      const ticker=s.instrument.code
-      const researchRaws=raw.filter(r=>r.datasetKey==='etf_research'&&symbol(r.targetCode)===symbol(ticker))
-      const researchEntries=researchRaws.map(raw=>({raw,bundle:parse<Bundle>(raw.payload)?.data||{}}))
+    const researchBundles=raw.filter(r=>r.datasetKey==='etf_research').map(raw=>({raw,bundle:parse<Bundle>(raw.payload)?.data||{}}))
+    const etfs:ETFInput[]=instruments.map(s=>{
+      const ticker=s.code
+      const researchEntries=researchBundles.filter(entry=>symbol(entry.raw.targetCode)===symbol(ticker))
+      const officialIndex=String(bestBundleEntry(researchEntries,'info',[])?.bundle.info?.[0]?.index_code||'').toUpperCase()
+      if(officialIndex)for(const entry of researchBundles){
+        if(symbol(entry.raw.targetCode)===symbol(ticker))continue
+        const indexDaily=(entry.bundle.indexDaily||[]).filter(row=>String(row.ts_code||'').toUpperCase()===officialIndex)
+        if(indexDaily.length)researchEntries.push({raw:entry.raw,bundle:{indexDaily}})
+      }
       researchEntries.push(...raw.filter(r=>r.datasetKey==='etf_realtime'&&symbol(r.targetCode)===ticker).map(raw=>({raw,bundle:{orderbook:rowsOf(raw).filter(row=>row.bookPublishedAt).map(row=>({code:ticker,bid:row.bid,ask:row.ask,publishedAt:row.bookPublishedAt,date:row.bookDate,source:row.bookSource}))}})))
       // Promax endpoints fail independently. Merge immutable bundles field by
       // field so a later partial retry cannot erase a previously verified
       // factor, index or NAV series. Date/continuity gates below still reject
       // stale data; this only prevents regression to an empty field.
       const chosen=Object.fromEntries([
-        ['info',bestBundleEntry(researchEntries,'info',[])],['daily',bestBundleEntry(researchEntries,'daily',['trade_date','date'])],['factors',bestBundleEntry(researchEntries,'factors',['trade_date','date'])],
+        ['info',bestBundleEntry(researchEntries,'info',[])],['fees',bestBundleEntry(researchEntries,'fees',[])],['daily',bestBundleEntry(researchEntries,'daily',['trade_date','date'])],['factors',bestBundleEntry(researchEntries,'factors',['trade_date','date'])],
         ['shares',bestBundleEntry(researchEntries,'shares',['trade_date','date'])],['nav',bestBundleEntry(researchEntries,'nav',['nav_date','ann_date'])],['orderbook',bestBundleEntry(researchEntries,'orderbook',['date','publishedAt'])],
         ['indexDaily',bestBundleEntry(researchEntries,'indexDaily',['trade_date','date'])],['indexWeights',bestBundleEntry(researchEntries,'indexWeights',['trade_date','date'])],['indexValuation',bestBundleEntry(researchEntries,'indexValuation',['trade_date','date'])],
       ]) as Record<string,{raw:SourceRecord;bundle:Record<string,WireRow[]>}|undefined>
@@ -144,7 +166,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
         for(const entry of researchEntries)for(const row of entry.bundle[field]||[]){
           const date=dateKey(row.trade_date||row.date)
           const valid=field==='factors'?(number(row.adj_factor)||0)>0:['open','high','low','close'].every(key=>(number(row[key])||0)>0)
-          if(date&&date<=closeCutoff&&valid&&!byDate.has(date))byDate.set(date,{row,raw:entry.raw})
+          if(date&&historyDates.has(date)&&valid&&!byDate.has(date))byDate.set(date,{row,raw:entry.raw})
         }
         const selected=[...byDate.entries()].sort(([a],[b])=>a.localeCompare(b)).slice(-profile.rules.minHistory-40).map(([,value])=>value)
         research[field]=selected.map(item=>item.row)
@@ -153,9 +175,9 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const selectedResearchRaws=[...new Map([...Object.values(chosen).filter(Boolean).map(entry=>[entry!.raw.id,entry!.raw] as const),...seriesSources.entries()]).values()]
       const historyRaw=latest('etf_daily',ticker), holdingRaw=latest('etf_holdings',ticker)
       const localRows=daily.filter(r=>r.ticker===ticker)
-      const liveQuote=freshIntradayQuote(quoteRows.find(row=>row.code===ticker),asOf,chinaDate(asOf))
+      const liveQuote=usableSessionQuote(quoteRows.find(row=>row.code===ticker),asOf,cutoff,boundary.intraday)
       const completedPriceRows=[...new Map([...bars(localRows.slice(-profile.rules.minHistory-30)),...bars(research.daily,1000)].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date))
-      const mergedPriceRows=mergeIntradayBar(completedPriceRows,liveQuote)
+      const mergedPriceRows=mergeIntradayBar(completedPriceRows.filter(bar=>historyDates.has(bar.date)),liveQuote)
       records[`${id}:bars:${ticker}`]=mergedPriceRows
       const etfEvidence=[add({id:`${id}:bars:${ticker}`,source:research.daily.length?'Tushare/fund_daily':'frozen-local-daily',dataDate:mergedPriceRows.at(-1)?.date||null,publishedAt:null,fetchedAt:asOf,hash:digest(mergedPriceRows)})]
       if(liveQuote){const quoteId=`${id}:quote:${ticker}`;records[quoteId]=liveQuote;etfEvidence.push(add({id:quoteId,source:liveQuote.source||'realtime-quote',dataDate:liveQuote.tradeDate,publishedAt:null,fetchedAt:liveQuote.fetchedAt.toISOString(),hash:digest(liveQuote)}))}
@@ -189,9 +211,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const productDate=productNav.date
       const latestAudit=parse<{fieldStatus?:Record<string,{status:string;detail?:string;expectedAt?:string}>}>(researchEntries[0]?.raw.payload)?.fieldStatus||{}
       const publicationNotes=Object.entries(latestAudit).filter(([,item])=>item.status==='pending-publication').map(([key,item])=>`${key==='shares'?'份额':'净值'}：${item.detail||'等待发布'}${item.expectedAt?'；预期 '+item.expectedAt:''}`)
-      const localBars=daily.filter(r=>r.ticker===ticker).slice(-profile.rules.minHistory-30)
       // Research collectors explicitly normalize amount to CNY; legacy daily amount is not trusted.
-      const researchBars=bars(research.daily||[],1000)
       const factorRows=(research.factors||[]).map(f=>({date:dateKey(f.trade_date)||'',factor:Number(f.adj_factor)}))
       if(liveQuote&&factorRows.length&&!factorRows.some(f=>f.date===liveQuote.tradeDate))factorRows.push({date:liveQuote.tradeDate,factor:factorRows.at(-1)!.factor})
       const mapped=String(info.index_code||'').toUpperCase()
@@ -201,13 +221,13 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
         const fallbackId=`${id}:holding:${ticker}:${code}:${index}`
         return {code,name:String(row.stock_name||row.name||persistedNames.get(code)||code),weight:row.weight_available===false?null:number(row.weight??row.stk_mkv_ratio),period,publishedAt:dateKey(row.ann_date||row.publish_date),observedAt:holdingRaw?.fetchedAt||null,source:String(row.source||'legacy-holdings-period-unknown'),evidenceId:holdingRaw?.id||add({id:fallbackId,source:'legacy-holdings-period-unknown',dataDate:period,publishedAt:null,fetchedAt:holdingRaw?.fetchedAt||asOf,hash:digest(row)})}
       }):persistedHoldings.slice(0,10).map(row=>({code:symbol(row.stockCode),name:String(row.stockName),weight:number(row.weight),period:null,publishedAt:null,source:'legacy-holdings-period-unknown',evidenceId:holdingRaw?.id||add({id:`${id}:holding:${row.id}`,source:'legacy-holdings-period-unknown',dataDate:null,publishedAt:null,fetchedAt:row.updateDate.toISOString(),hash:digest(row)})}))
-      return {ticker,name:s.instrument.name||ticker,bars:mergeIntradayBar([...new Map([...bars(localBars),...researchBars].map(bar=>[bar.date,bar])).values()].sort((a,b)=>a.date.localeCompare(b.date)),liveQuote),evidenceIds:etfEvidence,
+      return {ticker,name:s.name||ticker,bars:mergedPriceRows,evidenceIds:etfEvidence,
         factors:factorRows,adjustmentSource:research.factors?.length?'Tushare/fund_adj':undefined,
         indexCode:/^[A-Z0-9]{6}\.(SH|SZ|CSI)$/.test(mapped)?mapped:null,indexName:typeof info.index_name==='string'?info.index_name:undefined,indexBars:bars(research.indexDaily||[],1000),
         navHistory:(research.nav||[]).filter(r=>dateKey(r.nav_date)&&dateKey(r.nav_date)!<=cutoff&&dateKey(r.ann_date)&&dateKey(r.ann_date)!<=chinaDate(asOf)).flatMap(r=>{const nav=number(r.adj_nav??r.accum_nav);return nav!==null&&nav>0?[{date:dateKey(r.nav_date)!,nav}]:[]}),
         indexConstituents:(research.indexWeights||[]).filter(r=>dateKey(r.trade_date)&&dateKey(r.trade_date)!<=cutoff).map(r=>({code:symbol(r.con_code),weight:Number(r.weight),date:dateKey(r.trade_date)!})),
         holdings:normalizedHoldings,
-        product:{publicationNotes,navSource:productNav.source,navStatus:productDate===closeCutoff?'available':latestAudit.nav?.status==='failed'?'failed':!productDate?'missing':calendar.filter(day=>day.open&&day.date>productDate!&&day.date<=closeCutoff).length>1?'stale':'pending-publication',navDetail:productDate===closeCutoff?'最近完整收盘价与净值同日':`最近完整收盘日 ${closeCutoff}；最近净值 ${productDate||'缺失'}，不能计算同日折溢价`,date:productDate,nav:productNav.nav,shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),bookPublishedAt:book?.publishedAt?String(book.publishedAt):null,valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentileHistory:percentileRank(peHistory,currentPe),pbPercentileHistory:percentileRank(pbHistory,currentPb),valuationHistoryStart:dateKey(valuationHistory[0]?.trade_date||valuationHistory[0]?.date),valuationSampleCount,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:number(info.mgt_fee),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
+        product:{publicationNotes,navSource:productNav.source,navStatus:productDate===closeCutoff?'available':latestAudit.nav?.status==='failed'?'failed':!productDate?'missing':calendar.filter(day=>day.open&&day.date>productDate!&&day.date<=closeCutoff).length>1?'stale':'pending-publication',navDetail:productDate===closeCutoff?'最近完整收盘价与净值同日':`最近完整收盘日 ${closeCutoff}；最近净值 ${productDate||'缺失'}，不能计算同日折溢价`,date:productDate,nav:productNav.nav,shares:number(shareRows[0]?.total_share),previousShares:number(shareRows[1]?.total_share),shareDate:dateKey(shareRows[0]?.trade_date),previousShareDate:dateKey(shareRows[1]?.trade_date),bookDate:dateKey(book?.date),bookPublishedAt:book?.publishedAt?String(book.publishedAt):null,valuationDate:dateKey(latestValuation?.trade_date||latestValuation?.date),valuationSource:latestValuation?.source?String(latestValuation.source):currentPe!==null||currentPb!==null?'Tushare/index_dailybasic':null,pePercentileHistory:percentileRank(peHistory,currentPe),pbPercentileHistory:percentileRank(pbHistory,currentPb),valuationHistoryStart:dateKey(valuationHistory[0]?.trade_date||valuationHistory[0]?.date),valuationSampleCount,spreadBps:book&&number(book.bid)!>0&&number(book.ask)!>=number(book.bid)!?(Number(book.ask)-Number(book.bid))/((Number(book.ask)+Number(book.bid))/2)*10000:null,feePct:managementFeePct(research.fees||[],ticker,info),pe:currentPe,pb:currentPb,evidenceIds:selectedResearchRaws.map(r=>r.id)}}
     })
     const mappedGroup=group?withDisclosedHoldings(group,etfs,asOf,cutoff):undefined
     if(mappedGroup&&!mappedGroup.mappingRevisionId&&!mappedGroup.mapping_revision_id){
@@ -219,11 +239,11 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     if(mappedGroup)graphCompanies=graphCompanyCandidates(mappedGroup)
     const holdingCodes=[...new Set(etfs.flatMap(e=>e.holdings.map(h=>h.code)))],companyCodes=[...new Set([...holdingCodes,...profile.leaders.map(l=>symbol(l.code)),...graphCompanies.map(company=>symbol(company.code))])]
     const companyAliases=companyCodes.flatMap(securityAliases)
-    const reportRows=await tx.stockFinancialReport.findMany({where:{stockCode:{in:companyAliases},fetchedAt:{lte:new Date(asOf)},publishDate:{gte:earliest,lte:new Date(asOf)}},orderBy:{fetchedAt:'desc'}})
+    const reportRows=await tx.stockFinancialReport.findMany({where:{stockCode:{in:companyAliases},fetchedAt:{lte:new Date(asOf)},OR:[{publishDate:{gte:earliest,lte:new Date(asOf)}},{publishDate:null,reportPeriod:{lte:chinaDate(asOf)}}]},orderBy:{fetchedAt:'desc'}})
     const reports=[...reportRows.reduce((items,row)=>{const period=dateKey(row.reportPeriod);if(!period)return items;const key=`${symbol(row.stockCode)}:${row.reportType}:${period}`,current=items.get(key);if(!current||financialReportScore(row)>financialReportScore(current))items.set(key,{...row,stockCode:symbol(row.stockCode),reportPeriod:period});return items},new Map<string,typeof reportRows[number]>()).values()].sort((a,b)=>b.reportPeriod.localeCompare(a.reportPeriod)||a.reportType.localeCompare(b.reportType))
     const announcementRows=await tx.stockAnnouncement.findMany({where:{stockCode:{in:companyAliases},fetchedAt:{lte:new Date(asOf)},publishDate:{gte:new Date(Date.parse(asOf)-90*86400000),lte:new Date(asOf)}},orderBy:{publishDate:'desc'}})
     const taxonomy=rowsOf(latest('news_taxonomy')),segmentCodes=new Set<string>(taxonomy.filter(r=>r.industry_id===industryId).map(r=>String(r.segment_code)))
-    const news=segmentCodes.size?await tx.newsArticle.findMany({where:{aiProcessed:true,createdAt:{lte:new Date(asOf)},publishTime:{gte:new Date(Date.parse(asOf)-90*86400000),lte:new Date(asOf)},OR:[...segmentCodes].map(code=>({segmentCodes:{contains:JSON.stringify(code)}}))},orderBy:{publishTime:'desc'},take:1000}):[]
+    const news=segmentCodes.size?await tx.newsArticle.findMany({where:{aiProcessed:true,createdAt:{lte:new Date(asOf)},publishTime:{gte:new Date(Date.parse(asOf)-90*86400000),lte:new Date(asOf)},OR:[...segmentCodes].map(code=>({segmentCodes:{contains:JSON.stringify(code)}}))},orderBy:{publishTime:'desc'},take:1000,include:{impactFactors:{select:{impactFactor:true}}}}):[]
     const eventsInput:EventInput[]=[]
     const eventRecords=new Map<string,{record:unknown;evidence:Evidence}>()
     for(const r of announcementRows){
@@ -234,7 +254,7 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     for(const r of relevantNews){
       const record={id:r.id,title:r.title,content:r.content,url:r.url,source:r.source,publishTime:r.publishTime,createdAt:r.createdAt}
       eventRecords.set(r.id,{record,evidence:{id:r.id,source:r.source,dataDate:dateKey(r.publishTime),publishedAt:r.publishTime.toISOString(),fetchedAt:r.createdAt.toISOString(),hash:digest({title:r.title,content:r.content,url:r.url})}})
-      eventsInput.push({id:r.id,title:r.title,content:r.content,source:r.source,url:r.url,publishedAt:r.publishTime.toISOString(),fetchedAt:r.createdAt.toISOString(),kind:'news',segments:parse<string[]>(r.segmentCodes)||[]})
+      eventsInput.push({id:r.id,title:r.title,content:r.content,source:r.source,url:r.url,publishedAt:r.publishTime.toISOString(),fetchedAt:r.createdAt.toISOString(),kind:'news',segments:parse<string[]>(r.segmentCodes)||[],impact:r.impact,propagationImpact:r.impactFactors.length?Math.max(...r.impactFactors.map(item=>Math.abs(item.impactFactor))):null})
     }
     // Keep leads and excluded categories auditable; the decision selector alone
     // decides what reaches the model. A verified domain tag is sufficient recall.
@@ -244,60 +264,69 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
       const rs=reports.filter(r=>r.stockCode===code).slice(0,24)
       const ids=rs.map(r=>{records[r.id]=r;return add({id:r.id,source:r.source||'unknown',dataDate:dateKey(r.reportPeriod),publishedAt:r.publishDate?.toISOString()||null,fetchedAt:r.fetchedAt.toISOString(),hash:r.contentHash})})
       const leader=profile.leaders.find(l=>symbol(l.code)===code),holding=etfs.flatMap(e=>e.holdings).find(h=>h.code===code),graphCompany=graphCompanies.find(company=>symbol(company.code)===code)
-      const views=rs.map(financialView),income=views.find(r=>r.reportType==='income')
+      const views=rs.map(financialView),income=views.find(r=>r.reportType==='income'),indicator=views.find(r=>r.reportType==='indicator'&&(!income||r.period===income.period&&r.currency===income.currency))
       const priorPeriod=income?.period.replace(/^\d{4}/,year=>String(Number(year)-1))
-      const knownCurrency=typeof income?.currency==='string'&&/^[A-Z]{3}$/.test(income.currency)
-      const prior=knownCurrency?views.find(r=>r.reportType==='income'&&r.period===priorPeriod&&r.currency===income.currency):null
-      const cash=knownCurrency?views.find(r=>r.reportType==='cashflow'&&r.period===income.period&&r.currency===income.currency):null
+      const signalCurrency=income?.currency||indicator?.currency
+      const knownCurrency=typeof signalCurrency==='string'&&/^[A-Z]{3}$/.test(signalCurrency)
+      const prior=knownCurrency&&priorPeriod?views.find(r=>r.reportType==='income'&&r.period===priorPeriod&&r.currency===signalCurrency):null
+      const cash=knownCurrency&&income?views.find(r=>r.reportType==='cashflow'&&r.period===income.period&&r.currency===signalCurrency):null
       const profit=number(income?.metrics.find(m=>m.label==='净利润')?.value),oldProfit=number(prior?.metrics.find(m=>m.label==='净利润')?.value),cashFlow=number(cash?.metrics.find(m=>m.label==='经营现金流')?.value)
-      const profitGrowthPct=profit!==null&&oldProfit!==null&&oldProfit>0?(profit/oldProfit-1)*100:null
-      const cashConversionPct=profit!==null&&profit>0&&cashFlow!==null?cashFlow/profit*100:null
+      const reportedGrowth=number((indicator||income)?.metrics.find(m=>m.label==='净利润同比')?.value)
+      const earningsPerShare=number((indicator||income)?.metrics.find(m=>m.label==='每股收益')?.value),cashFlowPerShare=number((indicator||cash||income)?.metrics.find(m=>m.label==='经营现金流每股')?.value)
+      const profitGrowthPct=profit!==null&&oldProfit!==null&&oldProfit>0?(profit/oldProfit-1)*100:reportedGrowth
+      const cashConversionPct=profit!==null&&profit>0&&cashFlow!==null?cashFlow/profit*100:earningsPerShare!==null&&earningsPerShare>0&&cashFlowPerShare!==null?cashFlowPerShare/earningsPerShare*100:null
       const financialGaps = [
-        !income && '缺少利润表',
-        income && !knownCurrency && '财报币种未标注',
-        income && profit===null && '利润表缺少净利润金额',
-        knownCurrency && !prior && '缺少同币种上年同期利润表',
-        oldProfit!==null && oldProfit<=0 && '上年同期净利润非正，利润同比不适用',
-        profit!==null && profit<=0 && '当期净利润非正，现金利润比不适用',
-        knownCurrency && !cash && '缺少同币种同期现金流量表',
-        cash && cashFlow===null && '现金流量表缺少经营现金流金额',
+        !income&&!indicator && '缺少利润表',
+        !knownCurrency && '财报币种未标注',
+        profitGrowthPct===null && '利润表及财务指标均缺少可用利润同比',
+        cashConversionPct===null && '现金流量表及每股现金流指标均无法计算现金利润比',
       ].filter(Boolean) as string[]
       if(graphEvidenceId&&(leader||graphCompany))ids.push(graphEvidenceId)
-      return {code,name:leader?.name||graphCompany?.name||holding?.name||code,stage:graphCompany?.stage,stageCode:graphCompany?.stageCode,segment:leader?.segment||graphCompany?.segment||profile.segments.find(s=>s.companies.includes(code))?.name||(holding?'ETF持仓补充样本（图谱外）':'产业环节待确认'),segmentCode:graphCompany?.segmentCode,pool:holding&&(leader||graphCompany)?'both' as const:leader?'leader' as const:graphCompany?'graph' as const:'holding' as const,financialPeriods:new Set(views.filter(r=>r.metrics.length).map(r=>r.period)).size,announcementCount:events.filter(e=>e.companies.includes(code)&&e.status==='evidence').length,profitGrowthPct,cashConversionPct,financialGaps,evidenceIds:[...new Set(ids)],representativeEtfs:graphCompany?.representativeEtfs,representativeIndices:graphCompany?.representativeIndices,matchSource:graphCompany?.matchSource,matchConfidence:graphCompany?.matchConfidence,representativenessScore:graphCompany?.representativenessScore,selectionReason:graphCompany?.selectionReason}
+      return {code,name:leader?.name||graphCompany?.name||holding?.name||code,stage:graphCompany?.stage,stageCode:graphCompany?.stageCode,segment:leader?.segment||graphCompany?.segment||profile.segments.find(s=>s.companies.includes(code))?.name||(holding?'ETF持仓补充样本（图谱外）':'产业环节待确认'),segmentCode:graphCompany?.segmentCode,pool:holding&&(leader||graphCompany)?'both' as const:leader?'leader' as const:graphCompany?'graph' as const:'holding' as const,financialPeriods:new Set(views.filter(r=>r.metrics.length).map(r=>r.period)).size,announcementCount:events.filter(e=>e.companies.includes(code)&&e.status==='evidence').length,profitGrowthPct,cashConversionPct,financialPeriod:income?.period||indicator?.period,profitGrowthBasis:profit!==null&&oldProfit!==null&&oldProfit>0?'同期间同币种净利润金额同比':'来源披露净利润同比，未与金额口径统一',cashConversionBasis:profit!==null&&profit>0&&cashFlow!==null?'同期间同币种经营现金流/净利润':'同期间每股经营现金流/每股收益',financialGaps,evidenceIds:[...new Set(ids)],representativeEtfs:graphCompany?.representativeEtfs,representativeIndices:graphCompany?.representativeIndices,matchSource:graphCompany?.matchSource,matchConfidence:graphCompany?.matchConfidence,representativenessScore:graphCompany?.representativenessScore,selectionReason:graphCompany?.selectionReason}
     })
     const sectorFlowMap=new Map<string,ResearchSnapshot['sectorFlows'][number]>()
     for(const r of raw.filter(r=>r.datasetKey==='sector_capital_flow')){
       let evidenceId:string|undefined
       for(const row of rowsOf(r)){
         const date=dateKey(row['日期']||row.trade_date||row.date),incoming=normalizedSector(row['名称']||row.sector),sector=profile.sectors.find(item=>normalizedSector(item)===incoming),net=number(row['今日主力净流入-净额'])
-        const netPct=number(row['今日主力净流入-净占比'])
+        const inflow=number(row['流入资金']),outflow=number(row['流出资金'])
+        const explicitNetPct=number(row['今日主力净流入-净占比'])
+        // Some providers expose inflow/outflow/net amounts but omit the ratio.
+        // Derive the same-day share from like-for-like source fields instead of
+        // treating an otherwise complete sector-flow record as unusable.
+        const netPct=explicitNetPct!==null&&Math.abs(explicitNetPct)<=100?explicitNetPct:derivedSectorNetPct(net,inflow,outflow)
         if(date&&sector&&date<=cutoff&&net!==null){evidenceId??=sourceEvidence(r,'元；主力成交分类，不等于新增资金');const key=date+':'+sector,current=sectorFlowMap.get(key);if(!current||(current.netPct===null&&netPct!==null))sectorFlowMap.set(key,{date,sector,net,netPct,evidenceId})}
       }
     }
     const sectorFlows=[...sectorFlowMap.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.sector.localeCompare(b.sector,'zh-CN'))
     const indexLocal=await tx.indexDaily.findMany({where:{code:{in:[...MARKET_INDEXES.flatMap(i=>[i.code,symbol(i.code)]),profile.benchmark,symbol(profile.benchmark),'sh'+symbol(profile.benchmark),'sz'+symbol(profile.benchmark)]},date:{gte:earliest,lte:new Date(closeCutoff+'T23:59:59Z')}},orderBy:{date:'asc'}})
-    const indexQuote=(code:string)=>freshIntradayQuote(allQuoteRows.find(row=>row.instrumentType==='INDEX'&&symbol(row.code)===symbol(code)),asOf,chinaDate(asOf))
+    const indexQuote=(code:string)=>usableSessionQuote(allQuoteRows.find(row=>row.instrumentType==='INDEX'&&symbol(row.code)===symbol(code)),asOf,cutoff,boundary.intraday)
     const benchmarkQuote=indexQuote(profile.benchmark)
     const benchmarkBars=mergeIntradayBar(bars(indexLocal.filter(r=>symbol(r.code)===symbol(profile.benchmark))),benchmarkQuote)
     const benchmarkId=add({id:`${id}:benchmark`,source:benchmarkQuote?.source||'local-index-daily',dataDate:benchmarkBars.at(-1)?.date||null,publishedAt:null,fetchedAt:benchmarkQuote?.fetchedAt.toISOString()||asOf,hash:digest(benchmarkBars)})
     records[benchmarkId]={daily:indexLocal,quote:benchmarkQuote||null}
     etfs.forEach(e=>e.evidenceIds.push(benchmarkId))
-    const historicalCandidates=profile.historyReports?.enabled===false?[]:await tx.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId,createdAt:{lte:new Date(asOf)}},orderBy:{createdAt:'desc'},take:300,select:{id:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}})
+    const [historicalCandidates,decisionRows]=await Promise.all([
+      profile.historyReports?.enabled===false?Promise.resolve([]):tx.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId,createdAt:{lte:new Date(asOf)}},orderBy:{createdAt:'desc'},take:300,select:{id:true,industryId:true,industryName:true,title:true,summary:true,dataJson:true,createdAt:true}}),
+      tx.rawPayload.findMany({where:{datasetKey:'unified_decision_version',targetCode:industryId},orderBy:{fetchedAt:'desc'},take:120,select:{payload:true}}),
+    ])
     const historicalReports=selectHistoricalReports({candidates:historicalCandidates,profile,tradingSessions:calendar.filter(day=>day.open).map(day=>day.date),cutoff:boundary.expectedSession,asOf})
     const graphContext=mappedGroup?buildFrozenGraphContext(mappedGroup,{fetchedAt:graphRow?.fetchedAt,contentHash:graphRow?.contentHash},events):undefined
     const snapshot:ResearchSnapshot={version:1,id,asOf,capturedAt:asOf,profile,calendar,evidence,etfs,benchmarkBars,sectorFlows,events,companies,graphContext,historicalReports,decisionTiming,projections:{},records}
+    const decisionVersions=decisionRows.flatMap(row=>{try{return [JSON.parse(row.payload) as UnifiedDecisionVersion]}catch{return []}})
+    snapshot.decisionHistory=assessDecisionHistory(decisionVersions,snapshot)
     const evaluation=evaluateResearch(snapshot)
     const marketData=etfs.map(e=>{
-      const series=adjustedBars(e,boundary.expectedSession||cutoff),d=evaluation.decisions.find(d=>d.ticker===e.ticker)!,metrics=calculateDetailMetrics(series.bars)
-      const quote=freshIntradayQuote(quoteRows.find(row=>row.code===e.ticker),asOf,chinaDate(asOf))
-      return {ticker:e.ticker,name:e.name,price:series.bars.at(-1)?.close||null,changePct:quote?.changePct??metrics.latestChangePct,history:series.bars,keyIndicators:series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:quote?`${e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database'}+${quote.source||'realtime-quote'}`:e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database',dataDate:series.bars.at(-1)?.date,intraday:true,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
+      const series=adjustedBars(e,boundary.expectedSession||cutoff,Math.max(profile.rules.minHistory,121)),d=evaluation.decisions.find(d=>d.ticker===e.ticker)!,metrics=calculateDetailMetrics(series.bars)
+      const quote=usableSessionQuote(quoteRows.find(row=>row.code===e.ticker),asOf,cutoff,boundary.intraday)
+      return {ticker:e.ticker,name:e.name,adjustmentAudit:series.adjustmentAudit,price:series.bars.at(-1)?.close||null,changePct:quote?.changePct??metrics.latestChangePct,history:series.bars,keyIndicators:series.adjusted&&!series.discontinuity?metrics.indicators:null,volatility:d.metrics.volatilityPct,max_drawdown:series.adjusted?metrics.maxDrawdown:null,data_points:series.bars.length,source:quote?`${e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database'}+${quote.source||'realtime-quote'}`:e.adjustmentSource?'Tushare/fund_daily+fund_adj':'subscription-database',dataDate:series.bars.at(-1)?.date,intraday:true,quoteFetchedAt:quote?.fetchedAt.toISOString()||null,quality:d.state==='blocked'?'unverified-adjustment':'available',qualityWarning:d.state==='blocked'?d.gaps.join('；'):undefined,evidenceIds:e.evidenceIds}
     })
     const [stockDaily,stockQuotes]=await Promise.all([
       tx.stockDaily.findMany({where:{ticker:{in:companyAliases},date:{gte:earliest,lte:new Date(closeCutoff+'T23:59:59Z')}},orderBy:{date:'asc'}}),
       typeof tx.marketQuote?.findMany==='function'?tx.marketQuote.findMany({where:{instrumentType:'STOCK',code:{in:companyAliases},fetchedAt:{lte:new Date(asOf)}}}) as Promise<QuoteRow[]>:Promise.resolve([] as QuoteRow[]),
     ])
     const companyData=companies.map(c=>{
-      const dailyRows=stockDaily.filter(r=>symbol(r.ticker)===c.code).slice(-profile.rules.minHistory),quote=freshIntradayQuote(stockQuotes.find(row=>symbol(row.code)===c.code),asOf,chinaDate(asOf)),history=mergeIntradayBar(bars(dailyRows),quote),metrics=calculateDetailMetrics(history,quote||null)
+      const dailyRows=stockDaily.filter(r=>symbol(r.ticker)===c.code).slice(-profile.rules.minHistory),quote=usableSessionQuote(stockQuotes.find(row=>symbol(row.code)===c.code),asOf,cutoff,boundary.intraday),history=mergeIntradayBar(bars(dailyRows),quote),metrics=calculateDetailMetrics(history,quote||null)
       const evidenceId=`${id}:company:${c.code}`;records[evidenceId]={daily:dailyRows,quote:quote||null}
       if(history.length)add({id:evidenceId,source:quote?.source||'local-company-daily',dataDate:history.at(-1)?.date||null,publishedAt:null,fetchedAt:quote?.fetchedAt.toISOString()||asOf,hash:digest(records[evidenceId])})
       return {...c,stockCode:c.code,stockName:c.name,source:c.pool,marketData:history.at(-1)?.date===cutoff?{...history.at(-1),price:history.at(-1)?.close,changePct:quote?.changePct??metrics.latestChangePct,source:quote?.source||'local-company-daily',quoteFetchedAt:quote?.fetchedAt.toISOString()||null,intraday:Boolean(quote),evidenceId}:null,history,indicators:metrics,financials:reports.filter(r=>r.stockCode===c.code).slice(0,24).map(r=>{const v=financialView(r);return {...v,evidenceId:r.id,calculated:financialRatios(v.metrics)}}),announcements:events.filter(e=>e.companies.includes(c.code)).slice(0,6).map(e=>({...e,publishDate:e.publishedAt,source:e.sources.join(' / '),url:e.urls[0]||null,summary:e.excerpt})),quality:{source:'frozen-research-snapshot'}}
@@ -309,17 +338,22 @@ export async function captureResearchSnapshot(industryId: string): Promise<Resea
     const articleData=events.filter(e=>!e.companies.length&&e.status==='evidence'&&e.category!=='administrative').map(e=>({...e,content:e.excerpt,summary:e.excerpt,publishTime:e.publishedAt,source:e.sources.join(' / '),url:e.urls[0],sentiment:null}))
     const trackingAnomalies=evaluation.products?.filter(product=>typeof product.trackingErrorPct==='number'&&product.trackingErrorPct>20).map(product=>({ticker:product.ticker,metric:'trackingErrorPct',value:product.trackingErrorPct,reason:'年化跟踪误差超过20%，疑似净值或指数序列口径异常'}))||[]
     const perEtf=evaluation.decisions.map(d=>{const dataGaps=[...d.conditions.filter(condition=>condition.status==='unknown').map(condition=>condition.label),...(evaluation.omittedConditions||[]).map(condition=>condition.label)],signalGaps=d.conditions.filter(condition=>condition.status==='unmet').map(condition=>condition.label);return {ticker:d.ticker,status:d.state==='blocked'?'blocked':dataGaps.length?'limited':'available',dataGaps,signalGaps,signalState:d.state}})
-    const hasDataGaps=perEtf.some(item=>item.status!=='available')||Boolean(evaluation.omittedConditions?.length)||trackingAnomalies.length>0
-    const quality={status:evaluation.decisions.every(d=>d.state==='blocked')?'blocked':hasDataGaps?'limited':'available',requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable:evaluation.decisions.filter(d=>d.state!=='blocked').length,coverage:etfs.length?evaluation.decisions.filter(d=>d.state!=='blocked').length/etfs.length:0,asOf,expectedSession:boundary.expectedSession,closeDataSession:closeBoundary.expectedSession,intraday:boundary.intraday,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:articleData.length,dataAnomalies:trackingAnomalies}
+    const usable=evaluation.decisions.filter(d=>d.state!=='blocked').length
+    const coreModulesAvailable=Object.values(evaluation.modules).every(module=>module.status==='available')
+    // Overall availability represents whether the frozen snapshot can support a
+    // complete analysis. Optional per-product gaps remain visible and continue to
+    // lower their own quality dimension; they must not cap an otherwise 90+ report.
+    const qualityStatus=evaluation.decisions.every(d=>d.state==='blocked')?'blocked':usable/Math.max(1,etfs.length)<.8||!coreModulesAvailable||trackingAnomalies.length?'limited':'available'
+    const quality={status:qualityStatus,requested:etfs.length,available:etfs.filter(e=>e.bars.length).length,usable,coverage:etfs.length?usable/etfs.length:0,asOf,expectedSession:boundary.expectedSession,closeDataSession:closeBoundary.expectedSession,intraday:boundary.intraday,calendarVerified:boundary.verified,perEtf,modules:evaluation.modules,companyCoverage:{total:companies.length,financials:companies.filter(c=>c.financialPeriods>=2).length,profitGrowth:companies.filter(c=>number(c.profitGrowthPct)!==null).length,cashQuality:companies.filter(c=>number(c.cashConversionPct)!==null).length,announcements:companies.filter(c=>c.announcementCount>0).length},newsCount:events.length,newsArticleCount:articleData.length,eventEvidenceCount:events.filter(event=>event.status==='evidence'&&event.category!=='administrative').length,announcementEventCount:events.filter(event=>event.companies.length>0).length,dataAnomalies:trackingAnomalies}
     snapshot.projections={
-      'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-timing':decisionTiming,'graph-context':graphContext},
+      'freeze-research':{'historical-report-context':historicalReports,'historical-report-policy':profile.historyReports,'decision-history-context':compactDecisionHistory(snapshot.decisionHistory),'decision-timing':decisionTiming,'graph-context':graphContext},
       'fetch-etfs':{'industry-info':{id:industryId,name:profile.name,source:'frozen-snapshot',graphRevisionId:graphContext?.revisionId,graphVersion:graphContext?.version},'etf-bindings':etfs.map(e=>({etf_code:e.ticker,etf_name:e.name,indexCode:e.indexCode,indexName:e.indexName,holdings:e.holdings})),'etf-codes':tickers.join(',')},
       'fetch-market-snapshot':{'market-snapshot':{source:'frozen-snapshot',asOf,decisionTiming,overview:{indices:marketIndices},capitalFlow:{scope:'配置的领域板块，不代表全市场新增资金',series:sectorFlows},quality:evaluation.modules.market},'market-reference-data':references,'market-reference-indicators':{flow:evaluation.modules.flow,mainFlow:summarizeMarketReference(references.mainFlow),margin:summarizeMarketReference(references.margin)}},
       'fetch-etf-data':{'etf-market-data':marketData,'etf-data-gaps':{missingCodes:etfs.filter(e=>!e.bars.length).map(e=>e.ticker),requested:etfs.length,available:marketData.length}},
       'fetch-etf-holdings':{'etf-holdings':allHoldings,'holdings-summary':{totalETFs:etfs.length,totalHoldings:allHoldings.length,uniqueStocks:holdingCodes.length}},
       'fetch-companies':{'companies':companyData.map(c=>({stockCode:c.code,stockName:c.name,source:c.pool,stage:c.stage,stageCode:c.stageCode,segment:c.segment,segmentCode:c.segmentCode,matchSource:c.matchSource,matchConfidence:c.matchConfidence,representativenessScore:c.representativenessScore,selectionReason:c.selectionReason,representativeEtfs:c.representativeEtfs,representativeIndices:c.representativeIndices})),'company-codes':companyCodes.join(',')},
       'fetch-company-data':{'company-market-data':companyData},
-      'fetch-news':{'news-articles':articleData,'news-events':events,'news-evidence-gaps':{candidates:news.length,textRelevant:relevantNews.length,excludedByTextRelevance:news.length-relevantNews.length,eventClusters:articleData.length,leads:events.filter(e=>e.status==='lead').length,taxonomyAvailable:segmentCodes.size>0},'news-trends':{},'news-sentiment':{avgSentiment:null}},
+      'fetch-news':{'news-articles':articleData,'news-events':events,'news-evidence-gaps':{candidates:news.length,textRelevant:relevantNews.length,excludedByTextRelevance:news.length-relevantNews.length,eventClusters:events.length,usableEvidence:events.filter(e=>e.status==='evidence'&&e.category!=='administrative').length,announcementClusters:events.filter(e=>e.companies.length>0).length,leads:events.filter(e=>e.status==='lead').length,taxonomyAvailable:segmentCodes.size>0},'news-trends':{},'news-sentiment':summarizeEventSentiment(events,asOf)},
       'calculate-market-trends':{'market-trends':{indexBreadth:evaluation.indexBreadth,source:'one-vote-per-index'}},
       'assess-data-quality':{'data-quality':quality},
     }
@@ -331,10 +365,10 @@ export async function persistEvaluation(snapshot: ResearchSnapshot, previous?: E
   const existing=await prisma.rawPayload.findUnique({where:{id:snapshot.id+':evaluation'}})
   if(existing){const stored=JSON.parse(existing.payload) as Evaluation;const original=await readSnapshot(snapshot.id);if(digest(original)!==digest(snapshot))throw new Error('禁止覆盖已冻结的研究快照');return stored}
   const result=evaluateResearch(snapshot,previous&&previous.asOf<snapshot.asOf&&previous.profile.industryId===snapshot.profile.industryId?previous:null)
-  await prisma.$transaction([
+  await withDatabaseBusyRetry(()=>prisma.$transaction([
     prisma.rawPayload.upsert({where:{id:snapshot.id},create:{id:snapshot.id,datasetKey:'research_snapshot',targetCode:snapshot.profile.industryId,provider:'frozen-local-v1',payload:encode(snapshot),contentHash:digest(snapshot)},update:{}}),
     prisma.rawPayload.upsert({where:{id:snapshot.id+':evaluation'},create:{id:snapshot.id+':evaluation',datasetKey:'research_evaluation',targetCode:snapshot.profile.industryId,provider:'rules-v1',payload:encode(result),contentHash:digest(result)},update:{}}),
-  ])
+  ]))
   return result
 }
 
@@ -373,8 +407,23 @@ export async function latestReportEvaluation(industryId:string,asOf:string,basel
   return null
 }
 
+function forecastCalibration(rows:Array<{dataJson:string|null;createdAt?:Date}>,snapshot:ResearchSnapshot,horizonDays:number){
+  const forecasts:ArchivedForecast[]=[]
+  for(const row of rows){
+    const data=parse<{investmentAdvice?:unknown;metadata?:{verificationMode?:string;generatedAt?:string}}>(row.dataJson)
+    if(!data||data.metadata?.verificationMode)continue
+    const advice=typeof data.investmentAdvice==='string'?parse<Record<string,unknown>>(data.investmentAdvice):data.investmentAdvice as Record<string,unknown>|undefined
+    for(const item of Array.isArray(advice?.productDecisions)?advice.productDecisions:[]){
+      const forecast=item.forecast
+      if(!forecast)continue
+      forecasts.push({ticker:String(item.ticker),generatedAt:row.createdAt?.toISOString()||data.metadata?.generatedAt||'',target:forecast.target,horizonTradingDays:forecast.horizonTradingDays,probability:forecast.probability})
+    }
+  }
+  return calibrateForecasts(forecasts,snapshot,horizonDays)
+}
+
 export async function historicalStrategyValidation(snapshot:ResearchSnapshot,current:Evaluation){
-  const rows=await prisma.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId:current.profile.industryId,createdAt:{lt:new Date(current.asOf)}},orderBy:{createdAt:'desc'},take:40,select:{dataJson:true}})
+  const rows=await prisma.aIAnalysisReport.findMany({where:{type:'comprehensive',industryId:current.profile.industryId,createdAt:{lt:new Date(current.asOf)}},orderBy:{createdAt:'desc'},take:400,select:{dataJson:true,createdAt:true}})
   const bySession=new Map<string,Evaluation>()
   for(const row of rows){
     const evaluation=parse<{researchEvaluation?:Evaluation;metadata?:{verificationMode?:string}}>(row.dataJson)?.researchEvaluation
@@ -384,9 +433,17 @@ export async function historicalStrategyValidation(snapshot:ResearchSnapshot,cur
     if(!prior||evaluation.asOf>prior.asOf)bySession.set(key,evaluation)
   }
   const evaluations=[...bySession.values(),current].sort((a,b)=>a.asOf.localeCompare(b.asOf))
-  if(evaluations.length<2)return {status:'insufficient' as const,validation:'insufficient-history' as const,reason:'至少需要两个不同交易日的冻结决策，当前不标记策略有效。',results:[],snapshots:evaluations.length,costs:{commissionBps:3,slippageBps:5},limitations:['仅使用当时归档的规则状态；不以今天的财务信息回填历史判断。']}
+  const calibration=forecastCalibration(rows,snapshot,current.profile.horizonDays)
+  const policyComparison=compareResearchPolicies(snapshot,rows.flatMap(row=>{
+    const data=parse<{researchEvaluation?:Evaluation;investmentAdvice?:unknown;metadata?:{verificationMode?:string;kind?:string}}>(row.dataJson)
+    return data?.researchEvaluation&&!data.metadata?.verificationMode?[{evaluation:data.researchEvaluation,investmentAdvice:data.investmentAdvice,generatedAt:row.createdAt.toISOString()}]:[]
+  }))
+  if(evaluations.length<2)return {status:'insufficient' as const,validation:'insufficient-history' as const,reason:'至少需要两个不同交易日的冻结决策，当前不标记策略有效。',results:[],snapshots:evaluations.length,costs:{commissionBps:3,slippageBps:5},forecastCalibration:calibration,policyComparison,limitations:['仅使用当时归档的规则状态；不以今天的财务信息回填历史判断。']}
   const template=compactReplaySnapshot(snapshot)
   const snapshots=evaluations.map(evaluation=>({...structuredClone(template),id:evaluation.snapshotId,asOf:evaluation.asOf,capturedAt:evaluation.asOf,workflow:evaluation.workflow}))
   const result=replayResearch(snapshots,evaluations,{commissionBps:3,slippageBps:5})
-  return {...result,limitations:['使用当前仍在跟踪的ETF价格序列，存在产品存续样本限制；结果为纸面回放，不代表真实成交。','最小门槛为252个观察日和30笔交易；达到门槛后仍需结构状态与参数敏感性复核。']}
+  const thresholds={minimumObservations:252,minimumTrades:30}
+  const performanceReady=(result.observations||0)>=thresholds.minimumObservations&&(result.trades||0)>=thresholds.minimumTrades
+  const results=result.results.map(row=>performanceReady?{...row,performanceUsable:true}:{...row,performanceUsable:false,returnPct:null,buyAndHoldReturnPct:null,excessOverBuyAndHoldPct:null,benchmarkReturnPct:null,excessReturnPct:null,maxDrawdownPct:null,annualizedVolatilityPct:null,sharpeRatio:null,informationRatio:null})
+  return {...result,status:performanceReady?'candidate' as const:'insufficient' as const,validation:performanceReady?'candidate-walk-forward' as const:'insufficient-history' as const,reason:performanceReady?'已达到最小观察和交易样本门槛，仍需样本外与参数敏感性复核。':`仅有${result.observations||0}个观察值、${result.trades||0}笔交易；未达到${thresholds.minimumObservations}个观察值和${thresholds.minimumTrades}笔交易，不展示收益或超额指标。`,results,thresholds,forecastCalibration:calibration,policyComparison,limitations:['使用当前仍在跟踪的ETF价格序列，存在产品存续样本限制；结果为纸面回放，不代表真实成交。','未达到门槛时隐藏收益、超额收益、夏普率和信息比率，避免将空仓或极小样本误读为策略有效。','只有明确的超额收益概率预测且至少30个结果成熟后才展示Brier Score和命中率；不把AI置信度换算为概率。','达到门槛后仍需结构状态、参数敏感性和真正样本外复核。']}
 }

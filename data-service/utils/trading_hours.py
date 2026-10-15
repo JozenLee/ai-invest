@@ -31,6 +31,20 @@ def is_trading_hours() -> bool:
     return morning or afternoon
 
 
+def should_use_current_session_quotes() -> bool:
+    """Return whether quote readers should keep using today's market session.
+
+    The exchange pauses matching from 11:30 to 13:00, but the morning snapshot is
+    still the latest price evidence for the current trading day.  Treating lunch
+    as an ordinary closed session makes realtime readers fall back to yesterday's
+    daily candle and can overwrite a valid same-day quote.
+    """
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    return time(9, 30) <= now.time() < time(15, 0)
+
+
 def is_pre_market() -> bool:
     """判断当前是否为盘前时间（交易日 9:30 之前）"""
     now = datetime.now()

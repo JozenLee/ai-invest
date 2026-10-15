@@ -1,6 +1,7 @@
 import type { DecisionTimingAssessment } from '@/lib/analysis/decision-timing'
 import type { FrozenGraphContext } from '@/lib/graph/research-context'
 import type { ExecutiveInvestmentConclusion } from '@/lib/analysis/investment-conclusion'
+import type { DecisionHistoryAssessment } from './decision-ledger'
 
 /** Versioned, serializable boundary shared by collection, research, replay and UI. */
 export const RESEARCH_VERSION = 1 as const
@@ -9,13 +10,22 @@ export type CalendarDay = { date: string; open: boolean }
 export type Evidence = { id: string; source: string; dataDate: string | null; publishedAt: string | null; fetchedAt: string; unit?: string; hash: string }
 export type SourceRecord = { id: string; datasetKey: string; targetCode: string; provider: string | null; payload: string; fetchedAt: string; contentHash: string }
 export type Profile = {
+  investmentObjective?: { style: 'aggressive'; riskBudgetMode: 'compare'; goal: 'net-return' };
   version: 1; industryId: string; name: string; benchmark: string; horizonDays: number;
   sectors: string[]; segments: Array<{ name: string; companies: string[] }>;
   leaders: Array<{ code: string; name: string; segment: string }>;
   historyReports?: { enabled: boolean; lookbackTradingDays: number; mode: 'latest-per-trading-day' };
   rules: { minHistory: number; maxPremiumPct: number; minDailyAmount: number; maxSpreadBps: number; maxVolatilityPct: number; flowDays: number; entryConfirmDays: number };
 }
-export type EventInput = { id: string; title: string; content: string; source: string; url?: string | null; publishedAt: string; fetchedAt: string; company?: string; segments?: string[]; kind: 'announcement' | 'news' }
+export type EventInput = {
+  id: string; title: string; content: string; source: string; url?: string | null; publishedAt: string; fetchedAt: string;
+  company?: string; segments?: string[]; kind: 'announcement' | 'news';
+  /** Provider/AI impact level, normally 1-5. It is only one input to the
+   * deterministic influence score and never replaces evidence quality. */
+  impact?: number | null;
+  /** Maximum absolute graph propagation factor for the current event. */
+  propagationImpact?: number | null;
+}
 export type ResearchEvent = {
   id: string; title: string; category: 'earnings' | 'demand' | 'policy' | 'risk' | 'administrative' | 'technology' | 'other';
   publishedAt: string; expiresAt: string; companies: string[]; segments: string[];
@@ -25,9 +35,13 @@ export type ResearchEvent = {
   sourceTier?: 'primary' | 'corroborated' | 'secondary' | 'lead';
   independentSourceCount?: number;
   materialityScore?: number;
+  influenceScore?: number;
+  influenceLevel?: 'high' | 'medium' | 'low';
+  influenceFactors?: { providerImpact: number | null; propagationImpact: number | null; sourceBreadth: number; industryBreadth: number };
   status: 'evidence' | 'lead'; priority: number; verification: 'source-linked-not-independently-verified';
 }
 export type ETFInput = {
+  executionRules?:import('./lab/contracts').HistoricalExecutionRules;
   ticker: string; name: string; bars: Bar[]; evidenceIds: string[];
   factors: Array<{ date: string; factor: number }>; adjustmentSource?: string;
   indexCode: string | null; indexName?: string; indexBars: Bar[];
@@ -41,6 +55,10 @@ export type ResearchSnapshot = {
   etfs: ETFInput[]; benchmarkBars: Bar[]; sectorFlows: Array<{ date: string; sector: string; net: number; netPct: number | null; evidenceId: string }>;
   events: ResearchEvent[];
   historicalReports?: Array<{ reportId:string; industryId:string; industryName:string; sessionDate:string; createdAt:string; title:string; comprehensiveConclusion:ExecutiveInvestmentConclusion; role:'historical-comprehensive-conclusion' }>;
+  /** Outcomes are derived only from immutable archived decisions and later
+   * prices. The compact form may enter a future decision prompt as calibration,
+   * never as a replacement for current evidence. */
+  decisionHistory?: DecisionHistoryAssessment;
   companies: Array<{ code: string; name: string; stage?:string; stageCode?:string; segment: string; segmentCode?:string; pool: 'holding' | 'leader' | 'graph' | 'both'; financialPeriods: number; announcementCount: number; profitGrowthPct?:number|null; cashConversionPct?:number|null; financialGaps?:string[]; evidenceIds: string[]; representativeEtfs?:Array<{code:string;name:string;relevance:number;holdingVerified:boolean;holdingWeight?:number;reportPeriod?:string;source?:string}>; representativeIndices?:Array<{code:string;name:string;relevance:number;source?:string}>; matchSource?:string; matchConfidence?:number; representativenessScore?:number; selectionReason?:string }>;
   graphContext?: FrozenGraphContext;
   /** Frozen projections keep the existing report steps on exactly the same input. */
@@ -50,7 +68,9 @@ export type ResearchSnapshot = {
   workflow?: { runId: string; parentRunId: string | null; baselineSnapshotId: string | null };
 }
 export type Condition = { availability?:'failed'|'missing'|'stale'|'pending-publication'|'not-applicable'; detail?:string; key: string; label: string; value: number | string | null; operator: '>=' | '<=' | '='; threshold: number | string; status: 'met' | 'unmet' | 'unknown'; evidenceIds: string[] }
+export type AdjustmentAudit = { status:'missing'|'partial'|'unverified-source'|'discontinuous'|'verified'; priceDates:number; matchedFactorDates:number; missingDates:string[]; discontinuityDates:string[] }
 export type Decision = {
+  adjustmentAudit?: AdjustmentAudit;
   ticker: string; name: string; indexCode: string | null; state: 'blocked' | 'watch' | 'eligible' | 'risk-off';
   unheldAction: '建仓' | '观望'; heldAction: '持有' | '减仓' | '观望';
   reason: string; trigger: string; invalidation: string; horizon: string; evidence: string[];

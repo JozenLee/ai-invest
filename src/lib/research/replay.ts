@@ -1,3 +1,4 @@
+import { chinaDate } from './time'
 import type { Evaluation, ResearchSnapshot } from './contracts'
 import { adjustedBars, validBars } from './engine'
 
@@ -43,13 +44,13 @@ export function replayResearch(snapshots: ResearchSnapshot[], evaluations: Evalu
   if(!last||ordered.length<2) return {status:'insufficient' as const,reason:'至少需要两个不同时间冻结的研究快照；不能用今天的数据回填历史观点',results:[],costs,validation:'not-validated'}
   if(new Set(ordered.map(s=>s.profile.industryId)).size!==1) throw new Error('不能混合不同领域回放')
   const results=last.etfs.map(etf=>{
-    const series=adjustedBars(etf,last.asOf.slice(0,10))
+    const series=adjustedBars(etf,chinaDate(last.asOf))
     if(!series.adjusted||series.discontinuity) return {ticker:etf.ticker,status:'insufficient',reason:'缺少经核验的复权价格',trades:[],returnPct:null,benchmarkReturnPct:null,turnover:0,maxDrawdownPct:null}
     const bars=series.bars
     let cash=1,units=0,turnover=0,peak=1,maxDrawdown=0
     const trades:Array<{date:string;side:string;price:number;cost:number;snapshotId:string}>=[]
     const skipped:Array<{snapshotId:string;reason:string}>=[]
-    const firstDay=ordered[0].asOf.slice(0,10)
+    const firstDay=chinaDate(ordered[0].asOf)
     const tradingBars=bars.filter(b=>b.date>=firstDay)
     const fills=new Set<string>()
     for(const snapshot of ordered){
@@ -76,14 +77,16 @@ export function replayResearch(snapshots: ResearchSnapshot[], evaluations: Evalu
       const equity=replayCash+replayUnits*bar.close;equityCurve.push({date:bar.date,equity});peak=Math.max(peak,equity);maxDrawdown=Math.max(maxDrawdown,(peak-equity)/peak*100)
     }
     const final=cash+units*(bars.at(-1)?.close||0)
-    const benchmark=validBars(last.benchmarkBars,last.asOf.slice(0,10)).filter(b=>b.date>=tradingBars[0]?.date)
+    const holdStart=bars.find(bar=>Date.parse(`${bar.date}T09:30:00+08:00`)>Date.parse(ordered[0].asOf))
+    const benchmark=validBars(last.benchmarkBars,chinaDate(last.asOf)).filter(b=>!!holdStart&&b.date>=holdStart.date)
     const rate=(costs.commissionBps+costs.slippageBps)/10000
     const portfolioReturns=equityCurve.slice(1).map((row,index)=>row.equity/equityCurve[index].equity-1)
     const benchmarkByDate=new Map(benchmark.map(row=>[row.date,row])),aligned=equityCurve.filter(row=>benchmarkByDate.has(row.date))
     const benchmarkReturns=aligned.slice(1).map((row,index)=>benchmarkByDate.get(row.date)!.close/benchmarkByDate.get(aligned[index].date)!.close-1)
-    const activeReturns=portfolioReturns.slice(-benchmarkReturns.length).map((value,index)=>value-benchmarkReturns[index])
+    const activeReturns=aligned.slice(1).map((row,index)=>row.equity/aligned[index].equity-1-benchmarkReturns[index])
+    const buyAndHoldReturnPct=holdStart?((bars.at(-1)!.close/holdStart.open)*(1-rate)-1)*100:null
     const benchmarkReturnPct=benchmark.length>1?((benchmark.at(-1)!.close/benchmark[0].open)*(1-rate)-1)*100:null
-    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,benchmarkReturnPct,excessReturnPct:benchmarkReturnPct===null?null:(final-1)*100-benchmarkReturnPct,turnover,maxDrawdownPct:maxDrawdown,annualizedVolatilityPct:(deviation(portfolioReturns)||0)*Math.sqrt(252)*100,sharpeRatio:annualRatio(portfolioReturns),informationRatio:annualRatio(activeReturns),observations:equityCurve.length}
+    return {ticker:etf.ticker,status:trades.length?'paper-only':'no-trades',trades,skipped,returnPct:(final-1)*100,buyAndHoldReturnPct,excessOverBuyAndHoldPct:buyAndHoldReturnPct===null?null:(final-1)*100-buyAndHoldReturnPct,benchmarkReturnPct,excessReturnPct:benchmarkReturnPct===null?null:(final-1)*100-benchmarkReturnPct,turnover,maxDrawdownPct:maxDrawdown,annualizedVolatilityPct:(deviation(portfolioReturns)||0)*Math.sqrt(252)*100,sharpeRatio:annualRatio(portfolioReturns),informationRatio:annualRatio(activeReturns),observations:equityCurve.length}
   })
   const tested=results.filter(item=>item.status!=='insufficient'),trades=tested.reduce((sum,item)=>sum+item.trades.length,0),observations=tested.length?Math.min(...tested.map(item=>item.observations||0)):0
   const validation=tested.length&&trades>=30&&observations>=252?'candidate-walk-forward' as const:'insufficient-history' as const

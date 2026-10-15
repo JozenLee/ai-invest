@@ -8,6 +8,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 from providers.registry import ProviderRegistry, CategoryConfig
+import pandas as pd
 
 
 @pytest.mark.asyncio
@@ -218,3 +219,23 @@ async def test_empty_result_triggers_fallback():
     # 验证两个数据源都被尝试了
     sina.get_market_capital_flow.assert_called_once()
     akshare.get_market_capital_flow.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_partial_realtime_index_snapshot_triggers_fallback(monkeypatch):
+    monkeypatch.setattr(ProviderRegistry, '_is_market_open', staticmethod(lambda: True))
+    custom_config={'index_spot':CategoryConfig(sources=['tushare','akshare'],cache_ttl=30,fallback_to_file=False)}
+    registry=ProviderRegistry(custom_config=custom_config)
+    tushare=MagicMock(name='tushare');tushare.name='tushare';tushare.get_index_spot=AsyncMock(return_value=pd.DataFrame([
+        {'代码':'sh000001','最新价':3800,'数据日期':'2026-09-17'},
+    ]))
+    akshare=MagicMock(name='akshare');akshare.name='akshare';akshare.get_index_spot=AsyncMock(return_value=pd.DataFrame([
+        {'代码':code,'最新价':3800+index,'数据日期':'2026-09-17'} for index,code in enumerate(['sh000001','sz399001','sz399006','sh000688','sh000300'])
+    ]))
+    registry.register(tushare);registry.register(akshare)
+    from unittest.mock import patch
+    with patch('utils.trading_hours.is_trading_hours',return_value=True),patch('providers.registry.datetime') as clock:
+        clock.now.return_value.strftime.return_value='2026-09-17'
+        result=await registry.fetch('index_spot','get_index_spot',force_refresh=True)
+    assert set(result['代码'])=={'sh000001','sz399001','sz399006','sh000688','sh000300'}
+    tushare.get_index_spot.assert_awaited_once();akshare.get_index_spot.assert_awaited_once()

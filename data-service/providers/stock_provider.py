@@ -22,7 +22,7 @@ except ImportError:
 from providers.openbb_provider import OpenBBProvider
 from providers.tushare_provider import TushareProvider
 from providers.international_stock_provider import InternationalStockProvider
-from providers.stock_symbols import canonical_stock_code, provider_symbol, stock_market
+from providers.stock_symbols import canonical_stock_code, provider_symbol, stock_exchange, stock_market
 
 
 class StockProvider:
@@ -66,11 +66,14 @@ class StockProvider:
     @staticmethod
     def _normalize_cn_symbol(symbol: str) -> str:
         value = str(symbol or '').strip().lower()
-        if value.startswith(('sh', 'sz')):
+        if value.startswith(('sh', 'sz', 'bj')):
             value = value[2:]
-        if value.endswith(('.sh', '.sz')):
+        if value.endswith(('.sh', '.sz', '.bj')):
             value = value[:-3]
         return value
+
+    def _tushare_stock_code(self, symbol: str) -> str:
+        return self.tushare._to_ts_code(symbol, default_market=stock_exchange(symbol) or 'SH')
 
     async def get_stock_info(self, symbol: str, market: str = 'cn') -> Optional[Dict[str, Any]]:
         """
@@ -329,25 +332,42 @@ class StockProvider:
         if not self.tushare.available:
             return {}
         try:
-            ts_code = self.tushare._to_ts_code(
-                symbol,
-                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
-            )
+            ts_code = self._tushare_stock_code(symbol)
             df = await self.tushare.request_dataframe('stock_basic', ts_code=ts_code)
             return df.to_dict('records')[0] if df is not None and not df.empty else {}
         except Exception as error:
             self.logger.warning("Tushare基本信息失败 %s: %s", symbol, error)
             return {}
 
+    async def _tushare_financial_indicator_frame(self, symbol: str):
+        ts_code = self._tushare_stock_code(symbol)
+        cached = self._financial_indicator_cache.get(ts_code)
+        if cached and time.monotonic() - cached[0] < 86400:
+            return cached[1]
+        frame = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
+        if frame is not None and not frame.empty:
+            self._financial_indicator_cache[ts_code] = (time.monotonic(), frame)
+        return frame
+
+    async def get_financial_indicators(self, symbol: str, market: str = 'cn') -> List[Dict[str, Any]]:
+        """Return official ratio evidence without pretending it is a statement."""
+        if market != 'cn' or not self.tushare.available:
+            return []
+        try:
+            frame = await self._tushare_financial_indicator_frame(self._normalize_cn_symbol(symbol))
+            if frame is None or frame.empty:
+                return []
+            return [self._normalize_financial_row(row) for row in frame.to_dict('records')]
+        except Exception as error:
+            self.logger.info("Tushare fina_indicator 获取失败 %s: %s", symbol, error)
+            return []
+
     async def _get_tushare_financial_report(self, symbol: str, report_type: str) -> List[Dict[str, Any]]:
         """通过 Tushare 三大报表接口获取并归一化企业财报。"""
         if not self.tushare.available:
             return []
         try:
-            ts_code = self.tushare._to_ts_code(
-                symbol,
-                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
-            )
+            ts_code = self._tushare_stock_code(symbol)
             endpoint = {
                 'balance': 'balancesheet',
                 'income': 'income',
@@ -355,17 +375,10 @@ class StockProvider:
             }.get(report_type)
             if not endpoint:
                 raise ValueError(f"Unsupported report type: {report_type}")
-            # Promax 按 `GET /{接口名}` + 参数调用。fina_indicator 是企业
-            # 分析的主入口：即使 income 无权限或暂未返回，也能拿到报告期、
-            # 现金流和盈利能力字段；income 成功时再合并收入与净利润。
+            # Promax 按 `GET /{接口名}` + 参数调用。fina_indicator 只用于
+            # 补充比率；三大报表必须由各自 statement endpoint 提供。
             try:
-                cached = self._financial_indicator_cache.get(ts_code)
-                if cached and time.monotonic() - cached[0] < 3600:
-                    indicator = cached[1]
-                else:
-                    indicator = await self.tushare.request_dataframe('fina_indicator', ts_code=ts_code)
-                    if indicator is not None and not indicator.empty:
-                        self._financial_indicator_cache[ts_code] = (time.monotonic(), indicator)
+                indicator = await self._tushare_financial_indicator_frame(symbol)
                 if indicator is None or indicator.empty:
                     self.logger.info("Tushare fina_indicator返回空 %s", symbol)
                 else:
@@ -382,6 +395,13 @@ class StockProvider:
             except Exception as error:
                 self.logger.info("Tushare %s 补充失败 %s: %s", endpoint, symbol, error)
                 statement = None
+
+            # fina_indicator is useful enrichment, but it is not a substitute for
+            # an income statement, balance sheet or cash-flow statement. Returning
+            # indicator-only rows under a statement reportType silently creates
+            # records that look complete while lacking n_income/n_cashflow_act.
+            if statement is None or statement.empty:
+                return []
 
             rows_by_period: Dict[str, Dict[str, Any]] = {}
             for frame in (indicator, statement):
@@ -412,6 +432,10 @@ class StockProvider:
     ) -> List[Dict[str, Any]]:
         """通过 AKShare 获取 A 股财报数据。"""
         if ak is None:
+            return []
+        # stock_financial_abstract only supports the income metrics normalized
+        # below. It must not be persisted as a balance sheet or cash-flow report.
+        if report_type != 'income':
             return []
 
         def load() -> List[Dict[str, Any]]:
@@ -647,10 +671,7 @@ class StockProvider:
         if not self.tushare.available:
             return []
         try:
-            ts_code = self.tushare._to_ts_code(
-                symbol,
-                default_market='SZ' if symbol.startswith(('0', '2', '3')) else 'SH',
-            )
+            ts_code = self._tushare_stock_code(symbol)
             params = {'ts_code': ts_code}
             if start_date:
                 params['start_date'] = self._tushare_date(start_date)

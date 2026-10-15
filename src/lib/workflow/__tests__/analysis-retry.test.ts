@@ -7,5 +7,6 @@ describe('analysis retry policy',()=>{
     expect(retryableAnalysisError(new Error('timeout after 90000ms'))).toBe(false)
     expect(retryableAnalysisError(new Error('503 overloaded'))).toBe(true)
     expect(retryableAnalysisError(new Error('智能分析输出缺少字段'))).toBe(true)
+    expect(retryableAnalysisError(new Error('AI逐产品决策范围不完整：缺少159995'))).toBe(true)
   })
 })

@@ -4,6 +4,8 @@
 import logging
 import json
 import os
+import fcntl
+import resource
 from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -38,7 +40,7 @@ os.environ.pop('https_proxy', None)
 os.environ['NO_PROXY'] = '*'
 
 from routers import market, capital_flow, etf, macro_flow, news, influencers, providers, ai, search, cache, datasources, schedulers, trends, platform_configs, advanced_capital_flow, industry_graph, industry_query, impact, company_context
-from routers import stocks, industry_analysis, fund, local_data
+from routers import stocks, industry_analysis, fund, local_data, portfolio_product_research
 
 # 配置日志
 logging.basicConfig(level=logging.DEBUG)
@@ -46,6 +48,45 @@ logger = logging.getLogger(__name__)
 
 # 全局AI分析器实例（用于health检查）
 global_ai_analyzer = None
+_process_lock = None
+
+
+def configure_file_descriptor_limit() -> tuple:
+    """Give long-lived market collectors enough headroom for third-party clients.
+
+    Connection leaks are still bugs and are tested separately; this guard keeps a
+    short burst of failed upstream sockets from taking down graph and analysis
+    APIs before the scheduler can recover.
+    """
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    target = max(soft, 4096)
+    if hard != resource.RLIM_INFINITY:
+        target = min(target, hard)
+    if target > soft:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    return resource.getrlimit(resource.RLIMIT_NOFILE)
+
+
+FILE_DESCRIPTOR_LIMITS = configure_file_descriptor_limit()
+
+
+def acquire_process_lock() -> bool:
+    """Prevent a legacy/manual launcher from running startup recovery twice."""
+    global _process_lock
+    runtime_dir = project_root / '.runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    handle = open(runtime_dir / 'data-service.lock', 'a+', encoding='utf-8')
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return False
+    handle.seek(0)
+    handle.truncate()
+    handle.write(str(os.getpid()))
+    handle.flush()
+    _process_lock = handle
+    return True
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -234,12 +275,15 @@ async def lifespan(app: FastAPI):
     logger.info("已注册持仓同步监控任务 (每分钟检查，到点执行)")
 
     async def research_review_monitor():
-        """Local-only opt-in rule review. No external AI, publication or trading."""
+        """Opt-in review; stale theses may trigger bounded public AI analysis.
+
+        Private account analysis, publication and trading are not authorized.
+        """
         from pathlib import Path
         import shutil
         import asyncio
         from db import db
-        rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey='research_schedule'")
+        rows = db.execute("SELECT payload FROM raw_payloads WHERE datasetKey IN ('research_schedule','strategy_lab_settings')")
         if not any(json.loads(row['payload']).get('enabled') for row in rows):
             return
         node = shutil.which('node')
@@ -247,15 +291,26 @@ async def lifespan(app: FastAPI):
             logger.warning('投研定时复核不可用：找不到node')
             return
         root = Path(__file__).resolve().parent.parent
-        process = await asyncio.create_subprocess_exec(node, '--import', 'tsx', str(root / 'scripts/run-research-schedule.ts'), cwd=str(root), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        process = await asyncio.create_subprocess_exec(node, '--import', 'tsx', str(root / 'scripts/run-research-schedule.ts'), cwd=str(root), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
-            code = await asyncio.wait_for(process.wait(), timeout=180)
-            if code:
-                logger.warning('投研定时复核失败，请查看研究复核记录')
-        except asyncio.TimeoutError:
-            process.terminate()
-            await process.wait()
-            logger.warning('投研定时复核超时')
+            # A review can now execute the full AI DAG on its frozen snapshot.
+            # The old three-minute cutoff killed legitimate model work midway.
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1800)
+            if process.returncode:
+                logger.warning('投研定时复核失败: %s', stderr.decode(errors='replace')[-2000:])
+            elif stdout.strip():
+                logger.info('投研定时复核结果: %s', stdout.decode(errors='replace')[-2000:])
+        except (asyncio.TimeoutError, asyncio.CancelledError) as error:
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            logger.warning('投研定时复核或升级分析超时')
 
     await scheduler_service.add_interval_job(job_id='research_review_monitor', func=research_review_monitor, minutes=1)
 
@@ -334,6 +389,7 @@ app.include_router(impact.router)
 app.include_router(stocks.router)
 app.include_router(industry_analysis.router, prefix="/api")
 app.include_router(local_data.router)
+app.include_router(portfolio_product_research.router)
 
 @app.get("/health")
 async def health_check():
@@ -352,12 +408,24 @@ async def health_check():
         ai_ready = global_ai_analyzer.claude_client is not None
         segments_loaded = len(global_ai_analyzer.industry_segments)
 
-    return {
-        "status": "healthy",
+    try:
+        open_descriptors = len(os.listdir('/dev/fd'))
+    except OSError:
+        open_descriptors = None
+    soft_limit, _hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    descriptor_pressure = open_descriptors is not None and soft_limit > 0 and open_descriptors / soft_limit >= .85
+
+    payload = {
+        "status": "degraded" if descriptor_pressure else "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "2.0.0",
         "scheduler_running": scheduler_service.is_running,
         "active_jobs": len(scheduler_service.get_all_jobs()),
+        "resources": {
+            "open_file_descriptors": open_descriptors,
+            "soft_file_descriptor_limit": soft_limit,
+            "descriptor_pressure": descriptor_pressure,
+        },
         "ai_analyzer": {
             "enabled": ai_enabled,
             "ready": ai_ready,
@@ -365,6 +433,10 @@ async def health_check():
             "api_configured": api_configured
         }
     }
+    if descriptor_pressure:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(payload, status_code=503)
+    return payload
 
 @app.get("/")
 async def root():
@@ -413,5 +485,8 @@ async def run_scheduler_job(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+    if not acquire_process_lock():
+        logger.error('已有数据服务实例持有运行锁，本进程退出以避免重复恢复任务')
+        raise SystemExit(0)
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)

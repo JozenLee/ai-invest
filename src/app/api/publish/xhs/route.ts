@@ -33,10 +33,13 @@ async function writeImageDataUrl(value: string) {
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}))
   const reportId = typeof body.reportId === 'string' ? body.reportId : ''
-  const sourceReport = reportId ? await prisma.aIAnalysisReport.findUnique({ where: { id: reportId } }) : null
-  let reportData: any = null
-  try { reportData = JSON.parse(sourceReport?.dataJson || '{}') } catch { /* Invalid legacy report. */ }
-  if (sourceReport?.type !== 'comprehensive' || !reportData?.socialReport || !reportData?.metadata?.runId) return NextResponse.json({ success: false, error: '请选择综合分析流程生成的社媒版报告' }, { status: 400 })
+  const requestedReportIds: unknown[] = Array.isArray(body.reportIds) ? body.reportIds : reportId ? [reportId] : []
+  const reportIds: string[] = [...new Set(requestedReportIds.filter((item:unknown):item is string=>typeof item==='string'&&Boolean(item)))]
+  const sourceReports = reportIds.length ? await prisma.aIAnalysisReport.findMany({ where: { id: { in: reportIds } } }) : []
+  const validReports = sourceReports.filter(sourceReport => {
+    try { const data=JSON.parse(sourceReport.dataJson || '{}'); return sourceReport.type === 'comprehensive' && data?.socialReport && data?.metadata?.runId } catch { return false }
+  })
+  if (!reportIds.length || validReports.length !== reportIds.length) return NextResponse.json({ success: false, error: '请选择综合分析流程生成的社媒版报告' }, { status: 400 })
   const accountId = typeof body.accountId === 'string' ? body.accountId.trim() : ''
   const title = typeof body.title === 'string' ? body.title.trim() : ''
   const content = typeof body.content === 'string' ? body.content.trim() : ''

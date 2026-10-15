@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { comprehensiveAnalysisWorkflow } from '@/lib/workflow/workflows/comprehensive-analysis'
+import { reconcileStaleAnalysisRun } from '@/lib/workflow/background-runner'
 
 /**
  * GET /api/analysis/comprehensive/[runId]
@@ -19,7 +20,8 @@ export async function GET(
       return NextResponse.json(graph)
     }
     const requestedStep=view==='step'?request.nextUrl.searchParams.get('stepName')||undefined:undefined
-    const run = await comprehensiveAnalysisWorkflow.getRunDetails(runId, view === 'workspace',requestedStep)
+    let run = await comprehensiveAnalysisWorkflow.getRunDetails(runId, view === 'workspace',requestedStep)
+    if(run?.status==='RUNNING'&&await reconcileStaleAnalysisRun(runId))run=await comprehensiveAnalysisWorkflow.getRunDetails(runId,view==='workspace',requestedStep)
 
     if (!run) {
       return NextResponse.json({ error: 'Run not found' }, { status: 404 })

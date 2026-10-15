@@ -2,9 +2,11 @@ import { etfActionsMarkdown, type ETFAction } from './etf-actions'
 import type { DecisionTimingAssessment } from './decision-timing'
 
 const labels: Record<string, string> = {
+  dimensions: '分析维度', name: '名称', judgment: '判断', detail: '依据', dataBoundary: '数据边界', referenceIssues: '引用问题',
   analysis: '分析', score: '评分', rating: '评级', executiveSummary: '综合投资结论', conclusion: '综合判断',
   allocationStance: '配置立场', keyDrivers: '关键驱动', opportunities: '机会与兑现状态', mainRisks: '主要风险', watchPoints: '重点关注', actionPlan: '建议操作', priority: '操作优先级', historyComparison: '历史机会验证', reviewTriggers: '复核触发项',
-  thesis: '投资论点', etfImplications: 'ETF影响',
+  thesis: '投资论点', etfImplications: 'ETF影响', productDecisions:'AI逐产品投资决策',
+  unheldAction:'未持有动作',heldAction:'已持有动作',suggestedAdjustmentPct:'AI建议单日调整百分点',confidencePct:'AI置信度',trigger:'触发条件',invalidation:'失效条件',evidenceIds:'证据编号',decisionSource:'决策来源',recommendationSource:'观点与约束来源',
   scenarios: '情景分析', base: '基准情景', bull: '乐观情景', bear: '悲观情景', evidence: '证据',
   claim: '判断', source: '来源', date: '日期', counterEvidence: '反证', risks: '风险', watchlist: '跟踪清单',
   trend: '趋势', risk_level: '风险等级', sentiment: '情绪', catalysts: '催化剂', drivers: '驱动因素',
@@ -28,13 +30,14 @@ export function renderValue(value: unknown, depth = 0): string {
   const nested=(item:unknown)=>item!==null&&typeof item==='object'
   const indent='  '.repeat(depth)
   if(Array.isArray(value))return value.length?value.map((item,index)=>nested(item)?`${indent}- 第${index+1}项\n${renderValue(item,depth+1)}`:`${indent}- ${renderValue(item)}`).join('\n'):'无'
-  if(typeof value==='object')return Object.entries(value).map(([key,item])=>nested(item)?`${indent}- ${labels[key]||key}：\n${renderValue(item,depth+1)}`:`${indent}- ${labels[key]||key}：${renderValue(item)}`).join('\n')
+  if(typeof value==='object')return Object.entries(value).filter(([key,item])=>item!==undefined&&!(key==='referenceIssues'&&Array.isArray(item)&&!item.length)).map(([key,item])=>nested(item)?`${indent}- ${labels[key]||key}：\n${renderValue(item,depth+1)}`:`${indent}- ${labels[key]||key}：${renderValue(item)}`).join('\n')
   return String(value)
 }
 
-export function fullResearchMarkdown(input: { title: string; sections: Array<{ title: string; value: unknown }>; actions: ETFAction[]; onePageAvailable: boolean; decisionTiming?: DecisionTimingAssessment }) {
+export function fullResearchMarkdown(input: { title: string; sections: Array<{ title: string; value: unknown }>; actions: ETFAction[]; onePageAvailable: boolean; decisionTiming?: DecisionTimingAssessment; executiveConclusion?: string; executionSummary?: string }) {
   const notice = input.onePageAvailable ? '' : '\n\n> 一页发布版暂不可用。以下为已完成的完整研究与ETF操作建议，不受一页模板字数限制。'
   const timing = input.decisionTiming
-  const timingNotice = timing ? `\n\n> **${timing.label}**：${timing.executionReady ? '本报告的快照冻结于交易时段，报告生成耗时不改变其执行意义。' : `${timing.reasons.join('；') || '快照冻结于非交易时间'}。`}\n> 冻结时点：${timing.asOf}；收盘数据基准：${timing.closeDataSession || '未核验'}；事件截点：${timing.eventCutoff}。` : '\n\n> **仅供投资参考**：旧报告没有交易时段时效审计。'
-  return `# ${input.title}${notice}${timingNotice}\n\n` + input.sections.map(section => `## ${section.title}\n\n${renderValue(section.value)}`).join('\n\n') + '\n\n' + etfActionsMarkdown(input.actions)
+  const timingNotice = timing ? `\n\n> **${timing.label}**：${timing.basis}\n> 冻结时点：${timing.asOf}；最近完整收盘日：${timing.closeDataSession || '未核验'}；事件截点：${timing.eventCutoff}。` : '\n\n> **数据口径未记录**：旧报告没有保存行情数据口径。'
+  const conclusion=input.executiveConclusion?`\n\n## 综合结论\n\n${input.executiveConclusion}\n\n${input.executionSummary||''}`:''
+  return `# ${input.title}${notice}${timingNotice}${conclusion}\n\n` + input.sections.map(section => `## ${section.title}\n\n${renderValue(section.value)}`).join('\n\n') + '\n\n' + etfActionsMarkdown(input.actions)
 }

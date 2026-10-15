@@ -31,6 +31,35 @@ describe('report quality and review lineage', () => {
     expect(degraded.blockers.join('')).toContain('事件智能分析已降级')
   })
 
+  it('downgrades when every ETF is product-limited even if aggregate coverage is available',()=>{
+    const evaluation=evaluateResearch(fixture())
+    const quality=buildReportQuality({evaluation,dataQuality:{status:'available',perEtf:[{status:'limited'}]},preflight:{status:'fresh',failed:0}})
+    expect(quality).toMatchObject({usability:'limited-advice',grade:'B',overallScore:79})
+    expect(quality.executionReadinessScore).toBeLessThan(60)
+    expect(quality.blockers.join('')).toContain('全部ETF均存在产品级数据缺口')
+  })
+
+  it('separates evidence confidence from unvalidated decision confidence',()=>{
+    const evaluation=evaluateResearch(fixture())
+    const quality=buildReportQuality({evaluation,dataQuality:{status:'available'},strategyValidation:{validation:'insufficient-history',trades:0,observations:6}})
+    expect(quality.evidenceConfidenceScore).toBeGreaterThan(quality.decisionConfidenceScore)
+    expect(quality.validationStatus).toBe('insufficient-history')
+  })
+
+  it('downgrades repaired AI outputs instead of silently retaining advice grade',()=>{
+    const evaluation=evaluateResearch(fixture())
+    const quality=buildReportQuality({evaluation,dataQuality:{status:'available'},outputValidations:{market:{status:'limited',issues:['引用修复']}}})
+    expect(quality.usability).toBe('limited-advice')
+    expect(quality.blockers.join('')).toContain('输出经过引用、日期或结构修复')
+  })
+
+  it('downgrades a report when frozen data did not actually reach an AI module',()=>{
+    const evaluation=evaluateResearch(fixture())
+    const quality=buildReportQuality({evaluation,dataQuality:{status:'available'},inputCoverage:{market:{passed:false,coveragePct:0,issues:['ETF代表样本不足']}}})
+    expect(quality.usability).toBe('limited-advice')
+    expect(quality.blockers.join('')).toContain('实际进入模型的证据覆盖不足')
+  })
+
   it('reports numeric condition changes even when the state is unchanged', () => {
     const previous = evaluateResearch(fixture())
     const current = structuredClone(previous)
@@ -60,14 +89,29 @@ it('counts omitted missing fields in the quality denominator',()=>{
   expect(quality.blockers.some(item=>item.includes('仍计入质量覆盖率'))).toBe(true)
 })
 
-it('does not downgrade execution meaning after a trading-session snapshot is frozen',async()=>{
+it('marks a trading-session snapshot without fresh quotes as reference-only without hiding its research quality',async()=>{
   const { assessDecisionTiming }=await import('../decision-timing')
   const snapshot=fixture()
   const timing=assessDecisionTiming({asOf:'2026-09-04T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
   const quality=buildReportQuality({evaluation:evaluateResearch(snapshot),dataQuality:{status:'available'},decisionTiming:timing})
-  expect(timing.executionReady).toBe(true)
+  expect(timing).toMatchObject({executionReady:false,status:'reference-only',label:'仅供投资参考'})
   expect(quality.overallScore).toBeGreaterThanOrEqual(70)
-  expect(quality.usability).toBe('advice-grade')
+  expect(quality.usability).toBe('limited-advice')
+  expect(quality.executionReadinessScore).toBe(0)
+})
+
+it('preserves research quality while gating stale trading evidence',async()=>{
+  const { assessDecisionTiming }=await import('../decision-timing')
+  const snapshot=fixture()
+  const trading=assessDecisionTiming({asOf:'2026-09-04T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
+  const closed=assessDecisionTiming({asOf:'2026-09-05T06:30:00Z',calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
+  const evaluation=evaluateResearch(snapshot)
+  const tradingQuality=buildReportQuality({evaluation,dataQuality:{status:'available'},decisionTiming:trading})
+  const closedQuality=buildReportQuality({evaluation,dataQuality:{status:'available'},decisionTiming:closed})
+  expect(closed.label).toBe('非交易时段 · 最新收盘数据')
+  expect(closedQuality.overallScore).toBe(tradingQuality.overallScore)
+  expect(tradingQuality.usability).toBe('limited-advice')
+  expect(closedQuality.usability).toBe('advice-grade')
 })
 
 it('does not count a previous-session valuation as current evidence',()=>{
@@ -77,4 +121,43 @@ it('does not count a previous-session valuation as current evidence',()=>{
   expect(quality.dimensions.find(item=>item.key==='valuation')?.score).toBe(0)
   evaluation.products![0].valuationDate=evaluation.expectedSession
   expect(buildReportQuality({evaluation,dataQuality:{status:'available'}}).dimensions.find(item=>item.key==='valuation')?.score).toBe(100)
+})
+
+it('uses the latest completed session for intraday valuation and excludes unpublished same-day NAV',async()=>{
+  const { assessDecisionTiming }=await import('../decision-timing')
+  const snapshot=fixture()
+  snapshot.asOf='2026-09-04T06:30:00Z'
+  const timing=assessDecisionTiming({asOf:snapshot.asOf,calendar:snapshot.calendar,expectedTickers:['159995'],quotes:[]})
+  snapshot.decisionTiming=timing
+  snapshot.etfs[0].product.date=timing.closeDataSession
+  snapshot.etfs[0].product.navStatus='available'
+  snapshot.etfs[0].product.valuationDate=timing.closeDataSession
+  snapshot.etfs[0].product.bookPublishedAt=snapshot.asOf
+  const evaluation=evaluateResearch(snapshot)
+  expect(evaluation.decisions[0].conditions.find(item=>item.key==='premium')).toMatchObject({status:'unknown',availability:'pending-publication'})
+  const quality=buildReportQuality({evaluation,dataQuality:{status:'available'},decisionTiming:timing})
+  expect(quality.dimensions.find(item=>item.key==='valuation')).toMatchObject({score:100})
+  expect(quality.dimensions.find(item=>item.key==='product')).toMatchObject({score:100,detail:'3/3项当期产品交易条件可核验'})
+})
+
+it('cannot turn complete data into executable advice when contracts or account gates fail',async()=>{
+  const {applyExecutionQuality}=await import('../report-quality')
+  const quality=buildReportQuality({evaluation:evaluateResearch(fixture()),dataQuality:{status:'available'}})
+  const advice={productDecisions:[{heldAction:'减仓',executionContract:{status:'blocked',asOf:'2000-01-01T00:00:00Z',validUntil:'2099-01-01T00:00:00Z',triggerRules:[]}}]}
+  const gated=applyExecutionQuality(quality,JSON.stringify(advice),{actions:[{executable:false}]},{executionReady:true})
+  expect(gated.executionReadinessScore).toBe(0)
+  expect(gated.dataReadinessScore).toBe(quality.executionReadinessScore)
+  expect(gated.executionAudit).toMatchObject({products:1,verifiedProducts:0,executablePortfolioActions:0})
+  expect(gated.usability).toBe('limited-advice')
+  advice.productDecisions[0].executionContract.status='verified'
+  expect(applyExecutionQuality(quality,advice,{actions:[{executable:false}]},{executionReady:true}).executionReadinessScore).toBe(0)
+  expect(applyExecutionQuality(quality,advice,null,{executionReady:true}).executionReadinessScore).toBe(100)
+  expect(applyExecutionQuality(quality,advice,null,{executionReady:false}).executionReadinessScore).toBe(0)
+})
+
+it('does not count an expired product contract as ready inside a still-valid report',async()=>{
+  const {applyExecutionQuality}=await import('../report-quality')
+  const quality=buildReportQuality({evaluation:evaluateResearch(fixture()),dataQuality:{status:'available'}})
+  const advice={productDecisions:[{heldAction:'加仓',executionContract:{status:'verified',asOf:'2000-01-01T00:00:00Z',validUntil:'2000-01-02T00:00:00Z',triggerRules:[]}}]}
+  expect(applyExecutionQuality(quality,advice,null,{executionReady:true}).executionReadinessScore).toBe(0)
 })

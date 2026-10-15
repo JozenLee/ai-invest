@@ -230,3 +230,71 @@ async def test_empty_share_response_after_release_is_a_real_gap():
     result=await collect_research(provider,'etf_research','159995',expected_session='2026-09-07',as_of=datetime(2026,9,8,9,tzinfo=ZoneInfo('Asia/Shanghai')))
     assert 'shares' in result['failures']
     assert result.get('fieldStatus',{}).get('shares',{}).get('status')!='pending-publication'
+
+@pytest.mark.asyncio
+async def test_exact_date_repairs_interior_factor_holes_and_preserves_verified_cache():
+    from services.research_collection import repair_history_gaps
+    provider = AsyncMock()
+    provider.request_dataframe.return_value = pd.DataFrame([
+        {'ts_code': '159995.SZ', 'trade_date': '20260903', 'adj_factor': 2},
+        {'ts_code': 'WRONG.SZ', 'trade_date': '20260902', 'adj_factor': 99},
+    ])
+    data = {'factors': [{'ts_code': '159995.SZ', 'trade_date': '20260904', 'adj_factor': 2}]}
+    cached = {'factors': [{'ts_code': '159995.SZ', 'trade_date': '20260902', 'adj_factor': 2}]}
+    result = await repair_history_gaps(provider, data, '159995.SZ', ['2026-09-02','2026-09-03','2026-09-04'], cached, max_requests=1)
+    assert result['fields']['factors']['status'] == 'available'
+    assert len(data['factors']) == 3
+    assert provider.request_dataframe.call_args.kwargs['start_date'] == '20260903'
+    assert provider.request_dataframe.call_args.kwargs['end_date'] == '20260903'
+
+@pytest.mark.asyncio
+async def test_history_repair_does_not_fill_wrong_date_or_instrument_and_obeys_budget():
+    from services.research_collection import repair_history_gaps
+    provider = AsyncMock()
+    provider.request_dataframe.return_value = pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260901','adj_factor':1}])
+    data = {'factors': []}
+    result = await repair_history_gaps(provider, data, '159995.SZ', ['2026-09-03','2026-09-04'], max_requests=1)
+    assert result['requests'] == 1
+    assert result['fields']['factors']['missingDates'] == ['20260903','20260904']
+    assert data['factors'] == []
+
+@pytest.mark.asyncio
+async def test_history_repair_falls_back_only_to_verified_exact_date_rows():
+    from services.research_collection import repair_history_gaps
+    provider = AsyncMock()
+    async def request(api, **params):
+        if 'start_date' in params:
+            raise RuntimeError('HTTP 503')
+        return pd.DataFrame([{'ts_code':'159995.SZ','trade_date':'20260904','adj_factor':2}])
+    provider.request_dataframe.side_effect = request
+    data = {'factors': []}
+    result = await repair_history_gaps(provider,data,'159995.SZ',['2026-09-04'],max_requests=2)
+    assert result['requests'] == 2
+    assert result['fields']['factors']['status'] == 'available'
+    assert data['factors'][0]['adj_factor'] == 2
+
+@pytest.mark.asyncio
+async def test_empty_calendar_does_not_erase_history_or_invent_dates():
+    from services.research_collection import repair_history_gaps
+    provider = AsyncMock()
+    data = {'factors':[{'ts_code':'159995.SZ','trade_date':'20260904','adj_factor':2}]}
+    result = await repair_history_gaps(provider,data,'159995.SZ',[])
+    assert result['requests'] == 0
+    assert len(data['factors']) == 1
+    provider.request_dataframe.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_fee_collection_uses_fund_basic_and_checks_instrument():
+    provider = AsyncMock()
+    async def request(api, **params):
+        if api == 'fund_basic':
+            assert params['fields'] == 'ts_code,m_fee,c_fee'
+            return pd.DataFrame([{'ts_code':'159995.SZ','m_fee':0.15,'c_fee':0.05}, {'ts_code':'510300.SH','m_fee':0.5}])
+        if api == 'etf_basic':
+            return pd.DataFrame([{'ts_code':'159995.SZ','index_code':'980017.SZ'}])
+        raise ValueError('not provided')
+    provider.request_dataframe.side_effect = request
+    result = await collect_research(provider, 'etf_research', '159995')
+    assert result['data']['fees'] == [{'ts_code':'159995.SZ','m_fee':0.15,'c_fee':0.05}]
+    assert result['sources']['fees'] == 'Tushare/fund_basic'
+    assert 'fees' not in result['failures']

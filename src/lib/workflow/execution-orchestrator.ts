@@ -2,8 +2,10 @@
 import { prisma } from '@/lib/db'
 import { createHash } from 'node:crypto'
 import type { StepDefinition, StepContext, WorkflowDefinition, WorkflowNodeConfig } from './types'
-import {executionWaves} from './execution-waves'
+import {executionWaves,settleExecutionWave} from './execution-waves'
 import { validateArtifactValue } from './artifact-contracts'
+import { buildWorkflowResultSummary, WORKFLOW_RESULT_ARTIFACT_KEYS } from './result-summary'
+import { withDatabaseBusyRetry } from '@/lib/db/retry'
 
 type InputRevision = { portId:string; artifactKey:string; revisionId:string; contentHash:string; value:unknown }
 
@@ -66,7 +68,7 @@ export class ExecutionOrchestrator {
 
     try {
       await this.applyConditionalSteps(runId)
-      for(const wave of executionWaves(this.steps))await Promise.all(wave.map(step=>this.executeStep(runId,step.name)))
+      for(const wave of executionWaves(this.steps))await settleExecutionWave(wave,step=>this.executeStep(runId,step.name))
 
       await this.updateRunStatus(runId, 'COMPLETED')
     } catch (error) {
@@ -96,13 +98,13 @@ export class ExecutionOrchestrator {
     const inputRevisions=await this.loadInputRevisions(runId,stepName)
     const attemptNumber=await prisma.executionAttempt.count({where:{stepId:stepRecord.id}})+1
     const inputHash=createHash('sha256').update(inputRevisions.map(item=>`${item.portId}:${item.contentHash}`).sort().join('|')).digest('hex')
-    const attempt=await prisma.executionAttempt.create({data:{stepId:stepRecord.id,attemptNumber,status:'RUNNING',methodId:stepRecord.methodId,methodVersion:stepRecord.methodVersion,configSnapshot:stepRecord.configSnapshot,inputHash}})
-
-    // 更新状态为运行中
-    await prisma.executionStep.update({
-      where: { id: stepRecord.id },
-      data: { status: 'RUNNING', startedAt: new Date(), completedAt: null, error: null }
-    })
+    // Attempt and node state must change together; otherwise a lock error between
+    // the two writes leaves an orphan RUNNING attempt or an untracked node.
+    const attempt=await withDatabaseBusyRetry(()=>prisma.$transaction(async tx=>{
+      const created=await tx.executionAttempt.create({data:{stepId:stepRecord.id,attemptNumber,status:'RUNNING',methodId:stepRecord.methodId,methodVersion:stepRecord.methodVersion,configSnapshot:stepRecord.configSnapshot,inputHash}})
+      await tx.executionStep.update({where:{id:stepRecord.id},data:{status:'RUNNING',startedAt:new Date(),completedAt:null,duration:null,error:null}})
+      return created
+    },{maxWait:30_000,timeout:30_000}))
 
     const startTime = Date.now()
 
@@ -114,16 +116,17 @@ export class ExecutionOrchestrator {
       const context: StepContext = {
         runId,
         stepId: stepRecord.id,
+        attemptNumber,
         input: await this.loadInput(runId),
         inputs:new Map(inputRevisions.flatMap(item=>[[item.portId,item.value],[item.artifactKey,item.value]])),
         artifacts,
         updateProgress: async (current, total, message) => {
-          await prisma.executionStep.update({
+          await withDatabaseBusyRetry(()=>prisma.executionStep.update({
             where: { id: stepRecord.id },
             data: {
               progress: JSON.stringify({ current, total, message })
             }
-          })
+          }))
         },
         saveArtifact: async (key, data, type: 'REFERENCE' | 'DATA' | 'FILE' = 'DATA') => {
           await this.saveArtifact(stepRecord.id, key, data, type,attempt.id,stepName,inputRevisions)
@@ -144,26 +147,18 @@ export class ExecutionOrchestrator {
 
       // 标记完成
       const duration = Date.now() - startTime
-      await prisma.executionStep.update({
-        where: { id: stepRecord.id },
-        data: {
-          status: 'COMPLETED',
-          completedAt: new Date(),
-          duration
-        }
-      })
       const outputRevisions=await prisma.artifactRevision.findMany({where:{attemptId:attempt.id},select:{contentHash:true}})
-      await prisma.executionAttempt.update({where:{id:attempt.id},data:{status:'COMPLETED',completedAt:new Date(),duration,outputHash:createHash('sha256').update(outputRevisions.map(item=>item.contentHash).sort().join('|')).digest('hex')}})
+      const completedAt=new Date(),outputHash=createHash('sha256').update(outputRevisions.map(item=>item.contentHash).sort().join('|')).digest('hex')
+      await withDatabaseBusyRetry(()=>prisma.$transaction([
+        prisma.executionStep.update({where:{id:stepRecord.id},data:{status:'COMPLETED',completedAt,duration}}),
+        prisma.executionAttempt.update({where:{id:attempt.id},data:{status:'COMPLETED',completedAt,duration,outputHash}}),
+      ]))
     } catch (error) {
-      await prisma.executionStep.update({
-        where: { id: stepRecord.id },
-        data: {
-          status: 'FAILED',
-          error: String(error),
-          completedAt: new Date()
-        }
-      })
-      await prisma.executionAttempt.update({where:{id:attempt.id},data:{status:'FAILED',error:String(error),completedAt:new Date(),duration:Date.now()-startTime}})
+      const duration=Date.now()-startTime,completedAt=new Date(),message=String(error)
+      await withDatabaseBusyRetry(()=>prisma.$transaction([
+        prisma.executionStep.update({where:{id:stepRecord.id},data:{status:'FAILED',error:message,completedAt,duration}}),
+        prisma.executionAttempt.update({where:{id:attempt.id},data:{status:'FAILED',error:message,completedAt,duration}}),
+      ]))
       throw error
     }
   }
@@ -278,7 +273,7 @@ export class ExecutionOrchestrator {
     if (this.workflowId === 'comprehensive-analysis') {
       const input=await this.loadInput(runId)
       if(input.rulesOnly){
-        const optional=['market-analysis','news-analysis','company-analysis','portfolio-analysis','industry-overview','investment-advice','social-report']
+        const optional=['market-analysis','news-analysis','company-analysis','portfolio-analysis','industry-overview','social-report']
         const steps=await prisma.executionStep.findMany({where:{runId,stepName:{in:optional},status:'PENDING'}})
         for(const step of steps){
           const attemptNumber=await prisma.executionAttempt.count({where:{stepId:step.id}})+1
@@ -413,26 +408,34 @@ export class ExecutionOrchestrator {
     const outputPort=this.definition?.nodes.find(node=>node.id===stepName)?.outputs.find(port=>port.artifactKey===key)
     if(outputPort){const validation=validateArtifactValue(outputPort.schemaId,data,{nullable:data==null});if(!validation.valid)throw new Error(`输出契约校验失败：${stepName}.${outputPort.id}：${validation.error}`)}
 
-    await prisma.stepArtifact.upsert({
-      where: { stepId_artifactKey: { stepId, artifactKey: key } },
-      create: {
-        stepId,
-        artifactKey: key,
-        artifactType: type,
-        dataType: 'JSON',
-        data: serialized,
-        size
-      },
-      update: {
-        data: serialized,
-        size
+    const contentHash=createHash('sha256').update(serialized).digest('hex')
+    // One artifact is one persistence unit. Parallel workflow nodes may finish at
+    // the same time, while the Python collector also writes to this SQLite file.
+    // Keeping the current value, immutable revision and lineage in one retried
+    // transaction prevents half-written artifacts and transient lock failures.
+    await withDatabaseBusyRetry(()=>prisma.$transaction(async tx=>{
+      await tx.stepArtifact.upsert({
+        where: { stepId_artifactKey: { stepId, artifactKey: key } },
+        create: {
+          stepId,
+          artifactKey: key,
+          artifactType: type,
+          dataType: 'JSON',
+          data: serialized,
+          size
+        },
+        update: {
+          artifactType: type,
+          data: serialized,
+          size
+        }
+      })
+      const revision=await tx.artifactRevision.create({data:{stepId,attemptId,artifactKey:key,artifactType:type,dataType:'JSON',data:serialized,size,schemaId:outputPort?.schemaId||key,schemaVersion:outputPort?.schemaVersion||1,contentHash,sourceAsOf:this.sourceAsOf(data),confidentiality:outputPort?.confidentiality||'public',qualityStatus:this.qualityStatus(data)}})
+      for(const source of inputRevisions){
+        const lineage={sourceRevisionId:source.revisionId,targetRevisionId:revision.id,sourcePort:source.portId,targetPort:outputPort?.id||key}
+        await tx.artifactLineage.upsert({where:{sourceRevisionId_targetRevisionId_sourcePort_targetPort:lineage},create:lineage,update:{}})
       }
-    })
-    const revision=await prisma.artifactRevision.create({data:{stepId,attemptId,artifactKey:key,artifactType:type,dataType:'JSON',data:serialized,size,schemaId:outputPort?.schemaId||key,schemaVersion:outputPort?.schemaVersion||1,contentHash:createHash('sha256').update(serialized).digest('hex'),sourceAsOf:this.sourceAsOf(data),confidentiality:outputPort?.confidentiality||'public',qualityStatus:this.qualityStatus(data)}})
-    for(const source of inputRevisions){
-      const data={sourceRevisionId:source.revisionId,targetRevisionId:revision.id,sourcePort:source.portId,targetPort:outputPort?.id||key}
-      await prisma.artifactLineage.upsert({where:{sourceRevisionId_targetRevisionId_sourcePort_targetPort:data},create:data,update:{}})
-    }
+    },{maxWait:30_000,timeout:30_000}))
   }
 
   private qualityStatus(data:any){
@@ -472,7 +475,7 @@ export class ExecutionOrchestrator {
     status: string,
     error?: string
   ): Promise<void> {
-    await prisma.executionRun.update({
+    await withDatabaseBusyRetry(()=>prisma.executionRun.update({
       where: { id: runId },
       data: {
         status,
@@ -480,7 +483,7 @@ export class ExecutionOrchestrator {
         completedAt:
           status === 'COMPLETED' || status === 'FAILED' ? new Date() : undefined
       }
-    })
+    }))
   }
 
   private async cleanupOldRuns(): Promise<void> {
@@ -510,7 +513,7 @@ export class ExecutionOrchestrator {
           orderBy: { stepIndex: 'asc' },
           include: {
             artifacts: {
-              ...(compact ? {where:{artifactKey:{in:['report-id','data-quality','research-evaluation','market-analysis','news-analysis','company-analysis','industry-overview','investment-advice','social-report-status']}}} : {}),
+              ...(compact ? {where:{artifactKey:{in:['report-id','data-quality','research-evaluation','market-analysis','news-analysis','company-analysis','industry-overview','investment-advice','unified-allocation','unified-decision-version','auto-reanalysis','pipeline-health','social-report-status']}}} : {}),
               select: {
                 artifactKey: true,
                 artifactType: true,
@@ -569,6 +572,12 @@ export class ExecutionOrchestrator {
     if(!this.definition)throw new Error('该工作流没有拓扑定义')
     const run=await prisma.executionRun.findUnique({where:{id:runId},include:{steps:{orderBy:{stepIndex:'asc'},include:{artifacts:{select:{artifactKey:true,artifactType:true,size:true,createdAt:true}},attempts:{orderBy:{attemptNumber:'desc'},take:1},revisions:{orderBy:{createdAt:'desc'},select:{id:true,artifactKey:true,contentHash:true,schemaId:true,schemaVersion:true,sourceAsOf:true,confidentiality:true,qualityStatus:true,createdAt:true}}}}}})
     if(!run)return null
+    const resultArtifacts=await prisma.stepArtifact.findMany({where:{step:{runId},artifactKey:{in:[...WORKFLOW_RESULT_ARTIFACT_KEYS]}},select:{artifactKey:true,data:true,step:{select:{stepName:true}}}})
+    const artifactsByStep=new Map<string,Array<{artifactKey:string;data:string|null}>>()
+    for(const artifact of resultArtifacts)artifactsByStep.set(artifact.step.stepName,[...(artifactsByStep.get(artifact.step.stepName)||[]),artifact])
+    // Older runs did not persist a compact company-data summary. Reuse the small
+    // downstream coverage object without loading the multi-megabyte company artifact.
+    const companyQuality=resultArtifacts.find(artifact=>artifact.artifactKey==='data-quality')
     const definition=run.definitionSnapshot?JSON.parse(run.definitionSnapshot) as WorkflowDefinition:this.definition
     return {
       id:run.id,status:run.status,startedAt:run.startedAt,completedAt:run.completedAt,error:run.error,
@@ -579,7 +588,9 @@ export class ExecutionOrchestrator {
         const step=run.steps.find(candidate=>candidate.stepName===node.id)
         const revisions=new Map<string, any>()
         for(const revision of step?.revisions||[])if(!revisions.has(revision.artifactKey))revisions.set(revision.artifactKey,revision)
-        return {...node,execution:step?{stepId:step.id,status:step.status,startedAt:step.startedAt,completedAt:step.completedAt,duration:step.duration,error:step.error,progress:step.progress?JSON.parse(step.progress):null,methodId:step.methodId,methodVersion:step.methodVersion,config:step.configSnapshot?JSON.parse(step.configSnapshot):null,attempt:step.attempts[0]||null,artifacts:step.artifacts.map(artifact=>({...artifact,revision:revisions.get(artifact.artifactKey)||null}))}:null}
+        const progress=step?.progress?JSON.parse(step.progress):null
+        const summaryArtifacts=[...(artifactsByStep.get(node.id)||[]),...(node.id==='fetch-company-data'&&companyQuality?[companyQuality]:[])]
+        return {...node,execution:step?{stepId:step.id,status:step.status,startedAt:step.startedAt,completedAt:step.completedAt,duration:step.duration,error:step.error,progress,methodId:step.methodId,methodVersion:step.methodVersion,config:step.configSnapshot?JSON.parse(step.configSnapshot):null,attempt:step.attempts[0]||null,result:buildWorkflowResultSummary(node.id,summaryArtifacts,progress?.message,{stepStatus:step.status,error:step.error,methodId:step.methodId}),artifacts:step.artifacts.map(artifact=>({...artifact,revision:revisions.get(artifact.artifactKey)||null}))}:null}
       }),
       edges:definition.edges.map(edge=>{
         const source=run.steps.find(step=>step.stepName===edge.sourceNodeId)

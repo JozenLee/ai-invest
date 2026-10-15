@@ -7,7 +7,7 @@ import type { StepDefinition } from '../types'
 export const fetchETFHoldingsStep: StepDefinition = {
   name: 'fetch-etf-holdings',
   description: '获取ETF持仓明细',
-  dependencies: ['fetch-etf-data'],
+  dependencies: ['fetch-etfs'],
   estimatedDuration: 15000,
 
   async execute(context) {

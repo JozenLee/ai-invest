@@ -15,6 +15,8 @@ export function PublishScheduleDialog({ industries, accounts }: { industries: Ar
   const [runs, setRuns] = useState<Array<{ id: string; slot: string; status: string; runId?: string; error?: string }>>([])
   useEffect(() => {
     if (!open) return
+    // Opening the dialog intentionally resets the previous request state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoaded(false); setError('')
     void fetch('/api/data-subscriptions/industries').then(res => res.json()).then(payload => { if (payload.success) setAvailableIndustries(payload.data) }).catch(() => setError('产业列表读取失败，请刷新后重试'))
     void fetch('/api/publish/schedule').then(async res => { const payload = await res.json(); if (!res.ok) throw new Error(payload.error); setDraft(payload.data); setTimes(payload.data.times.join(', ')); setTags(payload.data.tags.join(', ')); setRuns(payload.runs); setLoaded(true) }).catch(error => setError(String(error)))
@@ -28,7 +30,7 @@ export function PublishScheduleDialog({ industries, accounts }: { industries: Ar
     } catch (error) { setError(String(error)) } finally { setBusy(false) }
   }
   const statuses: Record<string,string> = { queued: '待执行', generating: '生成报告中', publishing: '发布中', published: '已发布', needs_review: '需人工核查', failed: '失败', cancelled: '已取消' }
-  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger render={<Button variant="outline" />}><CalendarClock className="mr-2 size-4" />定时发布计划</DialogTrigger><DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>自动生成与发布</DialogTitle><DialogDescription>按北京时间每天执行；到点开始综合分析，完成后发布。电脑和数据服务须保持运行，错过超过5分钟不补发。仅使用公开研究数据，不包含个人持仓。</DialogDescription></DialogHeader><div className="space-y-4">
+  return <Dialog open={open} onOpenChange={setOpen}><DialogTrigger render={<Button variant="outline" />}><CalendarClock className="mr-2 size-4" />定时发布计划</DialogTrigger><DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl"><DialogHeader><DialogTitle>自动生成与发布</DialogTitle><DialogDescription>按北京时间每天执行；到点后并行生成所选产业报告，输出 n 张产业结论图和 1 张 AI 融合报告后自动发布。电脑和数据服务须保持运行，仅使用公开研究数据。</DialogDescription></DialogHeader><div className="space-y-4">
     <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={draft.enabled} onChange={e => setDraft({ ...draft, enabled: e.target.checked })} />启用自动发布</label>
     <label className="block space-y-2"><span>每日开始时间（逗号分隔）</span><Input value={times} onChange={e => setTimes(e.target.value)} /></label>
     <fieldset className="rounded-lg border p-3"><legend className="px-1 text-sm">产业（可多选）</legend><div className="grid grid-cols-2 gap-2">{availableIndustries.map(industry => <label key={industry.id} className="flex min-h-11 items-center gap-2 text-sm"><input type="checkbox" checked={draft.industryIds.includes(industry.id)} onChange={e => setDraft({ ...draft, industryIds: e.target.checked ? [...draft.industryIds, industry.id] : draft.industryIds.filter(id => id !== industry.id) })} />{industry.name}</label>)}</div></fieldset>
@@ -37,6 +39,6 @@ export function PublishScheduleDialog({ industries, accounts }: { industries: Ar
     <label className="block space-y-2"><span>话题（逗号分隔）</span><Input value={tags} onChange={e => setTags(e.target.value)} /></label>
     <label className="flex min-h-11 items-center gap-2"><input type="checkbox" checked={draft.isOriginal} onChange={e => setDraft({ ...draft, isOriginal: e.target.checked })} />声明原创</label>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}<Button className="w-full" disabled={busy || !loaded} onClick={() => void save()}>{busy ? '保存中…' : '保存计划'}</Button>
-    {runs.length > 0 && <div className="space-y-2 border-t pt-3"><h3 className="text-sm font-medium">最近执行</h3>{runs.map(run => <div key={run.id} className="rounded border p-2 text-xs"><p>{run.slot} · {statuses[run.status] || run.status}</p>{run.runId && <Link className="text-primary underline" href={'/comprehensive-analysis?runId=' + run.runId}>查看完整流程与报告</Link>}{run.error && <p className="break-words text-destructive">{run.error}</p>}</div>)}</div>}
+    {runs.length > 0 && <div className="space-y-2 border-t pt-3"><h3 className="text-sm font-medium">最近执行</h3>{runs.map(run => {let firstRun=run.runId||'';try{const values=JSON.parse(firstRun);if(Array.isArray(values))firstRun=values[0]||''}catch{/* 兼容单产业历史记录 */}return <div key={run.id} className="rounded border p-2 text-xs"><p>{run.slot} · {statuses[run.status] || run.status}</p>{firstRun && <Link className="text-primary underline" href={'/comprehensive-analysis?runId=' + firstRun}>查看分析流程</Link>}{run.error && <p className="break-words text-destructive">{run.error}</p>}</div>})}</div>}
   </div></DialogContent></Dialog>
 }

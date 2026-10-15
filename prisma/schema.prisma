@@ -103,9 +103,12 @@ model Holding {
   targetIndexCode          String? // 基金跟踪指数代码
   mappingSource            String? // manual/provider/name-inference/domain-proxy
   mappingConfidence        Float? // 底层产品映射置信度 0-1
+  mappingEvidence          String? // JSON: 产品身份、目标ETF/指数及来源证据
+  firstObservedAt          DateTime? // 连续持仓最早可观测时点（非申购日）
   purchaseDate             DateTime? // 用于估算赎回费档位
   costNav                  Float? // 用户持仓成本净值
   redemptionFeePct         Float? // 当前持有期适用的赎回费率（%）
+  redemptionFeeSource      String? // manual/provider-observed-floor
   quantity                 Float // 持有份额（基金可能包含小数份额）
   unitNav                  Float // 邮箱资产证明中的单位净值
   updatedAt                DateTime  @updatedAt

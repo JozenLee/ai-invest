@@ -15,6 +15,8 @@ async def test_index_spot_uses_rt_k_during_trading():
     async def call_api(api, **params):
         assert api == "rt_k"
         assert params["ts_code"] == "000001.SH"
+        assert params["_busy_retries"] == 0
+        assert params["_timeout_seconds"] == 8
         return pd.DataFrame([{
             "last": 3912.34,
             "pre_close": 3905.20,
@@ -26,7 +28,7 @@ async def test_index_spot_uses_rt_k_during_trading():
 
     provider._call_api = AsyncMock(side_effect=call_api)
 
-    with patch("providers.tushare_provider.is_trading_hours", return_value=True):
+    with patch("providers.tushare_provider.should_use_current_session_quotes", return_value=True):
         result = await provider.get_index_spot()
 
     assert not result.empty
@@ -52,7 +54,7 @@ async def test_index_spot_uses_daily_only_outside_trading():
 
     provider._call_api = AsyncMock(side_effect=call_api)
 
-    with patch("providers.tushare_provider.is_trading_hours", return_value=False):
+    with patch("providers.tushare_provider.should_use_current_session_quotes", return_value=False):
         result = await provider.get_index_spot()
 
     assert not result.empty
@@ -94,7 +96,7 @@ async def test_stock_spot_skips_rt_k_outside_trading_hours():
         return pd.DataFrame([{"trade_date": "20260821", "close": 10, "pct_chg": 1}])
 
     provider._call_api = AsyncMock(side_effect=call_api)
-    with patch("providers.tushare_provider.is_trading_hours", return_value=False):
+    with patch("providers.tushare_provider.should_use_current_session_quotes", return_value=False):
         result = await provider.get_stock_spot(["300502"])
 
     assert len(result) == 1
@@ -112,11 +114,28 @@ async def test_etf_spot_uses_fund_daily_outside_trading_hours():
         return pd.DataFrame([{"trade_date": "20260821", "close": 1.2, "pct_chg": 0.5}])
 
     provider._call_api = AsyncMock(side_effect=call_api)
-    with patch("providers.tushare_provider.is_trading_hours", return_value=False):
+    with patch("providers.tushare_provider.should_use_current_session_quotes", return_value=False):
         result = await provider.get_etf_realtime(["159738"])
 
     assert len(result) == 1
     assert provider._call_api.await_args_list[0].args[0] == "fund_daily"
+
+
+@pytest.mark.asyncio
+async def test_etf_spot_uses_bounded_rt_k_for_current_session():
+    provider = TushareProvider(token="test")
+    provider._api_url = "http://tushare.test"
+    provider._api_key = "test"
+    provider._call_api = AsyncMock(return_value=pd.DataFrame([{"last": 1.2, "pre_close": 1.1}]))
+
+    with patch("providers.tushare_provider.should_use_current_session_quotes", return_value=True):
+        result = await provider.get_etf_realtime(["159738"])
+
+    assert len(result) == 1
+    call = provider._call_api.await_args
+    assert call.args[0] == "rt_k"
+    assert call.kwargs["_busy_retries"] == 0
+    assert call.kwargs["_timeout_seconds"] == 8
 
 
 def test_tushare_provider_keeps_rest_for_auto_when_legacy_sdk_config_exists(monkeypatch):
@@ -210,3 +229,85 @@ async def test_etf_scale_uses_tushare_fund_share():
     assert result["shares"] == 1200
     provider.request_dataframe.assert_awaited_once()
     assert provider.request_dataframe.await_args.args[0] == "fund_share"
+
+
+def test_tushare_rate_limits_are_isolated_per_api(monkeypatch):
+    import providers.tushare_provider as module
+    module._TUSHARE_API_SEMAPHORES.clear()
+    module._TUSHARE_API_NEXT_REQUEST_AT.clear()
+    monkeypatch.setenv('TUSHARE_MAX_CONCURRENCY', '1')
+    assert module._tushare_api_semaphore('rt_k') is module._tushare_api_semaphore('rt_k')
+    assert module._tushare_api_semaphore('rt_k') is not module._tushare_api_semaphore('fund_daily')
+
+
+@pytest.mark.asyncio
+async def test_tushare_rest_closes_every_response_including_retries(monkeypatch):
+    import providers.tushare_provider as module
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.headers = {}
+            self.payload = payload or []
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f'HTTP {self.status_code}')
+
+        def json(self):
+            return self.payload
+
+    busy = FakeResponse(503)
+    success = FakeResponse(200, [{'trade_date': '20260917', 'close': 1.2}])
+    responses = iter([busy, success])
+    monkeypatch.setattr(module.requests, 'get', lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setenv('TUSHARE_BUSY_RETRIES', '1')
+    monkeypatch.setenv('TUSHARE_MIN_INTERVAL_SECONDS', '0')
+    monkeypatch.setenv('TUSHARE_GLOBAL_MIN_INTERVAL_SECONDS', '0')
+    monkeypatch.setattr(module.time, 'sleep', lambda _seconds: None)
+    provider = TushareProvider(token='test')
+    provider._api_url = 'https://promax.example/tushare/pro'
+    provider._api_key = 'test'
+
+    frame = await provider.request_dataframe('fund_daily', ts_code='159995.SZ')
+
+    assert not frame.empty
+    assert busy.closed is True
+    assert success.closed is True
+
+
+def test_tushare_rate_pacing_is_isolated_per_api(monkeypatch):
+    import providers.tushare_provider as module
+    module._TUSHARE_API_NEXT_REQUEST_AT.clear()
+    monkeypatch.setenv('TUSHARE_MIN_INTERVAL_SECONDS', '1')
+    sleeps = []
+    monkeypatch.setattr(module.time, 'monotonic', Mock(side_effect=[10.0, 10.0, 10.0]))
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: sleeps.append(seconds))
+    module._wait_for_tushare_api_slot('rt_k')
+    module._wait_for_tushare_api_slot('fund_daily')
+    module._wait_for_tushare_api_slot('rt_k')
+    assert sleeps == [1.0]
+
+
+def test_tushare_global_rate_limit_is_shared_by_all_apis(monkeypatch):
+    import providers.tushare_provider as module
+    module._TUSHARE_GLOBAL_SEMAPHORE = None
+    module._TUSHARE_GLOBAL_SEMAPHORE_LIMIT = None
+    module._TUSHARE_GLOBAL_NEXT_REQUEST_AT = 0.0
+    monkeypatch.setenv('TUSHARE_GLOBAL_MAX_CONCURRENCY', '1')
+    monkeypatch.setenv('TUSHARE_GLOBAL_MIN_INTERVAL_SECONDS', '1')
+    semaphore = module._tushare_global_semaphore()
+    assert semaphore is module._tushare_global_semaphore()
+    sleeps = []
+    monkeypatch.setattr(module.time, 'monotonic', Mock(side_effect=[10.0, 10.0]))
+    monkeypatch.setattr(module.time, 'sleep', lambda seconds: sleeps.append(seconds))
+    module._wait_for_tushare_global_slot()
+    module._wait_for_tushare_global_slot()
+    assert sleeps == [1.0]

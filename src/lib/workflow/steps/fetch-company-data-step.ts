@@ -3,9 +3,9 @@ import { freshEvidence, financialRatios } from '@/lib/analysis/evidence'
 import { financialView, announcementView, marketDetail } from '@/lib/market-detail'
 import type { StepDefinition } from '../types'
 export const fetchCompanyDataStep: StepDefinition = {
-  name: 'fetch-company-data', description: '读取企业行情、财报与公告证据', dependencies: ['fetch-companies'], estimatedDuration: 1000,
+  name: 'fetch-company-data', description: '读取企业行情、财报与公告证据', dependencies: ['fetch-companies', 'freeze-research'], estimatedDuration: 1000,
   async execute(context) {
-    const companies = (context.artifacts.get('companies') || []) as any[]
+    const companies = (context.artifacts.get('companies') || []) as Array<Record<string, unknown> & { stockCode: string }>
     const data = await Promise.all(companies.map(async (company) => {
       const code = company.stockCode
       const [daily, quote, financials, announcements] = await Promise.all([
@@ -22,6 +22,14 @@ export const fetchCompanyDataStep: StepDefinition = {
         announcements: announcements.filter(row => row.title.trim() && freshEvidence(row.publishDate, 90)).map(announcementView), quality: { source: 'subscription-database', historyPoints: detail.history.length, hasFinancials: financials.length > 0, hasAnnouncements: announcements.length > 0 } }
     }))
     await context.saveArtifact('company-market-data', data, 'DATA')
+    await context.saveArtifact('company-data-summary', {
+      total: data.length,
+      quotes: data.filter(row => row.marketData).length,
+      financials: data.filter(row => row.financials.length).length,
+      profitGrowth: data.filter(row => typeof (row as Record<string, unknown>).profitGrowthPct === 'number').length,
+      cashQuality: data.filter(row => typeof (row as Record<string, unknown>).cashConversionPct === 'number' || row.financials.some((report: { calculated?: { operatingCashToProfitPct?: number | null } }) => typeof report.calculated?.operatingCashToProfitPct === 'number')).length,
+      announcements: data.filter(row => row.announcements.length).length,
+    }, 'DATA')
     await context.updateProgress(1, 1, '企业订阅证据读取完成')
   }
 }

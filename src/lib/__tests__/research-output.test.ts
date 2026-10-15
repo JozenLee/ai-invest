@@ -15,7 +15,7 @@ describe('research output validation',()=>{
     expect(()=>validateResearchOutput(raw,'investment-advice')).toThrow(/executiveSummary/)
   })
   it('flags legacy conclusions that omit opportunity and action modules',()=>{
-    const raw=JSON.stringify({rating:'谨慎',executiveSummary:{conclusion:'谨慎',allocationStance:'低配',keyDrivers:[],mainRisks:[],actionPlan:{unheld:'观望',held:'持有'},reviewTriggers:[]},tacticalView:{},strategicView:{},thesis:'产业观点',etfImplications:[],scenarios:{},counterEvidence:[],risks:[],watchlist:[]})
+    const raw=JSON.stringify({rating:'谨慎',executiveSummary:{conclusion:'谨慎',allocationStance:'低配',keyDrivers:[],mainRisks:[],actionPlan:{unheld:'观望',held:'持有'},reviewTriggers:[]},recommendation:{unheld:'观望',held:'持有',reason:'证据不足'},productDecisions:[],tacticalView:{},strategicView:{},thesis:'产业观点',etfImplications:[],scenarios:{},counterEvidence:[],risks:[],watchlist:[]})
     const result=validateResearchOutput(raw,'investment-advice')
     expect(result.issues.join('')).toContain('opportunities')
     expect(result.issues.join('')).toContain('priority')

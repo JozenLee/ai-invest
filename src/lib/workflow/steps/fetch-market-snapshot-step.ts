@@ -2,7 +2,7 @@ import { readStoredOverview, readStoredCapitalFlow, readMarketDataset } from '@/
 import type { StepDefinition } from '../types'
 import { summarizeMarketReference } from '@/lib/analysis/evidence'
 export const fetchMarketSnapshotStep: StepDefinition = {
-  name: 'fetch-market-snapshot', description: '读取订阅市场快照与来源', dependencies: [], estimatedDuration: 1000,
+  name: 'fetch-market-snapshot', description: '读取订阅市场快照与来源', dependencies: ['freeze-research'], estimatedDuration: 1000,
   async execute(context) {
     const [overview, capitalFlow] = await Promise.all([readStoredOverview(), readStoredCapitalFlow()])
     const reference = { mainFlow: await readMarketDataset('market_main_flow'), margin: await readMarketDataset('margin_balance') }

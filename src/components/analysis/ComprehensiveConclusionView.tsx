@@ -46,7 +46,7 @@ function ListModule({ title, icon: Icon, items, empty, tone = 'default' }: { tit
   </section>
 }
 
-export function ComprehensiveConclusionView({ advice, fallbackSummary, industryOutlook, decisionSummary }: { advice: unknown; fallbackSummary: string; industryOutlook?: unknown; decisionSummary: string }) {
+export function ComprehensiveConclusionView({ advice, fallbackSummary, industryOutlook, decisionSummary, executionAvailable=false }: { advice: unknown; fallbackSummary: string; industryOutlook?: unknown; decisionSummary: string;executionAvailable?:boolean }) {
   const raw = record(advice)
   const conclusion = normalizeExecutiveConclusion(raw, fallbackSummary)
   const recommendation = record(raw.recommendation)
@@ -55,10 +55,10 @@ export function ComprehensiveConclusionView({ advice, fallbackSummary, industryO
   const scenarios = record(raw.scenarios)
   const bull = record(scenarios.bull)
   const opportunities = conclusion.opportunities.length ? conclusion.opportunities : text(bull.conditions) ? [{ title: '乐观情景的机会条件', status: '待观察', evidence: text(bull.conditions), actionImplication: '条件兑现后，再结合产品规则与风险预算复核操作。' }] : []
-  const unheld = conclusion.actionPlan.unheld || text(recommendation.unheld, '观望')
-  const held = conclusion.actionPlan.held || text(recommendation.held, '按风险预算复核')
+  const unheld = executionAvailable?(conclusion.actionPlan.unheld || text(recommendation.unheld, '观望')):'暂无有效建议'
+  const held = executionAvailable?(conclusion.actionPlan.held || text(recommendation.held, '按风险预算复核')):'暂无有效建议'
   const stance = conclusion.allocationStance || text(recommendation.reason, '维持当前风险预算。')
-  const priority = conclusion.actionPlan.priority || text(recommendation.reason, '等待关键条件确认后复核。')
+  const priority = executionAvailable?(conclusion.actionPlan.priority || text(recommendation.reason, '等待关键条件确认后复核。')):'更新证据与持仓，查看最新每日执行清单。'
 
   return <div className="mt-5 space-y-4">
     <section className="overflow-hidden rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-primary/[0.025] to-transparent">

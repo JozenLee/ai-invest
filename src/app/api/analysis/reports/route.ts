@@ -1,3 +1,4 @@
+import { applyExecutionQuality } from '@/lib/analysis/report-quality'
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { normalizeComprehensiveReportContent } from '@/lib/analysis/report-content'
@@ -32,8 +33,9 @@ function serializeReport(report: {
   createdAt: Date
 }) {
   const data = parseData(report.dataJson)
-  const timing=data?.decisionTiming?effectiveDecisionTiming(data.decisionTiming,report.createdAt.toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null}):null
+  const timing=data?.decisionTiming?effectiveDecisionTiming(data.decisionTiming,new Date().toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null}):null
   if(timing)data.decisionTiming=timing
+  if(data?.reportQuality)data.reportQuality=applyExecutionQuality(data.reportQuality,data.investmentAdvice,data.portfolioDecisionSupport,timing)
   if(['comprehensive','verification'].includes(report.type)&&data?.socialReport){
     try{data.socialReport=normalizeSocialReport(parseSocialReport(JSON.stringify(data.socialReport)),data.researchEvaluation,data.companyAnalysis)}catch{/* Keep the stored payload inspectable. */}
   }
@@ -79,8 +81,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({success:true,contextPolicy,reports:reports.map((report,index)=>{
         const data=parseData(report.dataJson),decisions=Array.isArray(data?.researchEvaluation?.decisions)?data.researchEvaluation.decisions:[]
         const stateCounts:Record<string,number>=decisions.reduce((counts:Record<string,number>,item:{state?:string})=>{const key=item.state||'unknown';counts[key]=(counts[key]||0)+1;return counts},{})
-        const timing=data?.decisionTiming?effectiveDecisionTiming(data.decisionTiming,report.createdAt.toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null}):null
-        return {id:report.id,type:report.type,industryId:report.industryId,industryName:report.industryName,title:report.title,summary:timing?normalizeReportTimingText(report.summary,timing):report.summary,createdAt:report.createdAt.toISOString(),metadata:data?.metadata||null,quality:data?.reportQuality||null,recommendation:{confidencePct:reportAdviceConfidence(data?.researchEvaluation,data?.dataQuality),stateCounts},...annotations[index],includedInNextAnalysis:includedIds.has(report.id)}
+        const advice=typeof data?.investmentAdvice==='string'?parseData(data.investmentAdvice):data?.investmentAdvice
+        const productDecisions=Array.isArray(advice?.productDecisions)?advice.productDecisions:[]
+        stateCounts['ai-increase']=productDecisions.filter((item:{unheldAction?:string;heldAction?:string})=>item.unheldAction==='建仓'||item.heldAction==='加仓').length
+        stateCounts['ai-reduce']=productDecisions.filter((item:{heldAction?:string})=>item.heldAction==='减仓').length
+        const timing=data?.decisionTiming?effectiveDecisionTiming(data.decisionTiming,new Date().toISOString(),{asOf:data.researchEvaluation?.asOf||report.createdAt.toISOString(),closeDataSession:data.researchEvaluation?.expectedSession||null}):null
+        return {id:report.id,type:report.type,industryId:report.industryId,industryName:report.industryName,title:report.title,summary:timing?normalizeReportTimingText(report.summary,timing):report.summary,createdAt:report.createdAt.toISOString(),metadata:data?.metadata||null,quality:data?.reportQuality?applyExecutionQuality(data.reportQuality,data.investmentAdvice,data.portfolioDecisionSupport,timing):null,recommendation:{confidencePct:reportAdviceConfidence(data?.researchEvaluation,data?.dataQuality),stateCounts,decisionSource:productDecisions.length?'ai':'legacy-rule'},...annotations[index],includedInNextAnalysis:includedIds.has(report.id)}
       })})
     }
 

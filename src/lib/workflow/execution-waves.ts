@@ -14,3 +14,10 @@ export function executionWaves(steps:StepDefinition[]){
   }
   return waves
 }
+
+/** Keep a run non-terminal until every concurrently started node has settled. */
+export async function settleExecutionWave(steps:StepDefinition[],execute:(step:StepDefinition)=>Promise<void>){
+  const results=await Promise.allSettled(steps.map(step=>execute(step)))
+  const failure=results.find((result):result is PromiseRejectedResult=>result.status==='rejected')
+  if(failure)throw failure.reason
+}

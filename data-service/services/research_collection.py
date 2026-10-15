@@ -147,7 +147,76 @@ async def collect_calendar(provider, start, end):
     return {'version': 1, 'source': 'Tushare/trade_cal', 'data': [days[day] for day in sorted(days) if start <= day <= end]}
 
 
-async def collect_research(provider, key, code, history_points=120, expected_session=None, as_of=None):
+def history_date(value):
+    text = str(value or '').replace('-', '')[:8]
+    try:
+        return datetime.strptime(text, '%Y%m%d').strftime('%Y%m%d')
+    except ValueError:
+        return None
+
+
+async def repair_history_gaps(provider, data, ts_code, expected_dates, cached=None, max_requests=12, fields=None):
+    """Verify missing business dates through exact-date queries, never interpolate.
+
+    Wide upstream responses may omit interior dates even below their row cap.
+    Keep previously verified rows so recurring collection makes bounded progress.
+    """
+    expected = sorted({history_date(day) for day in expected_dates if history_date(day)})
+    if not expected:
+        return {'requests': 0, 'fields': {}}
+    cached = cached or {}
+    audit, requests = {}, 0
+    index_code = (data.get('info') or cached.get('info') or [{}])[0].get('index_code')
+    for field, api, identity in [('factors', 'fund_adj', ts_code), ('indexDaily', 'index_daily', index_code), ('daily', 'fund_daily', ts_code)]:
+        if not identity or fields is not None and field not in fields:
+            continue
+        def valid(row):
+            if str(row.get('ts_code', '')).upper() != str(identity).upper():
+                return False
+            values = [row.get('adj_factor')] if field == 'factors' else [row.get(key) for key in ('open', 'high', 'low', 'close')]
+            try:
+                return all(math.isfinite(float(value)) and float(value) > 0 for value in values)
+            except (ValueError, TypeError):
+                return False
+        by_date = {history_date(row.get('trade_date') or row.get('date')): row
+                   for row in [*cached.get(field, []), *data.get(field, [])] if valid(row) and history_date(row.get('trade_date') or row.get('date'))}
+        missing = [day for day in expected if day not in by_date]
+        filled = []
+        for day in reversed(missing):
+            if requests >= max_requests:
+                break
+            # Some gateways serve a broken trade_date cache while the same
+            # one-day range succeeds. Both must return the exact requested date.
+            day_value = datetime.strptime(day, '%Y%m%d')
+            for query in ({'start_date': day, 'end_date': day}, {'trade_date': day},
+                          {'start_date': (day_value - timedelta(days=1)).strftime('%Y%m%d'),
+                           'end_date': (day_value + timedelta(days=1)).strftime('%Y%m%d')},
+                          {'start_date': (day_value - timedelta(days=3)).strftime('%Y%m%d'),
+                           'end_date': (day_value + timedelta(days=3)).strftime('%Y%m%d')}):
+                if requests >= max_requests:
+                    break
+                requests += 1
+                try:
+                    frame = await provider.request_dataframe(api, ts_code=identity, **query,
+                                                             _timeout_seconds=12, _busy_retries=0)
+                    row = next((row for row in frame.to_dict('records') if valid(row)
+                                and history_date(row.get('trade_date') or row.get('date')) == day), None)
+                    if row is not None:
+                        by_date[day] = row
+                        filled.append(day)
+                        break
+                except Exception:
+                    # Endpoint failure leaves an explicit hole, never a synthetic factor/bar.
+                    continue
+        data[field] = [by_date[day] for day in sorted(by_date, reverse=True) if day in expected]
+        remaining = [day for day in expected if day not in by_date]
+        audit[field] = {'status': 'available' if not remaining else 'partial', 'expected': len(expected),
+                        'available': len(expected) - len(remaining), 'missingDates': remaining,
+                        'repairedDates': filled, 'detail': '逐交易日核验，缺失值未插值'}
+    return {'requests': requests, 'fields': audit}
+
+
+async def collect_research(provider, key, code, history_points=120, expected_session=None, as_of=None, expected_dates=None, cached_history=None):
     today = as_of or datetime.now(ZoneInfo("Asia/Shanghai"))
     if today.tzinfo is None:
         today = today.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
@@ -166,7 +235,10 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
     data, failures, sources, field_status = {}, {}, {}, {}
     async def get(field, api, **params):
         try:
-            frame = await provider.request_dataframe(api, **params)
+            # Comprehensive analysis already has verified local history. Refresh
+            # calls only fill the current session, so provider saturation must
+            # fail fast instead of multiplying latency across every field/ETF.
+            frame = await provider.request_dataframe(api, _timeout_seconds=12, _busy_retries=0, **params)
             identity = params.get('ts_code') or params.get('index_code')
             identity_column = 'ts_code' if params.get('ts_code') else 'index_code'
             if identity and identity_column in frame.columns:
@@ -205,7 +277,7 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
             identity = params.get('ts_code')
             query = {name: value for name, value in params.items() if name not in ('start_date', 'end_date')}
             query['trade_date'] = expected
-            frame = await provider.request_dataframe(api, **query)
+            frame = await provider.request_dataframe(api, _timeout_seconds=12, _busy_retries=0, **query)
             fresh = [row for row in frame.to_dict('records')
                      if str(row.get('trade_date') or row.get('date') or '').replace('-', '') == expected
                      and (not identity or str(row.get('ts_code') or identity).upper() == identity.upper())]
@@ -220,6 +292,9 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
     # Bounded serial reads: existing subscription worker limits dataset concurrency.
     for field, api, params in [
         ('info', 'etf_basic', {'ts_code': ts_code}),
+        # ETF classification does not expose fees. fund_basic documents m_fee
+        # and c_fee; keep this independently auditable from the index mapping.
+        ('fees', 'fund_basic', {'ts_code': ts_code, 'market': 'E', 'fields': 'ts_code,m_fee,c_fee'}),
         ('daily', 'fund_daily', {'ts_code': ts_code, 'start_date': start, 'end_date': end}),
         ('factors', 'fund_adj', {'ts_code': ts_code, 'start_date': start, 'end_date': end}),
         ('shares', 'etf_share_size', {'ts_code': ts_code, 'start_date': start, 'end_date': end,
@@ -228,12 +303,26 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
     ]:
         await get(field, api, **params)
         await align_current(field, api, params)
+    fee_rows = []
+    for row in data.get('fees', []):
+        if str(row.get('ts_code') or '').upper() != ts_code:
+            continue
+        try:
+            fee = float(row['m_fee'])
+            if math.isfinite(fee) and 0 <= fee <= 10:
+                fee_rows.append({**row, 'm_fee': fee})
+        except (KeyError, TypeError, ValueError):
+            pass
+    data['fees'] = fee_rows
+    if not fee_rows:
+        failures.setdefault('fees', 'fund_basic: 没有匹配证券代码的有效管理费，缺失未填零')
     # A wide history response can be a capped/cached old page. Fetch the recent
     # window independently and merge by NAV business date, never by fetch time.
     nav_rows = data.get('nav', [])
     try:
         recent = await provider.request_dataframe('fund_nav', ts_code=ts_code,
-            start_date=(today - timedelta(days=14)).strftime('%Y%m%d'), end_date=end)
+            start_date=(today - timedelta(days=14)).strftime('%Y%m%d'), end_date=end,
+            _timeout_seconds=12, _busy_retries=0)
         fresh = [row for row in recent.to_dict('records') if str(row.get('ts_code') or '').upper() == ts_code
                  and re.fullmatch(r'\d{8}', str(row.get('nav_date') or ''))
                  and (today - timedelta(days=14)).strftime('%Y%m%d') <= str(row['nav_date']) <= end]
@@ -250,7 +339,8 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
         latest_nav = max((str(row.get('nav_date') or '') for row in data.get('nav', [])), default='')
         if latest_nav < expected:
             try:
-                exact = await provider.request_dataframe('fund_nav', ts_code=ts_code, nav_date=expected)
+                exact = await provider.request_dataframe('fund_nav', ts_code=ts_code, nav_date=expected,
+                    _timeout_seconds=12, _busy_retries=0)
                 fresh = [row for row in exact.to_dict('records') if str(row.get('ts_code') or '').upper() == ts_code
                          and str(row.get('nav_date') or '') == expected]
                 if fresh:
@@ -284,6 +374,14 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
                 failures['indexValuation'] = f'指数及成分穿透估值均不可用: {type(error).__name__}，请检查daily_basic权限与成分覆盖'
     else:
         failures['indexDaily'] = '正式跟踪指数映射缺失；不从ETF名称猜测'
+    history_audit = await repair_history_gaps(provider, data, ts_code, expected_dates, cached_history) if expected_dates else None
+    if history_audit:
+        for field, audit in history_audit['fields'].items():
+            if audit['missingDates']:
+                failures[field] = f"历史交易日覆盖不完整：{audit['available']}/{audit['expected']}，下轮继续精确补采"
+            else:
+                failures.pop(field, None)
+            field_status[field] = audit
     try:
         data['orderbook'] = [await asyncio.to_thread(fetch_orderbook, code)]
         sources['orderbook'] = data['orderbook'][0]['source']
@@ -293,7 +391,7 @@ async def collect_research(provider, key, code, history_points=120, expected_ses
     if not any(data.values()):
         raise ValueError('ETF研究接口全部不可用，请检查数据权限')
     return {'version': 1, 'source': 'Tushare/research-bundle', 'data': data,
-            'sources': sources, 'fieldStatus': field_status, 'failures': failures, 'quality': 'partial' if failures else 'available',
+            'historyAudit': history_audit, 'sources': sources, 'fieldStatus': field_status, 'failures': failures, 'quality': 'partial' if failures else 'available',
             'units': {'daily.amount': '千元', 'shares.total_share': '万份', 'shares.total_size': '万元',
                       'nav.unit_nav': '元', 'nav.adj_nav': '复权净值', 'factors.adj_factor': 'ratio'},
             'limitations': ['历史持仓按披露期，不是实时持仓', '盘口源时间不等于采集时间，缺失不补0', '指数估值接口覆盖有限，失败不补零']}

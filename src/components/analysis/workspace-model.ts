@@ -13,6 +13,7 @@ export type AnalysisRun = {
 export type RunListItem = Omit<AnalysisRun, 'steps'> & { reportId?: string | null; progress: { total: number; completed: number; percentage: number } }
 export const PHASES = comprehensiveWorkflowDefinition.phases.map(phase=>({id:phase.id,title:phase.title,caption:phase.caption,steps:comprehensiveWorkflowDefinition.nodes.filter(node=>node.phase===phase.id).map(node=>node.id)}))
 export const STEP_TITLES: Record<string,string> = Object.fromEntries(comprehensiveWorkflowDefinition.nodes.map(node=>[node.id,node.title]))
+export const shouldPollRun = (status?: string | null) => status==='PENDING'||status==='RUNNING'
 export function artifact<T>(run: AnalysisRun | null, key: string): T | null {
   const value = run?.steps.flatMap(step => step.artifacts).find(a => a.artifactKey === key)?.data
   if (value == null) return null
@@ -29,15 +30,21 @@ export function phaseState(steps: RunStep[], names: readonly string[]) {
   return 'pending'
 }
 export function runProgress(run: AnalysisRun | null) {
-  const total = PHASES.length
+  // The progress denominator is the executable topology, not the number of
+  // visual phase groups. A persisted run is authoritative because older runs
+  // may have been created from a different workflow definition.
+  const stepNames = run
+    ? [...new Set(run.steps.map(step=>step.stepName))]
+    : comprehensiveWorkflowDefinition.nodes.map(node=>node.id)
+  const total = stepNames.length
   if(!run)return {total,done:0,percent:0}
-  const completion=PHASES.map(phase=>{
-    if(phase.steps.length===0)return 1
-    const steps=run.steps.filter(step=>(phase.steps as readonly string[]).includes(step.stepName))
-    return steps.length?steps.filter(step=>['COMPLETED','SKIPPED'].includes(step.status)).length/phase.steps.length:0
-  })
-  const done=completion.filter(value=>value===1).length
-  return {total,done,percent:Math.round(completion.reduce((sum,value)=>sum+value,0)/total*100)}
+  // A completed run is the authoritative execution state. Older archived runs
+  // can have fewer stored steps than the current workflow definition after a
+  // workflow upgrade; presenting those reports as 91% complete is misleading.
+  if(run.status==='COMPLETED')return {total,done:total,percent:100}
+  const completed = new Set(run.steps.filter(step=>['COMPLETED','SKIPPED'].includes(step.status)).map(step=>step.stepName))
+  const done=stepNames.filter(name=>completed.has(name)).length
+  return {total,done,percent:total?Math.round(done/total*100):0}
 }
 export function plainAnalysis(value: unknown): string {
   if (typeof value === 'string') { try {return plainAnalysis(JSON.parse(value))} catch {return value} }

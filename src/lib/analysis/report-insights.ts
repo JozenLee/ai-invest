@@ -1,4 +1,4 @@
-import { administrativeTitle, digestTitle, nonMaterialRiskTitle } from '@/lib/research/event-policy'
+import { administrativeTitle, digestTitle, lowDecisionValueTitle, nonMaterialRiskTitle } from '@/lib/research/event-policy'
 import type { Decision, Evaluation } from '@/lib/research/contracts'
 import type { DecisionTimingAssessment } from './decision-timing'
 
@@ -70,20 +70,22 @@ export function reportAdviceConfidence(evaluation?:Evaluation,quality?:ReportQua
   if(!evaluation?.decisions.length)return 0
   const base=evaluation.decisions.reduce((sum,item)=>sum+decisionConfidence(item),0)/evaluation.decisions.length
   const qualityFactor=quality?.status==='blocked' ? .45 : quality?.status==='limited' ? .8 : 1
-  return Math.round(base*qualityFactor)
+  const valuationSamples=(evaluation.products||[]).map(item=>item.valuationSampleCount||0)
+  const valuationCap=valuationSamples.some(count=>count>=20)?90:70
+  const validationCap=evaluation.validation==='walk-forward-validated'?95:75
+  return Math.round(Math.min(base*qualityFactor,valuationCap,validationCap))
 }
 
-export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, timing?: DecisionTimingAssessment) {
+export function reportReadiness(evaluation?: Evaluation, quality?: ReportQuality, _timing?: DecisionTimingAssessment) {
+  void _timing
   const reasons: string[] = []
   if (!evaluation) reasons.push('缺少冻结规则评估')
   if (quality?.status === 'blocked') reasons.push('核心行情数据不足，只能给出低置信度观望建议')
   else if (quality?.status === 'limited') reasons.push('部分产品或基本面数据缺失，已降低建议置信度')
-  if (timing && !timing.executionReady) reasons.push(...timing.reasons)
   const approved = !!evaluation && quality?.status !== 'blocked'
-  const executionReady = approved && timing?.executionReady !== false
   return {
-    level: executionReady ? 'advice-ready' as const : approved ? 'reference-only' as const : 'data-limited' as const,
-    label: executionReady ? '交易时段投资建议' : approved ? '投资参考已生成' : '低置信度参考',
+    level: approved ? 'advice-ready' as const : 'data-limited' as const,
+    label: approved ? '投资建议已生成' : '低置信度参考',
     confidencePct: reportAdviceConfidence(evaluation,quality),
     reasons,
   }
@@ -93,8 +95,8 @@ export function safeDecisionAction(decision: Decision, _tradeReady = true) {
   const confidencePct=decisionConfidence(decision)
   if (decision.state === 'blocked') return { unheld: '观望', held: '持有并复核数据', intent: decision.reason||'核心数据不足，暂不改变仓位。', confidencePct }
   if (!_tradeReady) {
-    if (decision.state === 'risk-off') return { unheld: '暂缓新增', held: '复核风险敞口', intent: `时效未通过，以下仅作参考：${decision.reason}`, confidencePct }
-    if (decision.state === 'eligible') return { unheld: '待盘中复核', held: '持有并等待复核', intent: `条件方向仅作参考：${decision.reason}`, confidencePct }
+    if (decision.state === 'risk-off') return { unheld: '暂缓新增', held: '复核风险敞口', intent: `本轮仅供研究参考：${decision.reason}`, confidencePct }
+    if (decision.state === 'eligible') return { unheld: '仅供研究参考', held: '持有并等待复核', intent: `本轮不用于执行：${decision.reason}`, confidencePct }
     return { unheld: '观望', held: '持有并等待复核', intent: decision.reason||'关键条件尚未形成一致方向。', confidencePct }
   }
   if (decision.state === 'risk-off') return { unheld: '观望', held: '减仓', intent: decision.reason, confidencePct }
@@ -116,9 +118,9 @@ export function guardActionLanguage(value: unknown, tradeReady = false): unknown
   }
   if(Array.isArray(value))return value.map(item=>guardActionLanguage(item,tradeReady))
   if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>{
-    if(key==='unheld'&&typeof item==='string'&&/建仓|买入|加仓/.test(item))return [key,'待交易时段复核']
+    if(key==='unheld'&&typeof item==='string'&&/建仓|买入|加仓/.test(item))return [key,'仅供研究参考']
     if(key==='held'&&typeof item==='string'&&/减仓|卖出|加仓/.test(item))return [key,'复核风险敞口']
-    if(key==='action'&&typeof item==='string'&&/建仓|买入|卖出|加仓|减仓/.test(item))return [key,'待交易时段复核']
+    if(key==='action'&&typeof item==='string'&&/建仓|买入|卖出|加仓|减仓/.test(item))return [key,'仅供研究参考']
     return [key,guardActionLanguage(item,tradeReady)]
   }))
   return value
@@ -192,11 +194,14 @@ function eventFingerprint(title: string) {
 }
 
 export function decisionEvents(evaluation?: Evaluation, limit = 12) {
-  if (!evaluation) return []
+  if (!evaluation || limit <= 0) return []
   const seen = new Set<string>()
   const candidates=[...evaluation.events]
-    .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && !digestTitle.test(item.title) && !nonMaterialRiskTitle.test(item.title) && item.priority >= 4 && !['C','D'].includes(item.evidenceGrade||'B') && (item.materialityScore??70)>=65)
-    .sort((a, b) => (b.materialityScore??0)-(a.materialityScore??0) || b.priority - a.priority || b.publishedAt.localeCompare(a.publishedAt))
+    .filter(item => item.status === 'evidence' && item.category !== 'administrative' && !administrativeTitle.test(item.title) && !lowDecisionValueTitle.test(item.title) && !digestTitle.test(item.title) && !nonMaterialRiskTitle.test(item.title) && item.priority >= 4 && !['C','D'].includes(item.evidenceGrade||'B') && (item.materialityScore??70)>=65)
+    .sort((a, b) => {
+      const utility=(item:typeof a)=>(item.influenceScore??item.materialityScore??0)*1.25+(item.materialityScore??0)+(item.segments.length?8:0)+(item.companies.length?4:0)+((item.independentSourceCount||0)>=2?6:0)
+      return utility(b)-utility(a)||b.priority-a.priority||b.publishedAt.localeCompare(a.publishedAt)
+    })
     .filter(item => {
       const key = [eventFingerprint(item.title),item.publishedAt.slice(0,10),[...item.companies].sort().join(',')].join(':')
       if (!key || seen.has(key)) return false
@@ -206,8 +211,19 @@ export function decisionEvents(evaluation?: Evaluation, limit = 12) {
 
   if(candidates.length<=limit)return candidates
   const selected=new Map<string,typeof candidates[number]>(),buckets=new Set<string>()
+  // Reserve half of the bounded packet for the highest-influence verified
+  // events. This guarantees that broad or strongly propagated developments do
+  // not lose their place merely because a newer low-impact item was published.
+  const influential=candidates.filter(item=>item.influenceLevel==='high'||(item.influenceScore??0)>=75)
+  const materialRisk=candidates.find(item=>item.category==='risk')
+  if(materialRisk && limit>0) selected.set(materialRisk.id,materialRisk)
+  for(const row of influential.slice(0,Math.max(1,Math.ceil(limit/2))))if(selected.size<limit)selected.set(row.id,row)
+  // Always retain the latest material developments and both company-linked
+  // announcements and broader news before diversifying by category/segment.
+  for(const row of [...candidates].sort((a,b)=>b.publishedAt.localeCompare(a.publishedAt)).slice(0,Math.min(2,limit)))if(selected.size<limit)selected.set(row.id,row)
+  for(const row of [candidates.find(item=>item.companies.length>0),candidates.find(item=>item.companies.length===0)].filter((item):item is typeof candidates[number]=>!!item))if(selected.size<limit)selected.set(row.id,row)
   // Reserve representation for event type / industry segment before filling the
-  // remaining budget by priority and recency. The UI can still show the full pool.
+  // remaining budget by priority. The UI can still show the full pool.
   for(const row of candidates){const bucket=row.category+':'+(row.segments[0]||'company');if(!buckets.has(bucket)&&selected.size<Math.min(8,limit)){buckets.add(bucket);selected.set(row.id,row)}}
   for(const row of candidates){if(selected.size>=limit)break;selected.set(row.id,row)}
   return candidates.filter(row=>selected.has(row.id))

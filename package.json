@@ -7,6 +7,8 @@
     "graph:regenerate": "cd data-service && python3 scripts/regenerate_industry_graphs.py --publish",
     "graph:match": "tsx scripts/match-industry-graphs.ts",
     "graph:verify-e2e": "tsx scripts/verify-graph-report-e2e.ts",
+    "analysis:verify-report": "tsx scripts/verify-comprehensive-report.ts",
+    "analysis:verify-ui": "playwright test tests/e2e/analysis/comprehensive-report.spec.ts",
     "test:research": "vitest run src/lib/research/__tests__",
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
@@ -51,8 +53,16 @@
     "db:seed": "tsx scripts/seed.ts",
     "db:studio": "prisma studio",
     "sync:market": "tsx scripts/sync-real-market-data.ts",
+    "portfolio:backfill-products": "tsx scripts/backfill-portfolio-product-research.ts",
     "typecheck": "tsc --noEmit",
-    "migrate:tags": "tsx scripts/migrate-tag-links.ts"
+    "migrate:tags": "tsx scripts/migrate-tag-links.ts",
+    "analysis:verify-loop": "tsx scripts/verify-analysis-improvements.ts",
+    "research:lab": "tsx scripts/run-strategy-lab.ts",
+    "decision:backfill": "tsx scripts/backfill-decision-ledger.ts",
+    "analysis:verify-unified": "vitest run src/lib/research/__tests__/unified-strategy.test.ts src/lib/research/__tests__/unified-storage.test.ts src/lib/research/__tests__/daily-plan.test.ts src/lib/research/__tests__/decision-ledger.test.ts src/lib/research/__tests__/refresh.test.ts src/components/analysis/UnifiedValidationPanel.test.tsx",
+    "analysis:verify-unified-ui": "playwright test --config playwright.config.unified.ts",
+    "analysis:verify-domain": "tsx scripts/verify-domain-research.ts",
+    "analysis:verify-domain-ui": "playwright test --config playwright.config.domain.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

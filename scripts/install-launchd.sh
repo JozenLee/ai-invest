@@ -8,11 +8,13 @@ TEMPLATE="$PROJECT_DIR/scripts/com.ai-invest.services.plist"
 DATA_TEMPLATE="$PROJECT_DIR/scripts/com.ai-invest.data-service.plist"
 TARGET="$LAUNCH_AGENTS_DIR/com.ai-invest.services.frontend.plist"
 DATA_TARGET="$LAUNCH_AGENTS_DIR/com.ai-invest.services.data.plist"
+LEGACY_TARGET="$LAUNCH_AGENTS_DIR/com.ai-invest.services.plist"
 
 mkdir -p "$LAUNCH_AGENTS_DIR"
 sed "s#__PROJECT_DIR__#$PROJECT_DIR#g" "$TEMPLATE" > "$TARGET"
 sed "s#__PROJECT_DIR__#$PROJECT_DIR#g" "$DATA_TEMPLATE" > "$DATA_TARGET"
 launchctl bootout "gui/$(id -u)/com.ai-invest.services" 2>/dev/null || true
+rm -f "$LEGACY_TARGET"
 launchctl bootout "gui/$(id -u)/com.ai-invest.services.frontend" 2>/dev/null || true
 launchctl bootout "gui/$(id -u)/com.ai-invest.services.data" 2>/dev/null || true
 sleep 1

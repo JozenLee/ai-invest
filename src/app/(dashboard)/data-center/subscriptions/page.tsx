@@ -36,6 +36,7 @@ const SCOPE_META = {
   market_index: { description: '指数、板块资金、北向资金、成交额、龙虎榜与资讯。', icon: Activity },
   etf_index: { description: '按产业聚合的 ETF，展开查看持仓、K 线与指标。', icon: Layers3 },
   company_quote: { description: '按产业聚合持仓企业，展开查看行情、财报与公告。', icon: Building2 },
+  portfolio_fund: { description: '自动采集真实持仓基金的净值、定期披露和产品关系。', icon: Database },
 } as const
 
 function formatTime(value?: string | null) { return value ? new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '暂无' }
@@ -97,7 +98,7 @@ function GroupedAssets({ overview, type, loading, ...detailProps }: { overview: 
   return <div className="space-y-3">{groups.map((group) => <Card key={group.id} className="overflow-hidden"><CardHeader className="border-b bg-muted/20 py-0"><button type="button" className="flex min-h-12 w-full items-center justify-between text-left" onClick={() => setOpen((current) => ({ ...current, [group.id]: !current[group.id] }))}><span className="flex items-center gap-2"><ExpandButton open={Boolean(open[group.id])} /><CardTitle className="text-sm">{group.name}</CardTitle></span><Badge variant="secondary">{group.items.length} {type === 'etf' ? '只 ETF' : '家企业'}</Badge></button></CardHeader>{open[group.id] && <AssetRows first={type === 'etf' ? 'ETF' : '企业'} items={group.items as Array<MarketItem & { id: string }>} type={type} {...detailProps} />}</Card>)}</div>
 }
 
-function scopeBusy(overview: Overview | null, scope: SubscriptionScope) { if (!overview) return false; const active = (status?: string) => ['queued', 'running'].includes(status || ''); if (scope === 'market_index') return overview.market.some((item) => active(item.status)); if (scope === 'etf_index') return overview.etfs.some((group) => group.etfs.some((item) => active(item.status))); return overview.companies.some((item) => active(item.status)) }
+function scopeBusy(overview: Overview | null, scope: SubscriptionScope) { if (!overview) return false; const active = (status?: string) => ['queued', 'running'].includes(status || ''); if (scope === 'market_index') return overview.market.some((item) => active(item.status)); if (scope === 'etf_index') return overview.etfs.some((group) => group.etfs.some((item) => active(item.status))); if(scope==='company_quote')return overview.companies.some((item) => active(item.status)); return false }
 
 export default function SubscriptionPage() {
   const [showSources, setShowSources] = useState(false)

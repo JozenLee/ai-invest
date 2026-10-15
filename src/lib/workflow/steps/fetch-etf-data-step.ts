@@ -4,7 +4,7 @@ import { marketDetail } from '@/lib/market-detail'
 import { getSubscriptionConfig } from '@/lib/subscription-config-store'
 import type { StepDefinition } from '../types'
 export const fetchETFDataStep: StepDefinition = {
-  name: 'fetch-etf-data', description: '读取ETF订阅快照并计算指标', dependencies: ['fetch-etfs'], estimatedDuration: 1000,
+  name: 'fetch-etf-data', description: '读取ETF订阅快照并计算指标', dependencies: ['fetch-etfs', 'freeze-research'], estimatedDuration: 1000,
   async execute(context) {
     const codes = [...new Set(String(context.artifacts.get('etf-codes') || '').split(',').filter(Boolean))]
     const config = await getSubscriptionConfig()

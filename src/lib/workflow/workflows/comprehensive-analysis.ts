@@ -1,3 +1,4 @@
+import { domainResearchStep } from '../steps/domain-research-step'
 import { ExecutionOrchestrator } from '../execution-orchestrator'
 import { freezeResearchStep } from '../steps/freeze-research-step'
 import { fetchPortfolioStep } from '../steps/fetch-portfolio-step'
@@ -46,9 +47,7 @@ import { comprehensiveWorkflowDefinition } from '../comprehensive-definition'
  * 12. investment-advice: 投资建议
  * 13. generate-report: 生成分析报告
  */
-export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
-  'comprehensive-analysis',
-  [
+export const comprehensiveAnalysisSteps = [
     // 冻结后其余数据步骤仅投影此版本，不再混入新数据。
     freezeResearchStep,
     fetchMarketSnapshotStep,
@@ -62,6 +61,7 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     calculateMarketTrendsStep,
     assessDataQualityStep,
     etfActionStep,
+    domainResearchStep,
 
     // AI分析报告阶段
     marketAnalysisStep,
@@ -69,11 +69,15 @@ export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
     companyAnalysisStep,
     industryOverviewStep,
     investmentAdviceStep,
-    // 组合建议在最终综合结论之后生成；AI可以否决新增风险，但不能覆盖规则减仓与硬约束。
+    // 组合建议在AI最终结论之后生成；程序只裁剪超出风险预算、数据和产品范围的部分。
     portfolioDecisionStep,
     portfolioAnalysisStep,
     socialReportStep,
     generateReportStep
-  ],
+  ]
+
+export const comprehensiveAnalysisWorkflow = new ExecutionOrchestrator(
+  'comprehensive-analysis',
+  comprehensiveAnalysisSteps,
   comprehensiveWorkflowDefinition,
 )

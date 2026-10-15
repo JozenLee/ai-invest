@@ -13,3 +13,7 @@ describe('opt-in local review schedule',()=>{
     expect(validateSchedule({enabled:true,times:['19:30','08:50','08:50']}).times).toEqual(['08:50','19:30'])
   })
 })
+
+it('does not run a missed morning slot hours later',()=>{
+  expect(dueSlots({enabled:true,times:['08:50','19:30']},new Date('2026-09-04T06:00:00Z'))).toEqual([])
+})

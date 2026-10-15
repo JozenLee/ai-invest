@@ -2,6 +2,9 @@ export type ETFAction = {
   ticker: string; name: string; unheldAction: '建仓' | '观望'; heldAction: '加仓' | '持有' | '减仓' | '清仓' | '观望';
   reason: string; trigger: string; invalidation: string; horizon: string; evidence: string[]
   confidencePct?: number
+  decisionSource?: 'ai' | 'rule'
+  quantitativeOverride?:string|null
+  executionContract?: {asOf:string;validUntil:string;reviewPolicy:string;triggerRules:Array<{key:string;subject:string;label:string;status:string;currentValue:number|string|null;operator:string;threshold:number|string}>}
   ruleAction?: { unheld: '建仓' | '观望'; held: '持有' | '减仓' | '观望' }
 }
 export function parseETFActions(text: string, bindings: Array<{ etf_code: string; etf_name: string }>, quality: { status?: string } | undefined, unusableTickers: string[] = []): ETFAction[] {
@@ -17,9 +20,12 @@ export function parseETFActions(text: string, bindings: Array<{ etf_code: string
   })
 }
 export function etfActionsMarkdown(actions: ETFAction[]) {
-  return '## ETF投资建议\n\n以下建议由本轮冻结数据、规则条件与证据覆盖生成，并附证据覆盖度；建议不会自动执行交易。\n\n' + actions.map(row => {
+  const aiGenerated=actions.some(row=>row.decisionSource==='ai')
+  return `## ETF投资建议\n\n${aiGenerated?'投资方向由AI综合本轮冻结证据生成；程序只限制标的范围、数据时效、风险预算、费用和每日最大调整比例。':'以下为历史规则动作归档。'}建议不会自动执行交易。\n\n` + actions.map(row => {
     const shown=row.evidence.slice(0,8),more=row.evidence.length-shown.length
     const raw=row.ruleAction&&row.ruleAction.unheld!==row.unheldAction||row.ruleAction&&row.ruleAction.held!==row.heldAction?`\n\n原始规则意图：未持有 ${row.ruleAction?.unheld}；已持有 ${row.ruleAction?.held}（仅用于回放验证，不授权执行）`:''
-    return `### ${row.name}（${row.ticker}）\n\n决策证据覆盖度：${typeof row.confidencePct==='number'?`${row.confidencePct}/100`:'按报告页实时计算'}\n\n未持有：${row.unheldAction}；已持有：${row.heldAction}${raw}\n\n依据：${row.reason}\n\n复核条件：${row.trigger}\n\n失效条件：${row.invalidation}\n\n观察周期：${row.horizon}\n\n代表性证据：${shown.join('；')}${more>0?`；另有 ${more} 条见本轮证据档案`:''}`
+    const contract=row.executionContract,contractText=contract?`\n\n有效期：${contract.validUntil}\n\n复核策略：${contract.reviewPolicy}\n\n量化触发明细：${contract.triggerRules.map(rule=>`${rule.subject}｜${rule.label}｜当前${rule.currentValue??'未知'}｜要求${rule.operator}${rule.threshold}｜${rule.status}`).join('；')}`:''
+    const override=row.quantitativeOverride?`\n\n量化状态冲突解释：${row.quantitativeOverride}`:''
+    return `### ${row.name}（${row.ticker}）\n\n决策来源：${row.decisionSource==='ai'?'AI综合研判':'历史规则'}；置信度：${typeof row.confidencePct==='number'?`${row.confidencePct}/100`:'按报告页实时计算'}\n\n未持有：${row.unheldAction}；已持有：${row.heldAction}${raw}\n\n依据：${row.reason}${override}\n\n复核条件：${row.trigger}\n\n失效条件：${row.invalidation}${contractText}\n\n观察周期：${row.horizon}\n\n代表性证据：${shown.join('；')}${more>0?`；另有 ${more} 条见本轮证据档案`:''}`
   }).join('\n\n') + '\n\n实验性研究工具，不构成投资建议，不保证收益。'
 }

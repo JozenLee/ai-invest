@@ -27,8 +27,8 @@ describe('decision-focused evidence', () => {
     const events=Array.from({length:30},(_,index)=>({id:`event-${index}`,title:`事件${index}`,category:'technology',publishedAt:'2026-09-07T08:00:00Z',expiresAt:'2026-09-10T08:00:00Z',companies:['公司甲'],segments:['芯片'],evidenceIds:[`evidence-${index}`],sources:['测试来源'],urls:['https://example.com'],excerpt:'长'.repeat(10000),status:'evidence',priority:5,verification:'source-linked-not-independently-verified'}))
     const context={artifacts:new Map<string,any>([['industry-info',{name:'AI算力硬件'}],['research-evaluation',{events,decisions:[]}],['data-quality',{modules:{}}]])} as StepContext
     const evidence=researchEvidence(context,'news-analysis')
-    expect(evidence.events).toHaveLength(24)
-    expect(evidence.events.every((event:{excerpt:string})=>event.excerpt.length<=480)).toBe(true)
+    expect(evidence.events).toHaveLength(16)
+    expect(evidence.events.every((event:{excerpt:string})=>event.excerpt.length<=260)).toBe(true)
     expect(JSON.stringify(evidence).length).toBeLessThan(20000)
   })
   it('public evidence never includes private portfolio and expands upstream JSON once', () => {
@@ -52,7 +52,7 @@ describe('decision-focused evidence', () => {
     expect(packet.coverage).toMatchObject({companyCount:20,segmentCount:2,profitGrowthKnown:20,cashQualityKnown:20})
     expect(packet.segmentAggregates).toHaveLength(2)
     expect(packet.representativeCompanies.length).toBeGreaterThan(2)
-    expect(packet.representativeCompanies.length).toBeLessThanOrEqual(8)
+    expect(packet.representativeCompanies.length).toBeLessThanOrEqual(10)
   })
   it('bounds the industry synthesis packet instead of replaying full upstream evidence',()=>{
     const many=Array.from({length:30},(_,index)=>({code:String(index).padStart(6,'0'),name:'样本'+index,relevance:1-index/100,holdingVerified:false}))
@@ -64,9 +64,9 @@ describe('decision-focused evidence', () => {
     const context={artifacts:new Map<string,any>([['industry-info',{name:'AI算力硬件'}],['graph-context',graph],['market-analysis',module],['news-analysis',module],['company-analysis',module]])} as StepContext
     const evidence=researchEvidence(context,'industry-overview')
     expect(evidence.graph.stages[0].segments[0].representativeCompanies).toHaveLength(1)
-    expect(evidence.graph.relations).toHaveLength(8)
+    expect(evidence.graph.relations).toHaveLength(12)
     expect(evidence.graph.eventMappings).toBeUndefined()
-    expect(evidence.companies.keyCompanies).toHaveLength(8)
-    expect(JSON.stringify(evidence).length).toBeLessThan(30000)
+    expect(evidence.companies.keyCompanies).toHaveLength(6)
+    expect(JSON.stringify(evidence).length).toBeLessThan(40000)
   })
 })
